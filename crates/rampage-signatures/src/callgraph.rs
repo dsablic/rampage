@@ -299,4 +299,41 @@ mod tests {
         assert!(embedded.callers() > 0);
         assert!(!CallGraph::from_gzip(BUNDLED_BYTES).unwrap().arches.contains_key("arm"));
     }
+
+    /// The embedded graph never holds the references' link stubs or empty weak defaults (one weak `bx lr`): an
+    /// application hook, a linker symbol or an override point is neither a caller nor a callee name, so a
+    /// propagation never names the program's own code after one.
+    #[test]
+    fn the_embedded_graph_holds_no_link_stub_or_override_point() {
+        let graph = CallGraph::from_gzip(EMBEDDED_BYTES).unwrap();
+        let callers = &graph.arches["arm"];
+        let callees: BTreeSet<&str> = callers
+            .values()
+            .flatten()
+            .flat_map(|sequence| sequence.callees.iter().flatten())
+            .map(String::as_str)
+            .collect();
+        // Only ever stubs in the references (application hooks, linker symbols, a variable), or empty weak HAL
+        // defaults an application overrides.
+        for name in [
+            "vApplicationGetIdleTaskMemory",
+            "vApplicationGetTimerTaskMemory",
+            "vApplicationStackOverflowHook",
+            "SystemCoreClock",
+            "end",
+            "__exidx_start",
+            "_init",
+            "HAL_MspInit",
+            "HAL_ADC_ConvCpltCallback",
+        ] {
+            assert!(!callers.contains_key(name) && !callees.contains(name), "{name}");
+        }
+        // Stubbed in some references, defined in others: only the definitions' sequences remain. libgcc's
+        // `__aeabi_uldivmod` calls `__udivmoddi4`, so an empty sequence would be a stub's.
+        let uldivmod = &callers["__aeabi_uldivmod"];
+        assert!(uldivmod.iter().all(|sequence| !sequence.callees.is_empty()), "{uldivmod:?}");
+        // vTaskStartScheduler calls the idle-memory hook (statically allocated configurations): the hook's
+        // position is no name.
+        assert!(callers["vTaskStartScheduler"].iter().any(|sequence| sequence.callees.contains(&None)));
+    }
 }

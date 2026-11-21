@@ -31,3 +31,8 @@ assert_cmd.workspace = true
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+# Its held-out refusal is unit tested with the workspace.
+[[example]]
+name = "embedded_call_graph"
+test = true

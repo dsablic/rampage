@@ -61,10 +61,10 @@ fn assert_embedded_firmware_names(core: &str, signatures: usize, call_graph: usi
 
 #[test]
 fn embedded_call_graph_names_more_library_code_in_held_out_firmware_m4f() {
-    assert_embedded_firmware_names("m4f", 81, 16, &[]);
+    assert_embedded_firmware_names("m4f", 81, 14, &["vTaskSuspendAll", "xTaskIncrementTick"]);
 }
 
 #[test]
 fn embedded_call_graph_names_more_library_code_in_held_out_firmware_m0() {
-    assert_embedded_firmware_names("m0", 71, 33, &["memset", "memmove"]);
+    assert_embedded_firmware_names("m0", 71, 32, &["memset", "memmove"]);
 }

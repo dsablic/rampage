@@ -390,8 +390,9 @@ async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
 
 /// Identifies a committed embedded-libs flash image (owned FreeRTOS firmware built with a toolchain the embedded set
 /// was not built from) as a Cortex-M Raw project, applying the names, and checks every name against the libid truth
-/// of its symbolized build. Returns how many it named; the doc's Raw rows are these counts.
-async fn identify_embedded_raw_image(fixture: &str, profile: &str, names: &[&str]) -> usize {
+/// of its symbolized build. Returns how many the embedded signatures and the call graph named; the doc's Raw rows
+/// are these counts.
+async fn identify_embedded_raw_image(fixture: &str, profile: &str, names: &[&str]) -> (usize, usize) {
     let client = connect().await;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     let path = root.join(format!("firmware/embedded-libs-{fixture}.bin"));
@@ -421,7 +422,8 @@ async fn identify_embedded_raw_image(fixture: &str, profile: &str, names: &[&str
     let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": selector })).await;
     assert!(!failed && text.contains(names[0]), "{text}");
     client.cancel().await.unwrap();
-    matches.len()
+    let count = |source: &str| matches.iter().filter(|found| found["source"] == source).count();
+    (count("rampage-builtin embedded"), count("rampage-builtin call graph"))
 }
 
 /// The bundled embedded firmware set names library functions of a headerless Cortex-M4F image (FreeRTOS, the
@@ -440,10 +442,10 @@ async fn identify_functions_names_library_code_in_a_cortex_m0_raw_image() {
     assert_eq!(identify_embedded_raw_image("m0", "cortex-m0", &names).await, EMBEDDED_M0_RAW);
 }
 
-/// Correct names the Raw rows of docs/signature-corpus.md report, signatures and call graph together (no wrong or
-/// spurious name is allowed above).
-const EMBEDDED_M4F_RAW: usize = 97;
-const EMBEDDED_M0_RAW: usize = 104;
+/// Correct names the Raw rows of docs/signature-corpus.md report, from the embedded signatures and from the call
+/// graph (no wrong or spurious name is allowed above).
+const EMBEDDED_M4F_RAW: (usize, usize) = (81, 14);
+const EMBEDDED_M0_RAW: (usize, usize) = (71, 32);
 
 /// A CMSIS-SVD map imported once over MCP names a Cortex-M Raw project's registers in later calls with the same
 /// `raw` selector: decompiled C, xrefs by peripheral name and the per-register access listing.
