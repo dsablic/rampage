@@ -61,13 +61,13 @@ strict, 19/20 lenient, $0.44. All three misses are on the model's side; every to
 two emulation answers carried an extra `"status": "ok"` (a format slip, the values were exact), and in
 patch-values-cm4-hex the agent converted `integrity_checks`' little-endian `computed_hex` `a10f98c2` to the wrong
 integer. 41 tool errors, mostly Raw selector friction on the Cortex-M tasks. Follow-ups:
-- [ ] `integrity_checks`: give stored and computed values as integers at the field's width and byte order, beside
+- [x] (2026-11-21) `integrity_checks`: give stored and computed values as integers at the field's width and byte order, beside
       the hex, so agents don't convert bytes by hand.
-- [ ] Raw selector friction: "file range is outside the regular source" (12 times) doesn't say the file's size
+- [x] (2026-11-21) Raw selector friction: "file range is outside the regular source" (12 times) doesn't say the file's size
       or the range asked for; default `offset` 0 and `length` to the rest of the file when omitted; accept
       `format: "raw"`/`"bin"` for binary and common profile spellings (`cortex-m0`, `cortex-m4`); accept a `raw`
       object sent as a JSON string.
-- [ ] `peripheral_access` and `import_svd` argument retries (`svd`, `at`): see the argument-name item below.
+- [x] (2026-11-21) `peripheral_access` and `import_svd` argument retries (`svd`, `at`): see the argument-name item below.
 
 ## Haiku suite v3 rerun after evaluate_function (2026-11-19)
 
@@ -76,9 +76,9 @@ each, $0.08. Earlier Haiku passes: 19/21 and 17/21, semantics 4/4 and 3/4. The m
 both earlier passes, so it is likely model variance. Tool errors seen, as small follow-ups:
 - [ ] `inspect_jump_table` is ARM64-only; the agent tried it on an x86-64 switch. Support x86 (and ARM32) tables or
       point at the tool that answers switches there.
-- [ ] Wrong argument names still cost a retry: `xrefs` `target` (meant `to`), `inspect_data` `count` (meant
+- [x] (2026-11-21, aliases and errors naming the right call) Wrong argument names still cost a retry: `xrefs` `target` (meant `to`), `inspect_data` `count` (meant
       `size`), `class_evidence` `class_name`. Consider unambiguous aliases, or name the closest tool for filters.
-- [ ] `get_type` on a Go type by its full import path (`github.com/.../restic.Snapshot`) fails; accept the full
+- [x] (2026-11-21, the worker stopped the search at the native library) `get_type` on a Go type by its full import path (`github.com/.../restic.Snapshot`) fails; accept the full
       path as well as the package-qualified name.
 
 ## MIPS and Xtensa follow-ups (2026-11-20)

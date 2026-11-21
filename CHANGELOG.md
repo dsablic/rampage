@@ -4,6 +4,21 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- `integrity_checks` gives each check's stored and computed values, and each fix write's current and replacement
+  values, as integers read at the field's width and byte order, beside the hex (a `0x` string above 2^53-1; none
+  for digests).
+- `raw`: `offset` defaults to 0 and `length` to the rest of the file; a range past the end names the range, the
+  file's size and the longest length that fits; `format` accepts `bin`/`raw`; Cortex-M spellings such as
+  `arm-thumb-cortex-m` select the profile, and ARMv8-M cores and architecture names get an explanatory error; a
+  selector sent as a JSON string is parsed.
+- Argument aliases: `xrefs` `target` (as `to`), `inspect_data` `count` (as `size`: bytes, or words of `word_size`
+  bytes when that is given), `peripheral_access` `at` (as `peripheral`). Misplaced `svd` on `peripheral_access`,
+  `class_name` on `class_evidence`, and `import_svd` with only a `.svd` path get errors naming the right call.
+- Fix: `get_type` with a decompiler worker stopped at the native type library for any unknown name; DWARF and Go
+  runtime metadata are now searched, so a Go type is found by its package-qualified name or full import path.
+
 ## 1.9.0 (2026-11-21)
 
 - Acceptance pass on public firmware (OpenWrt MIPS images, MicroPython ESP32/ESP8266, Debian mipsel zlib, an
