@@ -493,6 +493,12 @@ acceptance run.
 
 Between tracks: the UI assessment tab, `mine-transcripts`, demoting rarely used core tools.
 
+Competitors looked at 2026-11-21:
+- [ ] radare2: `radare2-mcp` as a third agent-bench server, Haiku v4 pass (in progress).
+- [ ] kuna (Noelo-Lab, Apache-2.0 Rust port of Ghidra's decompiler, about IDA-level structure on DecBench): spike
+      it as an alternate decompiler backend behind a flag, measured on the goldens and suite v4. Its crackme
+      friction loop is a model for flywheel step 6.
+
 Measurement (rule 3): the Sonnet headline of suite v4 (about $13) and one run with a second model or client come
 after the acceptance pass's fixes have landed, not straight after incremental analysis.
 
