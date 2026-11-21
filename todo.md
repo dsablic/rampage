@@ -54,6 +54,21 @@ After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below.
 Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
 1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
 
+## Haiku suite v4 pass for 1.9.0 (2026-11-21)
+
+rampage only, 1 rep, label v4-haiku-1.9.0-2026-11-21 (target/bench/h2h), the first model run of suite v4: 17/20
+strict, 19/20 lenient, $0.44. All three misses are on the model's side; every tool result held the right value:
+two emulation answers carried an extra `"status": "ok"` (a format slip, the values were exact), and in
+patch-values-cm4-hex the agent converted `integrity_checks`' little-endian `computed_hex` `a10f98c2` to the wrong
+integer. 41 tool errors, mostly Raw selector friction on the Cortex-M tasks. Follow-ups:
+- [ ] `integrity_checks`: give stored and computed values as integers at the field's width and byte order, beside
+      the hex, so agents don't convert bytes by hand.
+- [ ] Raw selector friction: "file range is outside the regular source" (12 times) doesn't say the file's size
+      or the range asked for; default `offset` 0 and `length` to the rest of the file when omitted; accept
+      `format: "raw"`/`"bin"` for binary and common profile spellings (`cortex-m0`, `cortex-m4`); accept a `raw`
+      object sent as a JSON string.
+- [ ] `peripheral_access` and `import_svd` argument retries (`svd`, `at`): see the argument-name item below.
+
 ## Haiku suite v3 rerun after evaluate_function (2026-11-19)
 
 rampage only, 1 rep, label v3-haiku-evaluate-2026-11-19 (target/bench/h2h): 20/21, semantics 4/4 in 1–2 calls
