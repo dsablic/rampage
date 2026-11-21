@@ -104,7 +104,10 @@ goes first per repetition; each gets a fresh private directory outside the repos
 the fixture as `fixture.bin`. Raw streams stay in
 `target/bench/h2h/` (mode 0600); reports hold measurements and outcomes, never answers or transcripts. The
 `rea` server is REA (morluto/rea) over headless Ghidra, built from a pinned commit under `target/bench/rea/` and
-described by its `install.json`; results are in [benchmarks](benchmarks.md).
+described by its `install.json`; results are in [benchmarks](benchmarks.md). The `r2mcp` server is radare2's
+MCP server (radareorg/radare2-mcp) with its default tool set, started as `r2mcp -d pdg` so `decompile_function`
+uses the r2ghidra decompiler; `--r2mcp-bin`, `--r2-bin`, `--r2mcp-decompiler` and `--r2mcp-install-record`
+(default `target/bench/r2mcp/install.json`, the versions and commits it was built from) configure it.
 
 A complete live run selects the full canonical task set with `--agent-max-tasks 20`, adds corpus and graph
 receipts, enables health samples, and uses `--require-complete`. Custom `--tasks` runs are valid measurements

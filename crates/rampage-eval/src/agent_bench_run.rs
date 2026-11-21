@@ -49,7 +49,8 @@ pub struct AgentBenchArgs {
     /// The task set.
     #[arg(long, value_enum, default_value = "canonical")]
     suite: Suite,
-    /// MCP servers to compare, in run order within each task.
+    /// MCP servers to compare, in run order within each task: `rampage`, `rea` (REA over headless Ghidra) or
+    /// `r2mcp` (radare2's MCP server).
     #[arg(long, value_delimiter = ',', default_value = "rampage,rea")]
     servers: Vec<String>,
     /// Task ids, or `all` for the canonical set.
@@ -147,6 +148,21 @@ pub struct AgentBenchArgs {
     /// REA_MCP_TOOL_FAMILIES for the REA server; unset (REA's complete catalog) by default.
     #[arg(long)]
     rea_tool_families: Option<String>,
+    /// The `r2mcp` executable (default: ~/.local/share/radare2/prefix/bin/r2mcp, where `r2pm` and r2mcp's
+    /// `make user-install` put it).
+    #[arg(long)]
+    r2mcp_bin: Option<PathBuf>,
+    /// The radare2 executable whose version is recorded for the r2mcp server (r2mcp links its libraries).
+    #[arg(long, default_value = "r2")]
+    r2_bin: PathBuf,
+    /// r2mcp's `-d` decompiler: the command its `decompile_function` tool runs. `pdg` (r2ghidra) by default, the
+    /// decompiler radare2 users normally install; r2mcp's own default is `pdc`, radare2's built-in
+    /// pseudo-decompiler. The agent can still switch with r2mcp's `use_decompiler` tool.
+    #[arg(long, default_value = "pdg")]
+    r2mcp_decompiler: String,
+    /// The install record written when r2mcp was built (default: target/bench/r2mcp/install.json).
+    #[arg(long)]
+    r2mcp_install_record: Option<PathBuf>,
 }
 
 pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
@@ -175,8 +191,8 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
         tasks.retain(|task| args.tasks.contains(&task.id));
     }
     for server in &args.servers {
-        if !matches!(server.as_str(), "rampage" | "rea") {
-            return Err(format!("unknown server {server}; known: rampage, rea"));
+        if !matches!(server.as_str(), "rampage" | "rea" | "r2mcp") {
+            return Err(format!("unknown server {server}; known: rampage, rea, r2mcp"));
         }
     }
     let absolute = |path: Option<&PathBuf>, default: &str| {
@@ -209,6 +225,7 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
                     }),
                 )
             }
+            "r2mcp" => r2mcp_server(&args, &absolute)?,
             _ => {
                 let entry = absolute(args.rea_entry.as_ref(), "target/bench/rea/src/scripts/rea.mjs")?;
                 let node = which(&args.node)?;
@@ -489,6 +506,45 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
     }
     println!("{markdown}");
     Ok(ExitCode::SUCCESS)
+}
+
+/// radare2's MCP server as shipped (its default tool set: no `-r` run_* tools, not read-only, plugins and
+/// radare2rc loaded, default sandbox grain) with only the decompiler chosen, and the versions it runs with.
+fn r2mcp_server(
+    args: &AgentBenchArgs,
+    absolute: &dyn Fn(Option<&PathBuf>, &str) -> Result<PathBuf, String>,
+) -> Result<(Value, Value), String> {
+    let binary = match &args.r2mcp_bin {
+        Some(path) => path.clone(),
+        None => {
+            let home = std::env::var_os("HOME").ok_or("HOME is not set; pass --r2mcp-bin")?;
+            PathBuf::from(home).join(".local/share/radare2/prefix/bin/r2mcp")
+        }
+    };
+    let binary = std::fs::canonicalize(&binary).map_err(|error| format!("{}: {error}", binary.display()))?;
+    let r2 = which(&args.r2_bin)?;
+    let first_line = |program: &Path, arguments: &[&str]| {
+        Command::new(program)
+            .args(arguments)
+            .output()
+            .ok()
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|text| text.lines().next().map(|line| line.trim().to_owned()))
+    };
+    let arguments = ["-d", args.r2mcp_decompiler.as_str()];
+    let config = json!({"mcpServers": {"r2mcp": {"type": "stdio", "command": binary, "args": arguments}}});
+    let record = absolute(args.r2mcp_install_record.as_ref(), "target/bench/r2mcp/install.json")?;
+    let install: Value = serde_json::from_str(&read(&record)?).map_err(|error| error.to_string())?;
+    let version = json!({
+        "install": install,
+        "r2mcp_version": first_line(&binary, &["-v"]),
+        "binary_sha256": hash_file(&binary)?,
+        "radare2": first_line(&r2, &["-v"]),
+        "arguments": arguments,
+        "decompiler": args.r2mcp_decompiler,
+        "tools": "default set (no -r run_command/run_javascript/run_script, not read-only, not mini)",
+    });
+    Ok((config, version))
 }
 
 /// The --servers order on odd repetitions and its reverse on even ones, so no server always runs first.
