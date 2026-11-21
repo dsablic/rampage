@@ -49,8 +49,10 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   `binary_info` warning and a `list_functions` note saying so; there `jalx` calls into the other instruction set are
   kept as calls whose target is not followed, and symbols, exports or entries at addresses that are not 4-byte
   aligned (the ISA bit) seed no function. In MIPS16e code, `addiu rx, $pc, imm` and `lw rx, imm($pc)` are shown with
-  their encoded offsets, and the instruction-set mode of a MIPS16e function reached only through a function pointer
-  in relocated data is not known. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
+  their encoded offsets. MIPS16e functions reached only through data are found from tables of at least four odd
+  code pointers (busybox's applet table) and from odd pointers the code forms or loads; a lone pointer stored in
+  data is not followed, and a pointer to the end of a string (an empty string merged into another) can still seed a
+  short false function in read-only data (3 of about 1,450 starts in OpenWrt's `busybox`). A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
   into the data after its last call (`halt_baddata`). Constant search on MIPS matches typed immediates and
   `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched. `integrity_checks`
   takes a 16-bit CRC polynomial immediate as evidence only in a function that also shifts by one bit and XORs, so
@@ -62,8 +64,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   `DT_HASH` or `DT_GNU_HASH`; a file with none of them lists no dynamic symbols (the count is not guessed), and on
   64-bit MIPS import slots come only from the GOT, not from relocations. Without sections, `.MIPS.stubs` lazy-binding
   stubs stay unnamed and symbols of the static symbol table are gone. Functions reached only through function
-  pointers in relocated data are not seeded on any architecture; `DT_INIT`, `DT_FINI` and the init and fini arrays
-  are.
+  pointers in relocated data are not seeded on any architecture (except MIPS16e pointer tables, above); `DT_INIT`,
+  `DT_FINI`, the init and fini arrays and musl's MIPS `_start_c` are.
 - Decompiling MIPS position-independent code folds loads from read-only mappings, as on Cortex-M, besides the
   local GOT entries it marks read-only: Ghidra prints `.rodata` text as string literals only with that property,
   and one switch governs both. A program that writes its own read-only segment (through `mprotect`) would read as

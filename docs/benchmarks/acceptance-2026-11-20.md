@@ -297,3 +297,53 @@ Each has a regression test on a committed or self-built fixture; none uses the d
 - **Task 3:** report the MIPS ISA revision in `binary_info`.
 - **Task 6:** an agent run to confirm the `diff_builds` hint leads to `diff_firmware`.
 - The maintainer's vendor update pair, the last step of the set, is not part of this run.
+
+## Rerun after track 2: MIPS16e and section-less ELF (2026-11-21)
+
+Checks M5 and M1 were run again after the MIPS16e track
+([design](../plans/2026-11-21-mips16e-router-userland.md)): a release build of the track branch, the same
+inputs (`fetch.py` verified every SHA-256) and truth (`derive_truth.py`), `binary_info` and paged `list_functions`
+through `rampage server serve` with every group enabled and the analysis store off. Exported-function recall uses
+`llvm-readelf --dyn-syms` (which reads `PT_DYNAMIC` without sections) as the reference: the defined `FUNC` symbols,
+bit 0 cleared. The OpenWrt programs carry no other symbols, so this is the only function truth they have.
+
+| Id | Before | Now | Note |
+| --- | --- | --- | --- |
+| M1 | fail (90.7%) | pass | 123 of 129 starts (95.3%), 140 listed |
+| M5 | fail | pass | All 87 programs list functions; exported functions 4651 of 4651 found; no warning or note |
+
+**M5.** No call crashed, failed or timed out; the slowest program took 1.96 s and the 87 together 6.6 s.
+- **The 76 MIPS16e programs** are decoded: 13,130 functions in all (median 50 per program, at least 5), and
+  1,929 of their 1,929 exported functions are found. None gets the old "not decoded" warning or note. `busybox`
+  lists 1,447 functions where it listed 4 (its MIPS32 startup code) on 2026-11-20. Two things it needed beyond
+  decoding: musl's dynamic `_start` reaches `_start_c` only through a word after its `bal`, now seeded from the
+  entry, and the applets are reached only through `applet_main`, a table of odd function pointers, now seeded
+  from runs of at least four such pointers. A reading of the start addresses found 3 of the 1,447 in string data
+  (pointers to the end of a string, the empty string merged into it).
+- **The 11 programs without MIPS16e:** the five shared libraries that listed nothing now list `libfstools.so` 173,
+  `libgcc_s.so.1` 218, `libmbedcrypto` 913, `libmbedtls` 338 and `libmbedx509` 233 functions, and `libc.so`
+  2,274 (was 2); every exported function is found (2,722 of 2,722). The executables gained their constructor and
+  destructor seeds: `dropbear` 611 (was 472), `usign` 91 (79), `px5g` 80 (74), `jffs2reset` 37 (31),
+  `mount_root` 28 (22).
+
+**`busybox` in depth.** `find_main` follows musl's `_start` to `_start_c` and reports 0x409638, the MIPS16e
+function `_start_c` passes to the C library's start routine, at low confidence: the routine's PLT entry is unnamed
+without section headers. `decompile` there gives the applet dispatcher (it strips a leading `-` from `argv[0]`,
+looks the name up and calls the applet). `busybox` exports no functions of its own, so named exports were
+decompiled from `libubox.so` (MIPS16e, no section headers): `blobmsg_parse`, `md5_hash`, `avl_insert` and
+`blob_buf_init` decompile with their imports named (`memset`, `memcpy`, `__stack_chk_guard`); `uloop_run_timeout`
+exceeds the full view's byte budget and needs `view: code`.
+
+**M1.** The six starts still missed: `inflate_fast` and `inflate_table` (reached only from case blocks behind
+position-independent switch tables), `deflate_fast`, `deflate_slow` and `longest_match` (reached only through
+`configuration_table`, function pointers in relocated data), and `_tr_tally` (no caller). `_init`, `_fini`,
+`frame_dummy`, `__do_global_dtors_aux`, `register_tm_clones` and `deregister_tm_clones` are now found from
+`DT_INIT`, `DT_FINI` and the init and fini arrays.
+
+What remains from this rerun:
+- PLT and MIPS16e call stubs of section-less programs are unnamed (`sub_44e3b0` for `__libc_start_main@plt`), so
+  `find_main` stays at low confidence and decompiled calls into the C library read `sub_…`.
+- Literal-pool words in MIPS16e code decompile as memory reads (`*pxRam004096c8`) rather than constants.
+- MIPS16e functions reached only through a lone pointer in data, or through structures of method pointers (rpcd
+  plugins such as `luci.so` list 5 functions), are not found.
+- MIPS position-independent switch tables and function pointers in relocated data (M1), as before.
