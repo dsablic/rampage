@@ -221,6 +221,11 @@ arguments, marks the required ones, and suggests the likely intended name for a 
 `at`, `length` for `count` or `size`, `query` for `mode` or `contains`), so a client calling before it has
 loaded a schema can correct the call at once; at most 8 unknown names are listed, the rest counted. Debug tools
 refuse unknown arguments through their own parsing, without the argument list. The CLI builds its own inputs.
+Over MCP, a few names that can mean only one argument are taken as it when that argument is not also given, without
+appearing in the schema: `address`/`addr`/`ea` as `at`, `file`/`file_path`/`filename`/`binary` as `path`, `length`/`len` as `size`,
+and per tool `xrefs` `target` as `to`, `peripheral_access` `at` as `peripheral`, and `inspect_data` `count` as
+`size` (bytes, or words of `word_size` bytes when that is given). An argument that belongs to another call gets an
+error naming that call, e.g. `svd` on `peripheral_access` (run `import_svd` first).
 
 `entry_diagnostics` can report ARM ELF32 EHABI candidates under its `function_starts` origin. These
 are metadata assertions, not verified boundaries; `CantUnwind` and coalesced interiors are not expanded. See

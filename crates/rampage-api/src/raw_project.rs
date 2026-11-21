@@ -368,8 +368,20 @@ fn cortex_m_aliases() -> &'static [&'static str] {
     PROFILE_ALIASES.iter().find(|(profile, _)| *profile == RawProfile::CortexM).map_or(&[], |(_, aliases)| aliases)
 }
 
-/// ARMv8-M cores as alias keys: the Cortex-M profile decodes ARMv6-M/ARMv7-M, so none of them is its alias.
-const ARMV8M_CORES: [&str; 6] = ["cortexm23", "cortexm33", "cortexm35", "cortexm52", "cortexm55", "cortexm85"];
+/// ARMv8-M cores and architecture names as alias keys: the Cortex-M profile decodes ARMv6-M/ARMv7-M, so none of
+/// them is its alias.
+const ARMV8M_CORES: [&str; 10] = [
+    "cortexm23",
+    "cortexm33",
+    "cortexm35",
+    "cortexm52",
+    "cortexm55",
+    "cortexm85",
+    "armv8m",
+    "armv81m",
+    "thumbv8m",
+    "thumbv81m",
+];
 
 /// Families agents name that no Raw profile covers, though a profile's name may look close (PIC32 is MIPS, not
 /// PIC-16).
@@ -420,8 +432,8 @@ pub fn resolve_raw_profile(name: &str) -> Result<RawProfile, String> {
     let profiles: Vec<&str> = RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
     if ARMV8M_CORES.iter().any(|core| key.contains(core)) {
         return Err(format!(
-            "unsupported Raw profile {name:?}: ARMv8-M cores (Cortex-M23, M33, M35P, M52, M55, M85) have no Raw \
-             profile. ARM:LE:32:Cortex decodes ARMv6-M/ARMv7-M Thumb (aliases cortex-m, cortex-m0, cortex-m0+, \
+            "unsupported Raw profile {name:?}: ARMv8-M and ARMv8.1-M (cores Cortex-M23, M33, M35P, M52, \
+             M55, M85) have no Raw profile. ARM:LE:32:Cortex decodes ARMv6-M/ARMv7-M Thumb (aliases cortex-m, cortex-m0, cortex-m0+, \
              cortex-m3, cortex-m4, cortex-m7, thumb); to read ARMv8-M code as that, leaving the instructions only \
              ARMv8-M has undecoded, pass profile \"cortex-m\" explicitly. inspect_raw_code decodes headerless bytes \
              of A-profile ARM, AArch64 and x86. Raw profiles: {}",
@@ -742,10 +754,13 @@ impl RawProjectRequest {
         let size = RangeSource::open(path, 0, 0)?.size();
         let length = match self.length {
             Some(length) => length.0,
-            None => size
-                .checked_sub(offset.0)
-                .filter(|&rest| rest > 0)
-                .ok_or_else(|| ApiError::Invalid(format!("Raw {}", crate::range_source::outside(offset.0, 0, size))))?,
+            None => size.checked_sub(offset.0).filter(|&rest| rest > 0).ok_or_else(|| {
+                ApiError::Invalid(format!(
+                    "Raw offset {0} ({0:#x}) is at or past the end of the file, which holds {size} bytes \
+                         ({size:#x}); offset must be below {size}",
+                    offset.0
+                ))
+            })?,
         };
         if offset.0.checked_add(length).is_none_or(|end| end > size) {
             return Err(ApiError::Invalid(format!(
@@ -1309,9 +1324,18 @@ mod tests {
         for spelling in spellings {
             assert_eq!(resolve_raw_profile(spelling), Ok(RawProfile::CortexM), "{spelling}");
         }
-        for core in ["cortex-m33", "Cortex-M23", "arm_cortex_m33_thumb", "cortex-m85"] {
+        for core in [
+            "cortex-m33",
+            "Cortex-M23",
+            "arm_cortex_m33_thumb",
+            "cortex-m85",
+            "armv8m",
+            "ARMv8-M.main",
+            "thumbv8m.base",
+            "armv8.1-m",
+        ] {
             let error = resolve_raw_profile(core).unwrap_err();
-            assert!(error.contains("ARMv8-M cores") && error.contains("pass profile \"cortex-m\""), "{error}");
+            assert!(error.contains("ARMv8-M and ARMv8.1-M") && error.contains("pass profile \"cortex-m\""), "{error}");
         }
         for (name, format) in
             [("bin", RawInputFormat::Binary), ("RAW", RawInputFormat::Binary), ("ihex", RawInputFormat::Ihex)]

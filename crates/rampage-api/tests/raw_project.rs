@@ -187,6 +187,12 @@ fn invalid_ranges_and_sources_are_refused() {
     refusal(&link, base(json!(2), json!(0)));
     assert!(refusal(&owned.0, base(json!(2), json!(0))).contains("regular file"));
     assert!(refusal(&owned.0.join("missing.bin"), base(json!(2), json!(0))).contains("open"));
+    // An explicit length past the profile's cap is refused before the file is read: even a missing file says so.
+    let text = refusal(&owned.0.join("missing.bin"), base(json!(MAX_RAW_BYTES + 1), json!(0)));
+    assert!(text.contains("1..=131072") && !text.contains("open"), "{text}");
+    // With length omitted, an offset at the end of the file is refused without a length.
+    let text = refusal(&path, json!({ "profile": "msp430", "offset": MSP430.len(), "base_address": "0x4400" }));
+    assert!(text.contains("is at or past the end of the file") && !text.contains("length"), "{text}");
 
     let mut unknown = base(json!(2), json!(0));
     unknown["profile"] = json!("x86:LE:64:default");
@@ -457,6 +463,12 @@ fn a_compressed_image_opens_as_the_primary_raw_region() {
     assert_eq!(region["source"]["type"], "decoded");
     assert_eq!((receipt["source_offset"].as_u64(), receipt["input_fully_consumed"].as_bool()), (Some(32), Some(true)));
     assert_eq!(receipt["output_sha256"], region["sha256"]);
+    // The stream runs to the end of the file, so an omitted length (the rest of the file) reads the same encoded
+    // bytes and opens the same interpretation.
+    let mut rest = selector(decoded);
+    rest.as_object_mut().unwrap().remove("length");
+    let same = Session::default().open_raw(&path, &request(rest)).unwrap();
+    assert_eq!(serde_json::to_value(same.summary()).unwrap(), summary);
     let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
     let found: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
     for name in ["reset_handler", "format_hex", "systick_handler"] {
