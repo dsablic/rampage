@@ -11,6 +11,8 @@ use serde::Deserialize;
 
 mod agent_bench_run;
 mod bundle;
+mod flywheel_code;
+mod flywheel_code_workspace;
 mod flywheel_run;
 mod parity;
 mod parity_completion;
@@ -109,6 +111,14 @@ enum Command {
     /// clear. Reports bundled-only and bundled-plus-arm metrics, overall and for novel and recognised held-out
     /// functions.
     FlywheelBaseline(Box<flywheel_run::FlywheelBaselineArgs>),
+    /// Run the code loop once (docs/flywheel.md, "The code loop"): an agent changes a family's matcher source in a
+    /// fresh worktree at --base, inside a sandbox that cannot read the corpus or the flywheel directory, with a gate
+    /// it can call (dev verdict only); then the gate runs authoritatively, and a full pass earns one ledgered final
+    /// read and, when that passes, a branch for review. Spends model usage unless --session-script stands in.
+    FlywheelCodeRun(Box<flywheel_code::CodeRunArgs>),
+    /// The code loop's identification step: this build names every binary of one split of a corpus view.
+    #[command(hide = true)]
+    FlywheelCodeNames(Box<flywheel_code::CodeNamesArgs>),
     /// Merge promoted flywheel entries into the repository's bundled signature sources, regenerate the bundled
     /// assets, rerun the gate against the bundled baseline and write a commit-ready change with a summary (never
     /// committed); or remove a bundled entry by its provenance id.
@@ -278,6 +288,8 @@ fn main() -> ExitCode {
         Command::Flywheel(args) => flywheel_run::run(*args),
         Command::FlywheelRevert(args) => flywheel_run::revert_entry(args),
         Command::FlywheelBaseline(args) => flywheel_run::baseline(*args),
+        Command::FlywheelCodeRun(args) => flywheel_code::run(*args),
+        Command::FlywheelCodeNames(args) => flywheel_code::names(*args),
         Command::Bundle(args) => bundle::run(*args),
     };
     match result {

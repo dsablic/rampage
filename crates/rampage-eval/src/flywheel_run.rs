@@ -101,6 +101,17 @@ fn final_ledger(engine: &Engine) -> PathBuf {
 
 /// Appends one final read to the ledger and returns its number (1 for the first read of this corpus).
 pub(crate) fn record_final_read(engine: &Engine, reason: &str, packs: &[PathBuf]) -> Result<usize, String> {
+    record_final_read_with(engine, reason, packs, None).map(|(read, _)| read)
+}
+
+/// [`record_final_read`] with `extra` fields in the entry (a code run's label, base and change); returns the read's
+/// number and the entry as written.
+pub(crate) fn record_final_read_with(
+    engine: &Engine,
+    reason: &str,
+    packs: &[PathBuf],
+    extra: Option<&Value>,
+) -> Result<(usize, Value), String> {
     let path = final_ledger(engine);
     // Concurrent final reads take turns, so each gets its own number.
     let _lock =
@@ -110,7 +121,7 @@ pub(crate) fn record_final_read(engine: &Engine, reason: &str, packs: &[PathBuf]
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
-    let entry = json!({
+    let mut entry = json!({
         "read": previous + 1,
         "unix_ms": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -120,13 +131,28 @@ pub(crate) fn record_final_read(engine: &Engine, reason: &str, packs: &[PathBuf]
         "reason": reason,
         "packs": packs,
     });
+    if let Some(Value::Object(fields)) = extra {
+        for (key, value) in fields {
+            entry[key] = value.clone();
+        }
+    }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .map_err(|error| format!("{}: {error}", path.display()))?;
     writeln!(file, "{entry}").map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok(previous + 1)
+    Ok((previous + 1, entry))
+}
+
+/// The number the next final read of `engine`'s corpus would get, read from the ledger's line count only.
+pub(crate) fn next_final_read(engine: &Engine) -> Result<usize, String> {
+    let path = final_ledger(engine);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(text.lines().filter(|line| !line.trim().is_empty()).count() + 1),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(1),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
 }
 
 #[derive(clap::Args)]
@@ -233,7 +259,7 @@ fn parse_wildcards(text: Option<&str>) -> Result<Vec<OperandClass>, String> {
         .collect()
 }
 
-fn open_engine(corpus: &Path, flywheel_dir: Option<&Path>, workers: usize) -> Result<Engine, String> {
+pub(crate) fn open_engine(corpus: &Path, flywheel_dir: Option<&Path>, workers: usize) -> Result<Engine, String> {
     let corpus = Corpus::open(corpus).map_err(|error| error.to_string())?;
     let paths = match flywheel_dir {
         Some(directory) => Paths::new(directory.to_owned()),
@@ -244,7 +270,7 @@ fn open_engine(corpus: &Path, flywheel_dir: Option<&Path>, workers: usize) -> Re
     Ok(Engine::new(corpus, paths, workers))
 }
 
-fn gate_config(path: Option<&Path>) -> Result<GateConfig, String> {
+pub(crate) fn gate_config(path: Option<&Path>) -> Result<GateConfig, String> {
     match path {
         Some(path) => GateConfig::from_toml(&read(path)?).map_err(|error| error.to_string()),
         None => Ok(GateConfig::default()),

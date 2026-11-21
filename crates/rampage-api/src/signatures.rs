@@ -255,10 +255,23 @@ pub fn call_graph_names(
     signatures: &BTreeMap<u64, String>,
     existing: &BTreeMap<u64, String>,
 ) -> BTreeMap<u64, String> {
+    call_graph_names_excluding(graph, arch, calls, signatures, existing, None)
+}
+
+/// [`call_graph_names`] without the sequences seen only in the build `exclude`: a training binary measured leaving
+/// its own build out of a graph made from the training split.
+pub fn call_graph_names_excluding(
+    graph: &CallGraph,
+    arch: &str,
+    calls: &BTreeMap<u64, Vec<u64>>,
+    signatures: &BTreeMap<u64, String>,
+    existing: &BTreeMap<u64, String>,
+    exclude: Option<&str>,
+) -> BTreeMap<u64, String> {
     let mut seeds = signatures.clone();
     seeds.extend(existing.iter().map(|(address, name)| (*address, name.clone())));
-    let mut names = graph.propagate(arch, calls, &seeds, None);
-    for (address, name) in graph.propagate(arch, calls, signatures, None) {
+    let mut names = graph.propagate(arch, calls, &seeds, exclude);
+    for (address, name) in graph.propagate(arch, calls, signatures, exclude) {
         if existing.get(&address) == Some(&name) {
             names.entry(address).or_insert(name);
         }

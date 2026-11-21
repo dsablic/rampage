@@ -12,6 +12,7 @@
 
 mod arm;
 mod candidate;
+pub mod code;
 mod corpus;
 mod engine;
 mod evaluation;
@@ -30,7 +31,7 @@ pub use candidate::{
     Candidate, MAX_MODULE_BYTES, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, databases, format_pattern, layer,
     parse_pattern, rows_hash, write_pack,
 };
-pub use corpus::{Corpus, CorpusBinary, CorpusManifest, Role, Split, SplitConfig};
+pub use corpus::{Corpus, CorpusBinary, CorpusManifest, MANIFEST, Role, Split, SplitConfig};
 pub use engine::{
     BodyKey, Bundled, Counts, Engine, Gains, Layer, Loaded, NovelReach, Outcome, Overlap, Proposals, SliceMetrics,
     TruthFunction, gated_slice, slice_counts,

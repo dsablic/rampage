@@ -9,6 +9,12 @@ tool schemas on demand; only `mcp__<server>__*` tools and ToolSearch are allowed
 when ANTHROPIC_API_KEY is set) are loaded, and the stream's `system`/`init` event is checked. Anything beyond the
 one server's tools, ToolSearch and Claude Code's built-in plugins and agents fails the run, as does a non-empty
 memory directory or a call outside the server that ran.
+
+The `code` profile (the flywheel's code loop, docs/flywheel.md) gives the session Bash and the file tools instead,
+with no MCP server. It runs `claude` inside a macOS sandbox profile (`--sandbox-profile`, required) that the harness
+writes so the corpus and the flywheel directory cannot be read, loads the harness's settings (`--settings`: path
+rules, Claude Code's own sandbox off, environment), and checks the init event for exactly the code tools, no MCP
+server and exactly the requested additional directories.
 """
 
 from __future__ import annotations
@@ -77,6 +83,14 @@ BUILTIN_TOOLS = (
 # The only built-in tool a run may use: it loads deferred MCP tool schemas and touches no file or network.
 ALLOWED_BUILTINS = ("ToolSearch",)
 
+# The tools of the `code` profile: a shell and the file tools, nothing that reaches the network or another agent.
+CODE_TOOLS = ("Bash", "Edit", "Glob", "Grep", "Read", "Write")
+
+# The sandbox launcher the `code` profile wraps `claude` in; present on every macOS.
+SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+
+PROFILES = ("mcp", "code")
+
 # Claude Code's built-in plugins as of 2.1.322; any other plugin came from user configuration. A built-in plugin
 # that added a tool would still fail the run through the tools check.
 BUILTIN_PLUGINS = frozenset(
@@ -133,10 +147,17 @@ def isolation_mode(environment: dict[str, str]) -> str:
     return "bare" if environment.get("ANTHROPIC_API_KEY") else "setting-sources-none"
 
 
-def child_environment(environment: dict[str, str], max_mcp_output_tokens: int | None = None) -> dict[str, str]:
+def child_environment(
+    environment: dict[str, str], max_mcp_output_tokens: int | None = None, extra: list[str] | None = None
+) -> dict[str, str]:
     child = {name: environment[name] for name in ENVIRONMENT_ALLOWLIST if name in environment}
     if max_mcp_output_tokens is not None:
         child["MAX_MCP_OUTPUT_TOKENS"] = str(max_mcp_output_tokens)
+    for assignment in extra or []:
+        name, separator, value = assignment.partition("=")
+        if not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ValueError(f"--env {assignment!r} is not NAME=VALUE")
+        child[name] = value
     return child
 
 
@@ -153,7 +174,56 @@ def read_mcp_config(path: Path, server: str) -> dict[str, Any]:
     return config
 
 
+def profile_of(arguments: argparse.Namespace) -> str:
+    return getattr(arguments, "profile", None) or "mcp"
+
+
+def code_command(arguments: argparse.Namespace, system_prompt: str | None, isolation: str) -> list[str]:
+    """The `code` profile: Bash and the file tools, no MCP server, the harness's settings, inside its sandbox."""
+    command = [
+        SANDBOX_EXEC,
+        "-f",
+        str(arguments.sandbox_profile),
+        arguments.claude_bin,
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-hook-events",
+        "--mcp-config",
+        json.dumps({"mcpServers": {}}),
+        "--strict-mcp-config",
+        "--tools",
+        ",".join(CODE_TOOLS),
+        "--allowedTools=" + ",".join(CODE_TOOLS),
+        "--disallowedTools=" + ",".join(tool for tool in BUILTIN_TOOLS if tool not in CODE_TOOLS),
+        "--permission-mode",
+        "dontAsk",
+        "--disable-slash-commands",
+        "--model",
+        arguments.model,
+        "--max-turns",
+        str(arguments.max_turns),
+        "--no-session-persistence",
+        "--settings",
+        str(arguments.settings),
+    ]
+    for directory in arguments.add_dir or []:
+        command += ["--add-dir", str(directory)]
+    if isolation == "bare":
+        command.append("--bare")
+    else:
+        command += ["--setting-sources", ""]
+    if system_prompt is not None:
+        command += ["--system-prompt", system_prompt]
+    if getattr(arguments, "max_budget_usd", None) is not None:
+        command += ["--max-budget-usd", f"{arguments.max_budget_usd:.4f}"]
+    return command
+
+
 def claude_command(arguments: argparse.Namespace, system_prompt: str | None, isolation: str) -> list[str]:
+    if profile_of(arguments) == "code":
+        return code_command(arguments, system_prompt, isolation)
     command = [
         arguments.claude_bin,
         "-p",
@@ -188,26 +258,46 @@ def claude_command(arguments: argparse.Namespace, system_prompt: str | None, iso
     return command
 
 
-def check_init(event: dict[str, Any], server: str) -> list[str]:
-    """Problems with an init event; empty when exactly the one server's tools and nothing user-defined loaded."""
+def allowed_call(name: str, server: str, profile: str = "mcp") -> bool:
+    """Whether a run of `profile` may call the tool `name`."""
+    if profile == "code":
+        return name in CODE_TOOLS
+    return name.startswith(f"mcp__{server}__") or name in ALLOWED_BUILTINS
+
+
+def check_init(
+    event: dict[str, Any], server: str, profile: str = "mcp", add_dirs: list[str] | None = None
+) -> list[str]:
+    """Problems with an init event; empty when exactly the profile's tools (the one server's, or the code tools)
+    and nothing user-defined loaded."""
     prefix = f"mcp__{server}__"
     problems = []
     tools = event.get("tools")
     if not isinstance(tools, list) or not tools:
         problems.append("init event lists no tools")
         tools = []
-    extra_tools = [tool for tool in tools if not str(tool).startswith(prefix) and tool not in ALLOWED_BUILTINS]
-    if not any(str(tool).startswith(prefix) for tool in tools):
-        problems.append(f"no {prefix}* tools")
-    if extra_tools:
-        problems.append(f"tools outside {prefix}*: {extra_tools}")
     servers = event.get("mcp_servers")
-    if not isinstance(servers, list) or [entry.get("name") for entry in servers] != [server]:
-        problems.append(f"MCP servers are not exactly [{server!r}]: {servers}")
+    if profile == "code":
+        extra_tools = [tool for tool in tools if tool not in CODE_TOOLS]
+        if extra_tools:
+            problems.append(f"tools outside {list(CODE_TOOLS)}: {extra_tools}")
+        missing = [tool for tool in ("Bash", "Edit", "Read") if tool not in tools]
+        if tools and missing:
+            problems.append(f"code tools missing: {missing}")
+        if servers:
+            problems.append(f"MCP servers loaded: {servers}")
     else:
-        status = servers[0].get("status")
-        if status != "connected":
-            problems.append(f"MCP server {server!r} status is {status!r}, not connected")
+        extra_tools = [tool for tool in tools if not str(tool).startswith(prefix) and tool not in ALLOWED_BUILTINS]
+        if not any(str(tool).startswith(prefix) for tool in tools):
+            problems.append(f"no {prefix}* tools")
+        if extra_tools:
+            problems.append(f"tools outside {prefix}*: {extra_tools}")
+        if not isinstance(servers, list) or [entry.get("name") for entry in servers] != [server]:
+            problems.append(f"MCP servers are not exactly [{server!r}]: {servers}")
+        else:
+            status = servers[0].get("status")
+            if status != "connected":
+                problems.append(f"MCP server {server!r} status is {status!r}, not connected")
     plugins = event.get("plugins") or []
     extra_plugins = [
         plugin
@@ -229,8 +319,10 @@ def check_init(event: dict[str, Any], server: str) -> list[str]:
         problems.append(f"non-built-in agents: {extra_agents}")
     if event.get("skills"):
         problems.append(f"skills loaded: {event.get('skills')}")
-    if event.get("additional_directories"):
-        problems.append(f"additional directories: {event.get('additional_directories')}")
+    expected = sorted(str(Path(directory).resolve()) for directory in add_dirs or [])
+    found = sorted(str(Path(directory).resolve()) for directory in event.get("additional_directories") or [])
+    if found != expected:
+        problems.append(f"additional directories {event.get('additional_directories')} are not exactly {expected}")
     for kind, directory in (event.get("memory_paths") or {}).items():
         try:
             if Path(directory).is_dir() and any(Path(directory).iterdir()):
@@ -280,7 +372,7 @@ def content_text(content: Any) -> str:
     return ""
 
 
-def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
+def parse_stream(lines: list[tuple[float, str]], server: str, profile: str = "mcp") -> dict[str, Any]:
     """Normalize a recorded stream of (arrival seconds, JSON line) pairs. Pure: no process or clock access."""
     init: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
@@ -404,13 +496,12 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
         else:
             exit_kind = "error"
             error = f"result {subtype or 'unknown'}: {str(result.get('result') or '')[:MAX_ERROR_TEXT]}"
-    prefix = f"mcp__{server}__"
     # A call outside the server that Claude Code refused (no such tool, or permission denied) ran nothing: it is
     # a model error inside the run. Any other outside call, successful or failed, reached something else.
     stray: set[str] = set()
     rejected: set[str] = set()
     for call, text in zip(calls, result_texts):
-        if call["name"].startswith(prefix) or call["name"] in ALLOWED_BUILTINS:
+        if allowed_call(call["name"], server, profile):
             continue
         if call["is_error"] and not call.get("unanswered") and REJECTION.search(text):
             call["rejected"] = True
@@ -447,6 +538,8 @@ def normalize(
     timed_out: bool,
     leak: list[str],
     process_error: str | None,
+    profile: str = "mcp",
+    add_dirs: list[str] | None = None,
 ) -> dict[str, Any]:
     init = parsed["init"] or {}
     exit_kind, error = parsed["exit"], parsed["error"]
@@ -454,7 +547,8 @@ def normalize(
     if parsed["init"] is None:
         problems.append("no init event")
     else:
-        problems += [problem for problem in check_init(init, server) if problem not in problems]
+        found = check_init(init, server, profile, add_dirs)
+        problems += [problem for problem in found if problem not in problems]
     if parsed["hook_events"]:
         problems.append(f"hook events ran: {parsed['hook_events']}")
     if parsed["stray_tools"]:
@@ -491,6 +585,7 @@ def normalize(
         "truncated_results": parsed["truncated_results"],
         "first_request_tokens": parsed["first_request_tokens"],
         "server": server,
+        "profile": profile,
     }
 
 
@@ -554,13 +649,35 @@ def reap(pids: set[int]) -> None:
         time.sleep(2)
 
 
-def run(arguments: argparse.Namespace) -> dict[str, Any]:
+def check_arguments(arguments: argparse.Namespace) -> None:
+    """The profile's required inputs: one MCP server for `mcp`; the sandbox profile and settings for `code`."""
+    if profile_of(arguments) == "code":
+        if not arguments.sandbox_profile or not Path(arguments.sandbox_profile).is_file():
+            raise ValueError("the code profile needs --sandbox-profile FILE (the harness's macOS sandbox profile)")
+        if not Path(SANDBOX_EXEC).is_file():
+            raise ValueError(f"the code profile needs {SANDBOX_EXEC} (macOS); no other sandbox is implemented")
+        if not arguments.settings or not Path(arguments.settings).is_file():
+            raise ValueError("the code profile needs --settings FILE")
+        if arguments.mcp_config is not None:
+            raise ValueError("the code profile takes no --mcp-config: the session has no MCP server")
+        return
+    if arguments.mcp_config is None or not arguments.server_name:
+        raise ValueError("the mcp profile needs --mcp-config and --server-name")
+    if arguments.sandbox_profile or arguments.settings or arguments.add_dir:
+        raise ValueError("--sandbox-profile, --settings and --add-dir belong to the code profile")
     read_mcp_config(arguments.mcp_config, arguments.server_name)
+
+
+def run(arguments: argparse.Namespace) -> dict[str, Any]:
+    check_arguments(arguments)
+    profile = profile_of(arguments)
+    server = arguments.server_name or ""
+    add_dirs = [str(directory) for directory in arguments.add_dir or []]
     if not arguments.workdir.is_dir():
         raise ValueError(f"workdir {arguments.workdir} is not a directory")
     prompt = arguments.prompt_file.read_text(encoding="utf-8")
     system_prompt = arguments.system_file.read_text(encoding="utf-8") if arguments.system_file else None
-    environment = child_environment(dict(os.environ), arguments.max_mcp_output_tokens)
+    environment = child_environment(dict(os.environ), arguments.max_mcp_output_tokens, arguments.env)
     isolation = isolation_mode(environment)
     command = claude_command(arguments, system_prompt, isolation)
     lines: list[tuple[float, str]] = []
@@ -609,11 +726,12 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                     except json.JSONDecodeError:
                         event = {}
                     if event.get("type") == "system" and event.get("subtype") == "init":
-                        leak = check_init(event, arguments.server_name)
+                        leak = check_init(event, server, profile, add_dirs)
                         if leak:
                             terminate(process)
                             break
             process.wait()
+            process.stdout.close()
         finally:
             deadline.cancel()
             started_below.update(descendants(process.pid))
@@ -627,18 +745,22 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
     if process.returncode not in (0, None):
         tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-MAX_ERROR_TEXT:].strip()
         process_error = f"claude exited {process.returncode}" + (f": {tail}" if tail else "")
-    parsed = parse_stream(lines, arguments.server_name)
+    parsed = parse_stream(lines, server, profile)
     result = normalize(
         parsed,
-        server=arguments.server_name,
+        server=server,
         requested_model=arguments.model,
         isolation=isolation,
         duration_ms=duration_ms,
         timed_out=timed_out,
         leak=leak,
         process_error=process_error,
+        profile=profile,
+        add_dirs=add_dirs,
     )
     result["client_settings"] = {"MAX_MCP_OUTPUT_TOKENS": environment.get("MAX_MCP_OUTPUT_TOKENS")}
+    if profile == "code":
+        result["sandbox_profile"] = str(arguments.sandbox_profile)
     result["client_project_dir_removed"] = remove_client_project_dir(environment, arguments.workdir)
     return result
 
@@ -663,27 +785,32 @@ def renormalize(arguments: argparse.Namespace) -> dict[str, Any]:
     """
     previous = json.loads(arguments.out.read_text(encoding="utf-8"))
     lines = [(0.0, line) for line in arguments.transcript.read_text(encoding="utf-8").splitlines()]
-    parsed = parse_stream(lines, arguments.server_name)
+    profile = profile_of(arguments)
+    server = arguments.server_name or ""
+    add_dirs = [str(directory) for directory in arguments.add_dir or []]
+    parsed = parse_stream(lines, server, profile)
     old_calls = previous.get("tool_calls") or []
     for index, call in enumerate(parsed["tool_calls"]):
         call.pop("duration_ms", None)
         if index < len(old_calls) and old_calls[index].get("name") == call["name"]:
             if "duration_ms" in old_calls[index]:
                 call["duration_ms"] = old_calls[index]["duration_ms"]
-    leak = check_init(parsed["init"], arguments.server_name) if parsed["init"] else []
+    leak = check_init(parsed["init"], server, profile, add_dirs) if parsed["init"] else []
     process_error = None
     old_error = str(previous.get("error") or "")
     if "claude exited" in old_error:
         process_error = old_error[old_error.index("claude exited") :]
     result = normalize(
         parsed,
-        server=arguments.server_name,
+        server=server,
         requested_model=arguments.model,
         isolation=(previous.get("runner") or {}).get("isolation") or isolation_mode(dict(os.environ)),
         duration_ms=int(previous.get("duration_ms") or 0),
         timed_out=previous.get("exit") == "timeout",
         leak=leak,
         process_error=process_error,
+        profile=profile,
+        add_dirs=add_dirs,
     )
     result["renormalized"] = True
     return result
@@ -691,8 +818,20 @@ def renormalize(arguments: argparse.Namespace) -> dict[str, Any]:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    result.add_argument("--mcp-config", type=Path, required=True, help="JSON file holding exactly one server")
-    result.add_argument("--server-name", required=True)
+    result.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default="mcp",
+        help="mcp: exactly one MCP server's tools; code: Bash and the file tools in a sandbox (the code loop)",
+    )
+    result.add_argument("--mcp-config", type=Path, help="JSON file holding exactly one server (mcp profile)")
+    result.add_argument("--server-name", help="the MCP server's name (mcp profile)")
+    result.add_argument("--sandbox-profile", type=Path, help="macOS sandbox profile claude runs in (code profile)")
+    result.add_argument("--settings", type=Path, help="Claude Code settings file to load (code profile)")
+    result.add_argument(
+        "--add-dir", type=Path, action="append", default=[], help="a directory the session may also use (code profile)"
+    )
+    result.add_argument("--env", action="append", default=[], help="NAME=VALUE added to claude's environment")
     result.add_argument("--prompt-file", type=Path, required=True)
     result.add_argument("--system-file", type=Path, help="replaces Claude Code's default system prompt")
     result.add_argument("--model", required=True)

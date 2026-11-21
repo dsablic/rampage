@@ -330,6 +330,155 @@ class CommandTest(unittest.TestCase):
                 runner.read_mcp_config(path, "rea")
 
 
+def code_init(add_dirs: list[str]) -> dict[str, Any]:
+    return {
+        "type": "system",
+        "subtype": "init",
+        "tools": list(runner.CODE_TOOLS),
+        "mcp_servers": [],
+        "model": MODEL,
+        "plugins": [],
+        "slash_commands": [],
+        "agents": ["general-purpose"],
+        "additional_directories": add_dirs,
+        "memory_paths": {},
+    }
+
+
+# A stand-in for `claude` in the code profile: it tries to read the final-split file and the training file named in
+# its environment, then reports what it got as a stream-json session would.
+FAKE_CLAUDE = r'''#!/usr/bin/env python3
+import json, os, sys
+
+def attempt(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return "read:" + handle.read().strip()
+    except OSError as error:
+        return "denied:" + type(error).__name__
+
+final = attempt(os.environ["FAKE_FINAL"])
+train = attempt(os.environ["FAKE_TRAIN"])
+sys.stdin.read()
+model = sys.argv[sys.argv.index("--model") + 1]
+added = [sys.argv[index + 1] for index, part in enumerate(sys.argv) if part == "--add-dir"]
+text = f"final={final} train={train}"
+for event in (
+    {"type": "system", "subtype": "init", "tools": ["Bash", "Edit", "Glob", "Grep", "Read", "Write"],
+     "mcp_servers": [], "model": model, "plugins": [], "slash_commands": [], "agents": [],
+     "additional_directories": added, "memory_paths": {}},
+    {"type": "assistant", "message": {"id": "m1", "model": model, "content": [{"type": "text", "text": text}],
+     "usage": {"input_tokens": 1, "output_tokens": 1}}},
+    {"type": "result", "subtype": "success", "is_error": False, "result": text, "num_turns": 1,
+     "total_cost_usd": 0.0, "usage": {"input_tokens": 1, "output_tokens": 1}},
+):
+    print(json.dumps(event), flush=True)
+'''
+
+
+class CodeProfileTest(unittest.TestCase):
+    def arguments(self, directory: Path, *extra: str) -> argparse.Namespace:
+        (directory / "session.sb").write_text("(version 1)\n(allow default)\n")
+        (directory / "settings.json").write_text("{}")
+        return runner.parser().parse_args(
+            [
+                "--profile", "code", "--prompt-file", str(directory / "prompt.md"), "--model", MODEL,
+                "--max-turns", "50", "--timeout-s", "60", "--workdir", str(directory), "--out",
+                str(directory / "o.json"), "--transcript", str(directory / "t.jsonl"), "--claude-bin", "claude",
+                "--sandbox-profile", str(directory / "session.sb"), "--settings", str(directory / "settings.json"),
+                "--add-dir", str(directory / "train"), *extra,
+            ]
+        )
+
+    def test_the_command_runs_claude_in_the_sandbox_with_only_the_code_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self.arguments(Path(directory), "--max-budget-usd", "5")
+            command = runner.claude_command(arguments, None, "setting-sources-none")
+            self.assertEqual(command[:4], [runner.SANDBOX_EXEC, "-f", str(Path(directory) / "session.sb"), "claude"])
+            self.assertEqual(command[command.index("--tools") + 1], "Bash,Edit,Glob,Grep,Read,Write")
+            self.assertEqual(json.loads(command[command.index("--mcp-config") + 1]), {"mcpServers": {}})
+            self.assertIn("--strict-mcp-config", command)
+            denied = next(part for part in command if part.startswith("--disallowedTools=")).split("=", 1)[1]
+            for tool in ("WebFetch", "WebSearch", "Agent", "Task", "Skill", "Workflow"):
+                self.assertIn(tool, denied.split(","))
+            for tool in runner.CODE_TOOLS:
+                self.assertNotIn(tool, denied.split(","))
+            self.assertEqual(command[command.index("--settings") + 1], str(Path(directory) / "settings.json"))
+            self.assertEqual(command[command.index("--add-dir") + 1], str(Path(directory) / "train"))
+            self.assertEqual(command[command.index("--max-budget-usd") + 1], "5.0000")
+            self.assertEqual(command[command.index("--permission-mode") + 1], "dontAsk")
+
+    def test_the_code_profile_needs_its_sandbox_and_takes_no_server(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self.arguments(Path(directory))
+            arguments.sandbox_profile = None
+            with self.assertRaises(ValueError):
+                runner.check_arguments(arguments)
+            arguments = self.arguments(Path(directory), "--mcp-config", str(Path(directory) / "mcp.json"))
+            with self.assertRaises(ValueError):
+                runner.check_arguments(arguments)
+            mcp = runner.parser().parse_args(
+                ["--prompt-file", "p", "--model", MODEL, "--max-turns", "1", "--timeout-s", "1", "--workdir", ".",
+                 "--out", "o", "--transcript", "t", "--sandbox-profile", "x.sb"]
+            )
+            with self.assertRaises(ValueError):
+                runner.check_arguments(mcp)
+
+    def test_the_init_event_must_hold_exactly_the_code_tools_and_directories(self) -> None:
+        self.assertEqual(runner.check_init(code_init(["/s/train"]), "", "code", ["/s/train"]), [])
+        leaked = code_init(["/s/train"])
+        leaked["tools"] = [*runner.CODE_TOOLS, "WebFetch", "mcp__rampage__identify_functions"]
+        self.assertTrue(any("tools outside" in problem for problem in runner.check_init(leaked, "", "code", ["/s/train"])))
+        served = code_init(["/s/train"])
+        served["mcp_servers"] = [{"name": "rampage", "status": "connected"}]
+        self.assertTrue(runner.check_init(served, "", "code", ["/s/train"]))
+        self.assertTrue(runner.check_init(code_init(["/s/train", "/"]), "", "code", ["/s/train"]))
+        # The mcp profile still refuses any additional directory.
+        self.assertTrue(runner.check_init({**sample_init(), "additional_directories": ["/x"]}, "rampage"))
+        self.assertTrue(runner.allowed_call("Bash", "", "code"))
+        self.assertFalse(runner.allowed_call("WebFetch", "", "code"))
+        self.assertFalse(runner.allowed_call("Bash", "rampage"))
+
+    def test_extra_environment_is_passed_and_checked(self) -> None:
+        environment = runner.child_environment({"PATH": "/bin"}, None, ["CARGO_TARGET_DIR=/s/target", "A=b=c"])
+        self.assertEqual(environment, {"PATH": "/bin", "CARGO_TARGET_DIR": "/s/target", "A": "b=c"})
+        for bad in ["NOVALUE", "=x", "1A=x"]:
+            with self.assertRaises(ValueError):
+                runner.child_environment({}, None, [bad])
+
+    @unittest.skipUnless(Path(runner.SANDBOX_EXEC).is_file(), "needs macOS sandbox-exec")
+    def test_a_scripted_session_in_the_sandbox_cannot_read_the_final_split(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            flywheel, train, workdir = root / "flywheel", root / "session" / "train", root / "session" / "worktree"
+            for directory in (flywheel / "corpus" / "bin", train, workdir):
+                directory.mkdir(parents=True)
+            final = flywheel / "corpus" / "bin" / "zlib-1.2.12-final.twin.elf"
+            final.write_text("final truth")
+            (train / "zlib-1.2.13.twin.elf").write_text("training truth")
+            fake = root / "fake-claude"
+            fake.write_text(FAKE_CLAUDE)
+            fake.chmod(0o755)
+            arguments = self.arguments(root, "--env", f"FAKE_FINAL={final}", "--env",
+                                       f"FAKE_TRAIN={train / 'zlib-1.2.13.twin.elf'}")
+            arguments.workdir = workdir
+            arguments.claude_bin = str(fake)
+            arguments.add_dir = [train]
+            (root / "prompt.md").write_text("task")
+            (root / "session.sb").write_text(
+                f'(version 1)\n(allow default)\n(deny file-read* file-write* (subpath "{flywheel}"))\n'
+            )
+            result = runner.run(arguments)
+            self.assertEqual(result["exit"], "ok", result)
+            self.assertIn("final=denied:PermissionError", result["answer"])
+            self.assertNotIn("final truth", result["answer"])
+            self.assertIn("train=read:training truth", result["answer"])
+            self.assertEqual(result["profile"], "code")
+            # Without the sandbox profile's rule the same stand-in reads the file: the denial is the sandbox's.
+            (root / "session.sb").write_text("(version 1)\n(allow default)\n")
+            self.assertIn("final=read:final truth", runner.run(arguments)["answer"])
+
+
 class ReapTest(unittest.TestCase):
     def test_a_grandchild_in_its_own_session_is_found_and_stopped_after_its_parent_exits(self) -> None:
         script = (

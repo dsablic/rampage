@@ -157,6 +157,57 @@ fn identification_call_graph<'a>(
     }
 }
 
+/// What identification reads from one binary besides the databases: its image, discovered bodies, call sequences
+/// and loader names.
+pub(super) struct Parts<'a> {
+    pub binary: &'a Binary,
+    pub image: &'a MaskContext,
+    pub bodies: &'a [(u64, &'a [u8])],
+    pub calls: &'a BTreeMap<u64, Vec<u64>>,
+    pub existing: &'a BTreeMap<u64, String>,
+}
+
+/// The names `layers` over the bundled databases (or `bundled`) give one binary's discovered functions, then the
+/// names `graph` propagates, leaving out sequences seen only in the excluded build: production identification, with
+/// the call graph chosen by the caller.
+pub(super) fn identify_parts(
+    parts: &Parts<'_>,
+    layers: &[Layer],
+    bundled: Option<&Bundled>,
+    graph: Option<(&rampage_signatures::CallGraph, Option<&str>)>,
+) -> BTreeMap<u64, String> {
+    let arch = parts.binary.arch;
+    let mut databases: Vec<&SignatureDb> = layers
+        .iter()
+        .flat_map(|layer| layer.databases.iter().filter(move |database| database.arch() == arch))
+        .collect();
+    match bundled {
+        Some(bundled) => databases.extend(bundled.databases.iter().find(|database| database.arch() == arch)),
+        None => databases.extend(rampage_signatures::bundled_ref(arch)),
+    }
+    // Layered as production identification layers it: the embedded firmware set after the corpus, for
+    // firmware-like targets only (a candidate bundle replaces the corpus, not the embedded set).
+    databases.extend(rampage_signatures::bundled_embedded_for(parts.binary));
+    let names = identify_program_sources(&databases, &parts.binary.target(), parts.image, parts.bodies);
+    let mut names: BTreeMap<u64, String> =
+        names.into_iter().map(|(address, (_, name))| (address, name.into_owned())).collect();
+    // As the product's identification does: the call graph names callees of named functions.
+    if let Some((graph, exclude)) = graph {
+        let added = crate::signatures::call_graph_names_excluding(
+            graph,
+            &arch.to_string(),
+            parts.calls,
+            &names,
+            parts.existing,
+            exclude,
+        );
+        for (address, name) in added {
+            names.entry(address).or_insert(name);
+        }
+    }
+    names
+}
+
 /// The names one evaluation gave each binary.
 #[derive(Debug, Clone)]
 pub struct Proposals {
@@ -176,6 +227,9 @@ pub struct Engine {
     training: OnceLock<Result<Arc<BTreeSet<BodyKey>>, String>>,
     /// Per held-out binary: each target-library truth function and whether its body is novel.
     novelty: Vec<OnceLock<Arc<BTreeMap<u64, bool>>>>,
+    /// The build whose cached discovery (function extents, call sequences, loader names) is used in place of this
+    /// build's: a source-change gate identifies with the candidate's matcher on the base build's discovery.
+    discovery_key: Option<String>,
 }
 
 /// Counters of one engine's cache use, for timing reports.
@@ -192,7 +246,27 @@ impl Engine {
     pub fn new(corpus: Corpus, paths: Paths, workers: usize) -> Engine {
         let loaded = corpus.manifest.binaries.iter().map(|_| OnceLock::new()).collect();
         let novelty = corpus.manifest.binaries.iter().map(|_| OnceLock::new()).collect();
-        Engine { corpus, paths, workers: workers.max(1), loaded, training: OnceLock::new(), novelty }
+        Engine {
+            corpus,
+            paths,
+            workers: workers.max(1),
+            loaded,
+            training: OnceLock::new(),
+            novelty,
+            discovery_key: None,
+        }
+    }
+
+    /// Uses the discovery another build cached (its [`super::build_id`]) instead of analysing with this one; a binary
+    /// that build has not analysed is then an error, never analysed again.
+    pub fn with_discovery_key(mut self, key: &str) -> Engine {
+        self.discovery_key = Some(key.to_owned());
+        self
+    }
+
+    /// The build whose cached discovery this engine reads: [`Engine::with_discovery_key`]'s, else this build's.
+    pub fn discovery_key(&self) -> &str {
+        self.discovery_key.as_deref().unwrap_or_else(|| super::build_id())
     }
 
     pub fn workers(&self) -> usize {
@@ -306,32 +380,19 @@ impl Engine {
 
     /// The names `layers` over the bundled databases (or `bundled`) give one binary's discovered functions.
     fn identify(&self, loaded: &Loaded, layers: &[Layer], bundled: Option<&Bundled>) -> BTreeMap<u64, String> {
-        let arch = loaded.binary.arch;
-        let mut databases: Vec<&SignatureDb> = layers
-            .iter()
-            .flat_map(|layer| layer.databases.iter().filter(move |database| database.arch() == arch))
-            .collect();
-        match bundled {
-            Some(bundled) => databases.extend(bundled.databases.iter().find(|database| database.arch() == arch)),
-            None => databases.extend(rampage_signatures::bundled_ref(arch)),
-        }
-        let graph = identification_call_graph(&loaded.binary, bundled);
-        // Layered as production identification layers it: the embedded firmware set after the corpus, for
-        // firmware-like targets only (a candidate bundle replaces the corpus, not the embedded set).
-        databases.extend(rampage_signatures::bundled_embedded_for(&loaded.binary));
-        let bodies = loaded.bodies();
-        let names = identify_program_sources(&databases, &loaded.binary.target(), &loaded.image, &bodies);
-        let mut names: BTreeMap<u64, String> =
-            names.into_iter().map(|(address, (_, name))| (address, name.into_owned())).collect();
-        // As the product's identification does: the call graph names callees of named functions.
-        if let Some(graph) = graph {
-            let added =
-                crate::signatures::call_graph_names(graph, &arch.to_string(), &loaded.calls, &names, &loaded.existing);
-            for (address, name) in added {
-                names.entry(address).or_insert(name);
-            }
-        }
-        names
+        let graph = identification_call_graph(&loaded.binary, bundled).map(|graph| (graph, None));
+        identify_parts(
+            &Parts {
+                binary: &loaded.binary,
+                image: &loaded.image,
+                bodies: &loaded.bodies(),
+                calls: &loaded.calls,
+                existing: &loaded.existing,
+            },
+            layers,
+            bundled,
+            graph,
+        )
     }
 
     /// The names under `layers`, where `layers` are the layers `before` was proposed under plus the rows of
@@ -422,7 +483,7 @@ impl Engine {
         let entry = self.binary(index);
         let arch: Arch = entry.arch.parse().map_err(FlywheelError::Corpus)?;
         let mut hasher = Sha256::new();
-        for part in [CACHE_FORMAT, &entry.stripped_sha256, &bundled_hash(arch), super::build_id()] {
+        for part in [CACHE_FORMAT, &entry.stripped_sha256, &bundled_hash(arch), self.discovery_key()] {
             hasher.update(part.as_bytes());
             hasher.update([0]);
         }
@@ -431,7 +492,7 @@ impl Engine {
 
     /// Discovery and bundled-only identification of the stripped binary, through the same project analysis and
     /// identification the API serves, cached by (binary hash, bundled database hash, rampage build id).
-    fn baseline(&self, index: usize) -> Result<Baseline, FlywheelError> {
+    pub(super) fn baseline(&self, index: usize) -> Result<Baseline, FlywheelError> {
         let path = self.baseline_path(index)?;
         if let Ok(text) = std::fs::read_to_string(&path)
             && let Ok(cached) = serde_json::from_str::<CachedBaseline>(&text)
@@ -444,6 +505,13 @@ impl Engine {
             ));
         }
         let entry = self.binary(index);
+        if let Some(key) = &self.discovery_key {
+            return Err(FlywheelError::Corpus(format!(
+                "{}: no discovery cached by build {key} in {}",
+                entry.id,
+                self.paths.cache().display()
+            )));
+        }
         let stripped_path = self.corpus.path(&entry.stripped);
         let started = Instant::now();
         let binary = Binary::open(&stripped_path).map_err(|error| FlywheelError::io_text(&stripped_path, error))?;
@@ -481,7 +549,7 @@ impl Engine {
 }
 
 /// Discovered extents, the bundled-only names, the call sequences and the existing names of one binary.
-type Baseline = (Vec<(u64, u64)>, BTreeMap<u64, String>, BTreeMap<u64, Vec<u64>>, BTreeMap<u64, String>);
+pub(super) type Baseline = (Vec<(u64, u64)>, BTreeMap<u64, String>, BTreeMap<u64, Vec<u64>>, BTreeMap<u64, String>);
 
 #[derive(Serialize, Deserialize)]
 struct CachedTruth {
