@@ -119,6 +119,20 @@ of at least four odd code pointers (none at a string) seed MIPS16e functions, ea
 instruction as MIPS16e; straight-line MIPS code keeps its mode whatever the ranges say (unlike ARM, a mode changes
 only at a jump); every code pointer in a MIPS16e image names its mode; and `_start_c` is seeded from the entry.
 
+After review, a table must hold at least four distinct targets spread over 0x80 bytes or more (a switch's label
+table, `.word L|1`, keeps its targets inside one function), each target must lie past the program headers and
+outside the tables the dynamic section names (hash buckets and symbol indices are small odd words, which in an
+image based at 0 point into its first executable segment), and it must decode as a MIPS16e instruction. Those
+tables are not scanned either. A MIPS16e `_start_c` (an odd word) is accepted.
+
+### Remaining after review
+
+- Library fingerprints exclude MIPS16e functions in the loader's MIPS16e ranges (they have no masking of their
+  own); a MIPS16e function found only by discovery is still masked as MIPS32 words.
+- Fuzzy signatures accept the MIPS16e mode, but refuse every MIPS function for its delay slots, MIPS32 included.
+- Label tables spread over more than 0x80 bytes can still pass for function tables and split a function.
+- A function whose first bytes read as three printable characters and a NUL is not taken from a table.
+
 ## Versions and tests
 
 - `ANALYSIS_VERSION` is bumped: constructor seeds change function lists of existing fixtures.

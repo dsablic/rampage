@@ -312,19 +312,25 @@ bit 0 cleared. The OpenWrt programs carry no other symbols, so this is the only 
 | M1 | fail (90.7%) | pass | 123 of 129 starts (95.3%), 140 listed |
 | M5 | fail | pass | All 87 programs list functions; exported functions 4651 of 4651 found; no warning or note |
 
-**M5.** No call crashed, failed or timed out; the slowest program took 1.96 s and the 87 together 6.6 s.
-- **The 76 MIPS16e programs** are decoded: 13,130 functions in all (median 50 per program, at least 5), and
+These numbers are from the run after review of the track, which made table seeding stricter and dropped pointers
+to strings on all MIPS. Precision has no symbol truth here, so starts were read for two signs of a false function:
+the first eight bytes read as text (seven printable), or the start lies in the ELF or program headers.
+
+**M5.** No call crashed, failed or timed out; the slowest program took 1.68 s and the 87 together 6.2 s. Of 16,582
+starts, 34 show a sign of a false function: 27 in the MIPS16e programs and 7 in the others. Before review the count
+was 436, nearly all of them pointers to strings seeding MIPS32 functions in the programs without MIPS16e.
+- **The 76 MIPS16e programs** are decoded: 12,136 functions in all (median 49 per program, at least 5), and
   1,929 of their 1,929 exported functions are found. None gets the old "not decoded" warning or note. `busybox`
   lists 1,447 functions where it listed 4 (its MIPS32 startup code) on 2026-11-20. Two things it needed beyond
   decoding: musl's dynamic `_start` reaches `_start_c` only through a word after its `bal`, now seeded from the
   entry, and the applets are reached only through `applet_main`, a table of odd function pointers, now seeded
-  from runs of at least four such pointers. A reading of the start addresses found 3 of the 1,447 in string data
-  (pointers to the end of a string, the empty string merged into it).
-- **The 11 programs without MIPS16e:** the five shared libraries that listed nothing now list `libfstools.so` 173,
-  `libgcc_s.so.1` 218, `libmbedcrypto` 913, `libmbedtls` 338 and `libmbedx509` 233 functions, and `libc.so`
-  2,274 (was 2); every exported function is found (2,722 of 2,722). The executables gained their constructor and
-  destructor seeds: `dropbear` 611 (was 472), `usign` 91 (79), `px5g` 80 (74), `jffs2reset` 37 (31),
-  `mount_root` 28 (22).
+  from runs of at least four distinct such pointers. 3 of the 1,447 starts lie in string data (pointers to the end
+  of a string, the empty string merged into it).
+- **The 11 programs without MIPS16e:** the five shared libraries that listed nothing now list `libfstools.so` 115,
+  `libgcc_s.so.1` 218, `libmbedcrypto` 830, `libmbedtls` 332 and `libmbedx509` 175 functions, and `libc.so`
+  2,123 (was 2); every exported function is found (2,722 of 2,722). The executables now list `dropbear` 457 (was
+  472), `usign` 79 (79), `px5g` 65 (74), `jffs2reset` 29 (31) and `mount_root` 23 (22): constructor and destructor
+  seeds were added, and starts seeded by pointers to strings in the executable segment are gone.
 
 **`busybox` in depth.** `find_main` follows musl's `_start` to `_start_c` and reports 0x409638, the MIPS16e
 function `_start_c` passes to the C library's start routine, at low confidence: the routine's PLT entry is unnamed

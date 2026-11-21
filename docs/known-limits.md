@@ -49,7 +49,7 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   `binary_info` warning and a `list_functions` note saying so; there `jalx` calls into the other instruction set are
   kept as calls whose target is not followed, and symbols, exports or entries at addresses that are not 4-byte
   aligned (the ISA bit) seed no function. In MIPS16e code, `addiu rx, $pc, imm` and `lw rx, imm($pc)` are shown with
-  their encoded offsets. MIPS16e functions reached only through data are found from tables of at least four odd
+  their encoded offsets. MIPS16e functions reached only through data are found from tables of at least four distinct odd
   code pointers (busybox's applet table) and from odd pointers the code forms or loads; a lone pointer stored in
   data is not followed, and a pointer to the end of a string (an empty string merged into another) can still seed a
   short false function in read-only data (3 of about 1,450 starts in OpenWrt's `busybox`). A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
