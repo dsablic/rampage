@@ -416,6 +416,9 @@ struct Harness<'a> {
     base: String,
     run_dir: PathBuf,
     gate: Repo,
+    /// The worktree a session's change is read into, apart from the one builds run in, so reading a change never
+    /// touches a file the build target depends on.
+    capture: Repo,
     gate_dir: PathBuf,
     views: Views,
     engine: &'a Engine,
@@ -470,42 +473,69 @@ fn create_dir(path: &Path) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-/// A cargo home holding only the configuration that builds offline from `vendor`.
-fn cargo_home(home: &Path, vendor: &Path) -> Result<(), String> {
-    create_dir(home)?;
-    let config = format!(
-        "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"{}\"\n\n\
-         [net]\noffline = true\n",
-        vendor.display()
-    );
-    std::fs::write(home.join("config.toml"), config).map_err(|error| error.to_string())
+/// The operator's cargo home (`CARGO_HOME`, else `~/.cargo`), whose registry cache the private registries copy.
+fn operator_cargo_home(home: &Path) -> PathBuf {
+    std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".cargo"))
 }
 
-/// The base's dependencies vendored into `vendor` (with their Cargo.lock's hash), so every build runs offline.
-fn ensure_vendor(cargo: &Path, tree: &Path, vendor: &Path) -> Result<(), String> {
-    let lock = std::fs::read(tree.join("Cargo.lock")).map_err(|error| format!("Cargo.lock: {error}"))?;
-    let digest = rampage_arch::hex::bytes(&<sha2::Sha256 as sha2::Digest>::digest(&lock));
-    let stamp = vendor.join(".lock-sha256");
+/// The registry packages a Cargo.lock pins: (name, version).
+fn locked_packages(lock: &str) -> Vec<(String, String)> {
+    let mut packages = Vec::new();
+    for block in lock.split("[[package]]").skip(1) {
+        let field = |key: &str| {
+            block
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("{key} = \"")).and_then(|rest| rest.strip_suffix('"')))
+        };
+        if let (Some(name), Some(version), Some(source)) = (field("name"), field("version"), field("source"))
+            && source.starts_with("registry+")
+        {
+            packages.push((name.to_owned(), version.to_owned()));
+        }
+    }
+    packages
+}
+
+/// A private cargo home holding the crates.io index and exactly the `.crate` archives `tree`'s Cargo.lock pins, copied
+/// from the operator's registry, configured to build offline. Builds unpack the archives into it as registry
+/// packages, which cargo treats as immutable (vendored directory sources are not: a dependency whose build script
+/// rewrites its own sources would then rebuild every time). Nothing else of the operator's cargo home comes along.
+fn private_registry(operator: &Path, tree: &Path, home: &Path) -> Result<(), String> {
+    let lock = std::fs::read_to_string(tree.join("Cargo.lock")).map_err(|error| format!("Cargo.lock: {error}"))?;
+    let digest = rampage_arch::hex::bytes(&<sha2::Sha256 as sha2::Digest>::digest(lock.as_bytes()));
+    let stamp = home.join(".lock-sha256");
     if std::fs::read_to_string(&stamp).ok().as_deref() == Some(digest.as_str()) {
         return Ok(());
     }
-    if vendor.exists() {
-        std::fs::remove_dir_all(vendor).map_err(|error| format!("{}: {error}", vendor.display()))?;
+    let index_root = operator.join("registry/index");
+    let index = std::fs::read_dir(&index_root)
+        .map_err(|error| format!("{}: {error}", index_root.display()))?
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .find(|name| name.starts_with("index.crates.io-"))
+        .ok_or_else(|| format!("no crates.io index in {}", index_root.display()))?;
+    let own_index = home.join("registry/index").join(&index);
+    if !own_index.exists() {
+        create_dir(&home.join("registry/index"))?;
+        output(Command::new("cp").args(["-c", "-R"]).arg(index_root.join(&index)).arg(&own_index))?;
     }
-    output(
-        Command::new(cargo)
-            .current_dir(tree)
-            .env("CARGO_NET_OFFLINE", "true")
-            .args(["vendor", "--locked", "--offline"])
-            .arg(vendor),
-    )
-    .map_err(|error| format!("vendoring the base's dependencies: {error}"))?;
+    let (cache, own_cache) = (operator.join("registry/cache").join(&index), home.join("registry/cache").join(&index));
+    create_dir(&own_cache)?;
+    for (name, version) in locked_packages(&lock) {
+        let file = format!("{name}-{version}.crate");
+        if !own_cache.join(&file).is_file() {
+            std::fs::copy(cache.join(&file), own_cache.join(&file))
+                .map_err(|error| format!("{file} is not in the operator's registry cache ({error}); fetch it once"))?;
+        }
+    }
+    std::fs::write(home.join("config.toml"), "[net]\noffline = true\n").map_err(|error| error.to_string())?;
     std::fs::write(&stamp, digest).map_err(|error| error.to_string())
 }
 
 impl Harness<'_> {
-    fn vendor(&self) -> PathBuf {
-        self.gate_dir.join("vendor")
+    /// The gate's private registry, unpacked into by builds only.
+    fn cargo_home(&self) -> PathBuf {
+        self.gate_dir.join("cargo-home")
     }
 
     fn gate_tree(&self) -> PathBuf {
@@ -524,17 +554,34 @@ impl Harness<'_> {
         }
     }
 
-    /// cargo in the gate worktree with `target` as its target directory, offline, in the sandbox, its output in
-    /// `out_dir/log`.
-    fn cargo(&self, out_dir: &Path, log: &str, target: &Path, args: &[&str]) -> Result<(bool, PathBuf), String> {
-        let home = out_dir.join(format!("{log}.cargo-home"));
+    /// cargo in the gate worktree with `target` as its target directory, offline from the gate's private registry, in
+    /// the sandbox, its output in `out_dir/log`. Builds may write the registry (unpacking archives; some dependencies'
+    /// build scripts generate code into their own sources); the candidate's tests, which run the agent's code, may
+    /// write only cargo's lock files in it.
+    fn cargo(
+        &self,
+        out_dir: &Path,
+        log: &str,
+        target: &Path,
+        args: &[&str],
+        registry_writable: bool,
+    ) -> Result<(bool, PathBuf), String> {
+        let home = self.cargo_home();
         let tmp = out_dir.join(format!("{log}.tmp"));
-        cargo_home(&home, &self.vendor())?;
         create_dir(&tmp)?;
         create_dir(target)?;
         let tree = self.gate_tree();
-        let vendor = self.vendor();
-        let sandbox = self.candidate_sandbox(&[&tree, &vendor], &[target, out_dir]);
+        let sandbox = if registry_writable {
+            self.candidate_sandbox(&[&tree], &[target, out_dir, &home])
+        } else {
+            let locks: Vec<PathBuf> = [".package-cache", ".package-cache-mutate", ".global-cache"]
+                .iter()
+                .map(|name| home.join(name))
+                .collect();
+            let mut writable: Vec<&Path> = vec![target, out_dir];
+            writable.extend(locks.iter().map(PathBuf::as_path));
+            self.candidate_sandbox(&[&tree, &home], &writable)
+        };
         let mut command = sandbox.command(&out_dir.join(format!("{log}.sb")), &self.cargo)?;
         command
             .args(args)
@@ -553,7 +600,7 @@ impl Harness<'_> {
     fn build(&self, out_dir: &Path, log: &str) -> Result<Option<PathBuf>, String> {
         let target = self.gate_dir.join("target");
         let args = ["build", "--release", "--locked", "-p", "rampage-eval", "--bin", "rampage-eval"];
-        let (built, _) = self.cargo(out_dir, log, &target, &args)?;
+        let (built, _) = self.cargo(out_dir, log, &target, &args, true)?;
         if !built {
             return Ok(None);
         }
@@ -600,7 +647,7 @@ impl Harness<'_> {
             .args(["--workers", &self.views.workers.to_string()])
             .env("TMPDIR", out_dir);
         if let Discovery::Read(key) = &discovery {
-            command.args(["--discovery-key", key]).arg("--discovery-dir").arg(&shared);
+            command.args(["--discovery-key", key]).arg("--discovery-dir").arg(Paths::new(shared.clone()).cache());
         }
         let started = Instant::now();
         let ok = run_logged(&mut command, &out_dir.join(format!("names-{tag}.log")), Duration::from_secs(3 * 3600))?;
@@ -650,7 +697,7 @@ impl Harness<'_> {
             .arg(&own)
             .args(["--discovery-key", &self.base_build_id])
             .arg("--discovery-dir")
-            .arg(&shared)
+            .arg(Paths::new(shared.clone()).cache())
             .args(["--workers", &self.views.workers.to_string()])
             .env("TMPDIR", out_dir);
         if !run_logged(&mut command, &out_dir.join("generate.log"), Duration::from_secs(3600))? {
@@ -707,7 +754,7 @@ impl Harness<'_> {
             } else {
                 vec!["test", "--locked", "--no-fail-fast", "-p", crate_name]
             };
-            let (tested, log) = self.cargo(out_dir, "tests.log", &target, &args)?;
+            let (tested, log) = self.cargo(out_dir, "tests.log", &target, &args, false)?;
             let _ = std::fs::remove_dir_all(&target);
             if !tested {
                 run.stages.push(stage("tests", false, format!("{crate_name} tests failed")));
@@ -970,7 +1017,7 @@ correct for +96 false names, which fails the allowance.
 `{train}` is the training split (older library versions) and the negatives: stripped `.elf` binaries, their
 symbolized `.twin.elf`, the library objects and `manifest.json`. Measure any build on it with cases, for example
 `cargo run --release -p rampage-eval -- flywheel-eval --corpus {train} --split train`. Builds run offline from
-vendored dependencies (`CARGO_HOME` and `CARGO_TARGET_DIR` are set); there is no network.
+a private registry of the locked dependencies (`CARGO_HOME` and `CARGO_TARGET_DIR` are set); there is no network.
 
 ## The gate
 
@@ -1025,9 +1072,9 @@ fn session_settings(deny: &[PathBuf], environment: &BTreeMap<String, String>) ->
 /// The gate's worktree at `base`: the one earlier runs left, reset, when it is still recorded as a worktree of `repo`
 /// (so an unchanged file keeps its timestamp and cargo its build), else a new one. Its git directory is recorded in
 /// the gate directory, which no candidate process can write.
-fn gate_worktree(repo: &Repo, gate_dir: &Path, base: &str) -> Result<Repo, String> {
-    let tree = gate_dir.join("worktree");
-    let record = gate_dir.join("worktree-git-dir");
+fn gate_worktree(repo: &Repo, gate_dir: &Path, name: &str, base: &str) -> Result<Repo, String> {
+    let tree = gate_dir.join(name);
+    let record = gate_dir.join(format!("{name}-git-dir"));
     if let Ok(text) = std::fs::read_to_string(&record) {
         let gate = Repo { git_dir: PathBuf::from(text.trim()), work_tree: Some(tree.clone()) };
         if gate.git_dir.starts_with(repo.git_dir.join("worktrees")) && gate.git_dir.is_dir() && tree.is_dir() {
@@ -1091,7 +1138,7 @@ fn answer(spool: &Path, id: &str, value: &Value, passed: bool) -> Result<(), Str
 /// Reads the session tree's change into the gate's worktree, under the gate lock.
 fn read_change(harness: &Harness<'_>, session: &Path, reference: &Path) -> Result<Diff, String> {
     let _busy = harness.busy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    capture(session, reference, &harness.gate, &harness.base, harness.family.allowlist)
+    capture(session, reference, &harness.capture, &harness.base, harness.family.allowlist)
 }
 
 /// Answers the session's gate requests until `stop` is set; requests still pending then are answered as refused.
@@ -1595,8 +1642,13 @@ fn code_run(
     let load = engine.load_all(&indices).map_err(|error| error.to_string())?;
     eprintln!("scorer: {} binaries loaded ({} analysed, {} ms)", load.binaries, load.analysed, load.elapsed_ms);
 
-    let gate = gate_worktree(&setup.repo, &setup.gate_dir, &setup.base)?;
-    ensure_vendor(&setup.cargo, gate.work_tree.as_deref().unwrap_or(Path::new(".")), &setup.gate_dir.join("vendor"))?;
+    let gate = gate_worktree(&setup.repo, &setup.gate_dir, "worktree", &setup.base)?;
+    let capture_tree = gate_worktree(&setup.repo, &setup.gate_dir, "capture", &setup.base)?;
+    private_registry(
+        &operator_cargo_home(&setup.home),
+        gate.work_tree.as_deref().unwrap_or(Path::new(".")),
+        &setup.gate_dir.join("cargo-home"),
+    )?;
     let views = Views::new(run_dir.join("views"), args.workers);
     for split in GATED {
         views.make(&engine.corpus, split)?;
@@ -1606,6 +1658,7 @@ fn code_run(
         base: setup.base.clone(),
         run_dir: run_dir.to_path_buf(),
         gate,
+        capture: capture_tree,
         gate_dir: setup.gate_dir.clone(),
         views,
         engine,
@@ -1641,7 +1694,7 @@ fn code_run(
     };
 
     // The session's workspace: an export of the base (no tie to the repository), the harness's reference copy of it,
-    // vendored dependencies, a private cargo home and temp directory, the training view, the gate spool and client.
+    // a private registry and temp directory, the training view, the gate spool and client.
     let worktree = session_root.join("worktree");
     let reference = run_dir.join("reference");
     export_tree(&setup.repo, &setup.base, &worktree, SESSION_EXCLUDED)?;
@@ -1661,10 +1714,8 @@ fn code_run(
             .args(["-c", "user.name=rampage flywheel", "-c", "user.email=flywheel@localhost", "commit", "-q", "-m"])
             .arg(format!("base {}", setup.base)),
     )?;
-    let vendor = session_root.join("vendor");
-    ensure_vendor(&setup.cargo, &reference, &vendor)?;
     let home = session_root.join("cargo-home");
-    cargo_home(&home, &vendor)?;
+    private_registry(&operator_cargo_home(&setup.home), &reference, &home)?;
     let tmp = session_root.join("tmp");
     create_dir(&tmp)?;
     let train_view = session_root.join("flywheel/corpus").join(format!("{}-train", engine.corpus.version()));
@@ -1899,11 +1950,12 @@ pub fn final_read(args: CodeFinalArgs) -> Result<ExitCode, String> {
     let on_interrupt = cleanup.clone();
     interrupt::set_cleanup(Box::new(move || on_interrupt.run()));
     let result = (|| -> Result<ExitCode, String> {
-        let gate = gate_worktree(&setup.repo, &setup.gate_dir, &base)?;
-        ensure_vendor(
-            &setup.cargo,
+        let gate = gate_worktree(&setup.repo, &setup.gate_dir, "worktree", &base)?;
+        let capture = gate_worktree(&setup.repo, &setup.gate_dir, "capture", &base)?;
+        private_registry(
+            &operator_cargo_home(&setup.home),
             gate.work_tree.as_deref().unwrap_or(Path::new(".")),
-            &setup.gate_dir.join("vendor"),
+            &setup.gate_dir.join("cargo-home"),
         )?;
         let views = Views::new(out.join("views"), args.workers);
         views.make(&engine.corpus, Split::Train)?;
@@ -1911,6 +1963,7 @@ pub fn final_read(args: CodeFinalArgs) -> Result<ExitCode, String> {
             base: base.clone(),
             run_dir: run_dir.clone(),
             gate,
+            capture,
             gate_dir: setup.gate_dir.clone(),
             views,
             engine,
@@ -2183,6 +2236,32 @@ mod tests {
             assert!(check_budget(budget).is_err(), "{budget}");
         }
         assert!(family("libid").is_ok() && family("toolid").is_err());
+    }
+
+    /// The private registry holds the index and exactly the locked archives, and builds offline.
+    #[test]
+    fn a_private_registry_copies_only_the_locked_archives() {
+        let root = canonical(&std::env::temp_dir()).join(format!("rampage-code-registry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (operator, tree, home) = (root.join("operator"), root.join("tree"), root.join("home"));
+        let index = "index.crates.io-0000";
+        std::fs::create_dir_all(operator.join("registry/index").join(index).join(".cache")).unwrap();
+        std::fs::create_dir_all(operator.join("registry/cache").join(index)).unwrap();
+        for file in ["serde-1.0.0.crate", "zstd-sys-2.0.0.crate"] {
+            std::fs::write(operator.join("registry/cache").join(index).join(file), file).unwrap();
+        }
+        std::fs::create_dir_all(&tree).unwrap();
+        let lock = "version = 4\n\n[[package]]\nname = \"rampage\"\nversion = \"1.0.0\"\n\n[[package]]\nname = \"serde\"\n\
+                    version = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        std::fs::write(tree.join("Cargo.lock"), lock).unwrap();
+        assert_eq!(locked_packages(lock), [("serde".to_owned(), "1.0.0".to_owned())]);
+        private_registry(&operator, &tree, &home).unwrap();
+        let cache = home.join("registry/cache").join(index);
+        assert!(cache.join("serde-1.0.0.crate").is_file());
+        assert!(!cache.join("zstd-sys-2.0.0.crate").exists(), "an unlocked crate was copied");
+        assert!(home.join("registry/index").join(index).is_dir());
+        assert!(std::fs::read_to_string(home.join("config.toml")).unwrap().contains("offline = true"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// Views other than training hide which split they are: neutral ids, no version, the same role, random names.

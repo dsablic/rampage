@@ -41,7 +41,7 @@ Everything the loop writes lives under `target/flywheel/`:
 | `runs/<label>/` | Run reports (`report.json`, `report.md`), and each round's transcript, prompt and server events |
 | `bundle/<label>/` | A bundle's `summary.md`, `summary.json` and `change.patch` |
 | `code-runs/<label>/` | A code run ([the code loop](#the-code-loop)): `report.md`, `run.json`, `candidate.diff`, the session transcript, every gate's results, and the final read's plan or, after `flywheel-code-final`, its ledger entry |
-| `code-runs/gate/` | The code loop's gate worktree, build target and vendored dependencies, kept across runs so builds stay incremental |
+| `code-runs/gate/` | The code loop's gate worktrees, build target and private registry, kept across runs so builds stay incremental |
 
 Nothing under `target/` is committed. The repository holds the recipe (`tools/flywheel/corpus.json`), the driver
 programs (`tools/flywheel/drivers/`), the build script and a reference build's digests
@@ -434,8 +434,8 @@ passed the allowlist and the literal cap. Like the bundled databases, it is in-s
 - **Its tree,** and Bash, Read, Edit, Write, Glob and Grep. No other tool and no MCP server.
 - **No network.** The session's sandbox reaches only a loopback proxy run by the harness, which tunnels to the
   model's API host (`api.anthropic.com:443`; `--allow-host` adds others) and refuses and logs everything else. Bash
-  inherits the same sandbox. Builds run offline from dependencies the harness vendors into the session's root, with a
-  private `CARGO_HOME`.
+  inherits the same sandbox. Builds run offline from a private `CARGO_HOME` in the session's root, holding the
+  crates.io index and exactly the archives the base's `Cargo.lock` pins, copied from the operator's registry.
 - **No corpus recipe.** `tools/flywheel/` (recipe, build script, drivers, reference digests) is left out of the
   tree, so the final split's library versions cannot be rebuilt from it.
 - **The training split and the negatives,** with their truth, as a corpus view:
@@ -458,8 +458,8 @@ Every process the agent's code runs in is under a `sandbox-exec` profile:
 | Process | Cannot read | Cannot write | Network |
 |---|---|---|---|
 | The session (`claude`, its Bash, or the script) | the corpus, the flywheel directory, both repository checkouts (target directories, other worktrees, the git object store), `~/.claude` except Claude Code's own state files, `/tmp/claude-<uid>`, `--deny-read` paths | the home directory, except Claude Code's own state files and the session root | the proxy only |
-| The candidate's build | the same | everything but the gate's build target, its log directory and a private cargo home and temp directory | none |
-| The candidate's tests | the same | everything but a fresh test target of their own and their log directory | none |
+| The candidate's build | the same | everything but the gate's build target, the gate's private registry, its log directory and a temp directory | none |
+| The candidate's tests | the same | everything but a fresh test target of their own, their log directory and cargo's lock files | none |
 | Generation and naming with the candidate | the same, but a view of one split's stripped binaries (training: with its truth) and the base's discovery, read only | everything but their own cache and output | none |
 
 - **Writes:** no agent-influenced process can write the operator's home (shell, git and cargo configuration),
@@ -499,7 +499,8 @@ The same gate answers the session and, after it, decides. The change goes into t
 
 1. **Policy:** the allowlist, special files, the size caps and the added-line check.
 2. **Build:** `cargo build --release -p rampage-eval` in `code-runs/gate/` (kept across runs, one run at a time),
-   offline from vendored dependencies.
+   offline from the gate's private registry. A session's change is read into a second worktree there, so reading it
+   never touches a file the build depends on.
 3. **Generate:** the candidate's heuristics generator on the training split; when its output differs from the
    compiled-in data, a second build with it.
 4. **Tests:** the family crate's tests (`rampage-signatures`), in a fresh target directory.
@@ -552,7 +553,7 @@ fuzzy matching at 0.95/0.05 over the base on dev and the negatives, the best mat
 | `ledger-entry.json`, `final.json`, `final/` | After `flywheel-code-final`: the ledger entry, the metrics and the logs |
 
 The session root, the views, the reference export and the binaries are removed at the end (`--keep-workspace` keeps
-them). The gate's worktree, build target and vendored dependencies stay for the next run.
+them). The gate's worktrees, build target and private registry stay for the next run.
 
 ### Checked without an agent (2026-11-21)
 

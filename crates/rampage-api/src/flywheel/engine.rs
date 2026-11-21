@@ -518,9 +518,9 @@ impl Engine {
         let entry = self.binary(index);
         if let Some(key) = &self.discovery_key {
             return Err(FlywheelError::Corpus(format!(
-                "{}: no discovery cached by build {key} in {}",
+                "{}: no discovery cached by build {key} at {}",
                 entry.id,
-                self.paths.cache().display()
+                path.display()
             )));
         }
         let stripped_path = self.corpus.path(&entry.stripped);
