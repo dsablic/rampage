@@ -340,6 +340,9 @@ async fn get_type_reads_go_runtime_types_on_a_stripped_go_binary() {
     assert!(failed && text.contains("no Go runtime type named") && text.contains("main.Record"), "{text}");
     assert!(text.contains("project type library has no type") && text.contains("Next: list_types"), "{text}");
     assert!(!text.contains("Unknown named type"), "{text}");
+    // A full import path is no C name: the library lookup does not stop the search before the Go metadata.
+    let (text, failed) = call_text(&client, &fixture, "get_type", json!({"name": "example.com/app/main.Recor"})).await;
+    assert!(failed && text.contains("no Go runtime type named") && !text.contains("Unknown named type"), "{text}");
     invoke(&client, &fixture, "get_type", json!({"name": "main.Record", "source": "dwarf"}), false).await;
     invoke(&client, &fixture, "get_type", json!({"name": "main.Record", "source": "library"}), false).await;
 
