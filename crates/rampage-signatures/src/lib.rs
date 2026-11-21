@@ -1056,6 +1056,9 @@ fn fingerprint_with(
             _ => thumb_fingerprint(bytes, big_endian, image.is_some()),
         },
         Arch::Arm => fixed_word_fingerprint(bytes, address, big_endian, mask_arm_a32, no_branch),
+        // MIPS16e has no masking of its own yet: its halfword encodings would be masked as MIPS32 words, so its
+        // functions get no fingerprint rather than a wrong one.
+        Arch::Mips if target.mips16 && target.is_thumb(address) => return None,
         Arch::Mips | Arch::Mips64 => {
             fixed_word_fingerprint(bytes, address, big_endian, |word| mask_mips(word, image.is_some()), no_branch)
         }

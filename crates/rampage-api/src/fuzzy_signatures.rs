@@ -463,7 +463,7 @@ pub fn fuzzy_code_identity(binary: &Binary, program: &Program) -> Result<String,
             .checked_add(section.size)
             .ok_or_else(|| ApiError::Invalid("code section address overflow".into()))?;
         let mut modes = BTreeMap::new();
-        if target.arch == rampage_arch::Arch::Arm {
+        if target.arch == rampage_arch::Arch::Arm || target.mips16 {
             modes.insert(0, target.is_thumb(section.address));
             for range in target.thumb.iter() {
                 for (at, thumb) in [(range.start, true), (range.end, false)] {

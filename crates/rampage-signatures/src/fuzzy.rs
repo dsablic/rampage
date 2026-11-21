@@ -134,7 +134,8 @@ impl FuzzyFeatures {
 
     fn validate(&self) -> Result<(), FuzzyError> {
         if self.profile.architecture.parse::<rampage_arch::Arch>().is_err()
-            || (self.profile.thumb && self.profile.architecture != "arm")
+            // `thumb` is the alternate instruction set: Thumb on 32-bit ARM, MIPS16e on 32-bit MIPS.
+            || (self.profile.thumb && !matches!(self.profile.architecture.as_str(), "arm" | "mips"))
             || self.instructions < MIN_INSTRUCTIONS
             || self.instructions > MAX_INSTRUCTIONS
             || self.blocks < MIN_BLOCKS
@@ -1086,6 +1087,12 @@ mod tests {
         let db = FuzzyDb::new(vec![reference("arm", arm.clone())]).unwrap();
         arm.profile.thumb = true;
         assert!(db.candidates(&arm, "heldout", 1).unwrap().candidates.is_empty());
+        // Review: the flag is the alternate instruction set, so a MIPS16e descriptor is valid; elsewhere it is not.
+        let mut mips16 = arm.clone();
+        mips16.profile.architecture = "mips".to_owned();
+        assert!(FuzzyDb::new(vec![reference("mips16", mips16.clone())]).is_ok());
+        mips16.profile.architecture = "x86_64".to_owned();
+        assert!(FuzzyDb::new(vec![reference("x86", mips16)]).is_err());
     }
 
     #[test]
