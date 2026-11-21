@@ -118,15 +118,47 @@ This is the loop that ships, and it closes the signature-recall gap against IDA'
   false positives), a generator rule for rows matching another library's body, and a third untouched split before
   any claim beyond this corpus.
 
-### 6. Tool the usage loop (small)
+### 6. Tool the usage loop (medium; revised 2026-11-21)
 
-`rampage-eval mine-transcripts`, as designed in the fast-loop plan and never built: cluster tool errors, retries
-and wasted calls from benchmark and agent-run transcripts into a bounded report. Proposals are code and keep human
-review; the check is a rerun of the affected tasks on Haiku. This formalises what the firmware runs did by hand.
+Revised after reading kuna's RE-friction loop (`docs/re-pipeline.md` in Noelo-Lab/kuna, Apache-2.0). The idea
+taken from it: an agent's complaint never reaches a builder as prose, only as two executable predicates. Their
+decompiler campaign found reviewers overturning the filed diagnosis in 3 of 8 cases while the symptom stood in
+all 8; our own `get_type` fix (2026-11-21) first fixed the wrong cause for the same reason.
+
+1. **Probes (no spend).** A probe file names the binary by sha256, a list of MCP calls and assertions on their
+   results. An observation carries two: a *probe* asserting the current bad behaviour and an *acceptance*
+   asserting the desired one. `rampage-eval probe` runs them against a freshly built server and returns
+   `admitted` (probe passes, acceptance fails), `not-reproducible`, `already-supported` (the tool can already do
+   it: a discoverability finding, not missing work), `flaky` (repeats disagree) or `unrunnable` (malformed, or
+   the binary's digest does not match: it refuses rather than answer for the wrong file). Acceptances of closed
+   needs run as one integration test, so each fix leaves a regression guard. Proof that the format works:
+   re-encode about ten recent hand-found gaps (`get_type` under the worker, Raw selector defaults, section-less
+   ELF exports, the M0 `qsort` miss) and check the gate classifies them correctly before and after their fixes.
+2. **Tester rounds (about $2–5 each).** Three open-ended tasks per round on the acceptance set's public inputs
+   and the suite v4 fixtures, Haiku through `claude-runner.py` with the benchmark's isolation. The tester's final
+   structured answer lists observations with both predicates, and `gave_up` with a reason when rampage blocked it
+   (the loudest signal). No new MCP tool: the tools/list catalog does not grow. Clustering is deterministic (tool,
+   error shape, acceptance shape); text similarity only breaks ties. Admitted needs go to todo.md; friction with
+   no predicate goes to a rejected list that is still counted. Standing brief for testers: when rampage "should
+   have known", ask whether it should have let the agent say so (a function boundary, a data type, a prototype,
+   a persistent name) through the annotation log.
+3. **Builders** reuse step 3's harness: a need is the family, its allowed paths follow its track (tool surface,
+   analysis, decompiler output), and it is done when the acceptance flips on a fresh build. Branches are reviewed
+   before merge; nothing self-merges.
+4. **Closing.** Acceptances of closed needs are rerun on main; one that flips back is `regressed` and ranks first.
+   The next round's testers are handed the newly closed needs and asked to break them.
+
+Measured by admitted needs per dollar, the share of observations admitted, needs closed, and regressions.
+`mine-transcripts` (cluster tool errors, retries and wasted calls from benchmark transcripts) stays as a passive
+input to the same gate.
+
+Not taken from kuna: self-merging builders with full access, its scale (seven agents, $150 per round), the
+captain state machine, and the crackme corpus (mostly Windows and obfuscated; 22 of 250 machine-checkable).
 
 ## Order
 
-1, then 2, then 3 if step 2 finds headroom. Step 5's firmware slice comes next whatever step 3 shows, then step 6.
+1, then 2, then 3 if step 2 finds headroom. Step 5's firmware slice comes next whatever step 3 shows, then step 6 (its part 1 needs no spend and may start
+once step 3's harness has landed, since part 3 reuses it).
 Step 4 waits for its conditions. One track at a time, each reviewed before merge.
 
 ## Decisions (2026-11-20)
