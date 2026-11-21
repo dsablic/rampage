@@ -173,6 +173,11 @@ Cortex-M0 at -O1, scored against their library truth (`tests/fixtures/data/eval-
   FreeRTOS configuration) generated differently, not missing libraries.
 - **The call graph, never run on firmware, is the first deterministic step:** it lifts recall from 51.3% to
   61.4% (M4F) and from 31.3% to 45.8% (M0) with no wrong name. That is the firmware slice of the plan's step 5.
+  *Shipped after this measurement:* the embedded call graph (`data/embedded-callgraph.json.gz`, built from the same
+  training references) now runs in `identify_functions` on firmware, and the product reaches exactly these figures
+  (97 of 158 and 104 of 227, 0 wrong or spurious); see the
+  [embedded firmware set](../signature-corpus.md#embedded-firmware-set). Run on that build, this example's
+  baseline already includes those names.
 - **Fuzzy matching cannot run on this firmware:** of about 120,000 reference functions none gets a descriptor
   (block bound 51,912; too few fixed constants or known calls 60,450; descriptor bounds 7,203; entry block 882).
 - A quarter to a third of what is left (28 to 41 of 124) has the same length as a reference and differs only in

@@ -107,7 +107,19 @@ target/debug/examples/embedded_signatures --output WORK/db.json --gzip WORK/db.j
 python3 -I tools/embedded-signatures/build.py profiles > WORK/profiles.json
 target/debug/examples/signature_bundle_index --database WORK/db.json.gz --profiles WORK/profiles.json \
   --asset embedded-thumb.json.gz --output crates/rampage-signatures/data/embedded-thumb.index.json
+cargo build --release -p rampage-eval --example embedded_call_graph
+target/release/examples/embedded_call_graph \
+  --output crates/rampage-signatures/data/embedded-callgraph.json.gz WORK/refs/*.elf
 ```
+
+**Embedded call graph.** `data/embedded-callgraph.json.gz` (69 KB gzip; 4,732 caller names, 8,002 distinct call
+sequences) holds the same training references' call sequences: each reference function's direct calls and tail
+jumps in call-site order, as the callees' symbol names. Firmware that gets the embedded set propagates names with
+it after the signatures, under the bundled call graph's rule (source `rampage-builtin call graph`): a named
+library caller whose sequence fits training names its unnamed callees, two-sided and anchored (see the
+[call graph](#recognition-policy) below). Other targets keep the host-library call graph. The build is
+deterministic; its `source` records the references' count and a digest of their names and contents. The held-out
+14.3 builds are never inputs.
 
 **Held-out measurement.** Arm GNU Toolchain 14.3.rel1 (GCC 14.3.1, newlib 4.5.0 as that release built it) is not
 used for training. `build.py fixture` builds two owned FreeRTOS applications with it
@@ -117,21 +129,23 @@ use a FreeRTOS configuration unlike the two training ones. The committed strippe
 scored against the library functions of the symbolized builds (`--library` the 14.3 references, `--program` the
 fixture's own objects), so any name on the fixture's own code counts as spurious:
 
-| Fixture | Library functions | Correct | Wrong or spurious | Precision | Recall |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `embedded-libs-m4f` (ELF) | 158 | 81 | 0 | 100% | 51.3% |
-| `embedded-libs-m4f` (Raw, vector table) | 158 | 81 | 0 | 100% | 51.3% |
-| `embedded-libs-m0` (ELF) | 227 | 71 | 0 | 100% | 31.3% |
-| `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 0 | 100% | 31.3% |
+| Fixture | Library functions | Signatures | With the call graph | Wrong or spurious | Precision | Recall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `embedded-libs-m4f` (ELF) | 158 | 81 | 97 | 0 | 100% | 61.4% (was 51.3%) |
+| `embedded-libs-m4f` (Raw, vector table) | 158 | 81 | 97 | 0 | 100% | 61.4% (was 51.3%) |
+| `embedded-libs-m0` (ELF) | 227 | 71 | 104 | 0 | 100% | 45.8% (was 31.3%) |
+| `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 104 | 0 | 100% | 45.8% (was 31.3%) |
 
-The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate the ELF
-rows; the MCP Raw-project tests (`crates/rampage-mcp/tests/raw_project.rs`) gate the Raw rows, requiring exactly
-those counts with every name matching the truth. The fixtures also join the toolid truth as `arm-none-eabi-gcc`
+The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate the
+signature database alone on the ELF rows; `crates/rampage-api/tests/bundled_signatures.rs` gates identification
+as the product runs it (signatures, then the call graph) on the ELFs, and the MCP Raw-project tests
+(`crates/rampage-mcp/tests/raw_project.rs`) on the Raw rows, each requiring exactly those counts with every name
+matching the truth. The fixtures also join the toolid truth as `arm-none-eabi-gcc`
 builds. Misses are mostly code a different GCC generated differently (newlib's C, FreeRTOS), kernel functions whose layout depends on the
 FreeRTOS configuration, bodies below the gate, functions discovery does not reach (unused weak
 callbacks) and collisions without named callees (`_close_r` and friends call libnosys stubs
 that are all alike). With the newest toolchain held out instead (training 12.3, 13.3 and 14.3, firmware built
-with 15.2) recall is 36.7% (M4F) and 15.0% (M0), still with no wrong or spurious name. compiler-rt built by clang
+with 15.2) the signatures alone recall 36.7% (M4F) and 15.0% (M0), still with no wrong or spurious name. compiler-rt built by clang
 23.1.5 (held out) is recognised at 100% precision and 65–68% recall per core. The same toolchain's own build is
 recognised far better: newlib and libgcc archive code is byte-identical within a toolchain release.
 
@@ -174,7 +188,9 @@ same way.
 The bundled call graph (`data/callgraph.json.gz`) is separate from the signature databases. It holds training call
 sequences from the flywheel corpus (callee names in call-site order, per architecture and caller) and names the
 callees of functions the databases named. It is generated and gated by `rampage-eval bundle --call-graph`
-([flywheel](flywheel.md#bundle-a-promotion)).
+([flywheel](flywheel.md#bundle-a-promotion)). Firmware that gets the embedded set uses the
+[embedded call graph](#embedded-firmware-set) (`data/embedded-callgraph.json.gz`) instead, built by
+`examples/embedded_call_graph.rs` from the embedded set's training references.
 
 Strict canonical-name behavior is the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
 `elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;
