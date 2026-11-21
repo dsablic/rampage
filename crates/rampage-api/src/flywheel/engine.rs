@@ -141,6 +141,22 @@ pub struct Bundled {
     pub call_graph: Option<rampage_signatures::CallGraph>,
 }
 
+/// The call graph identification propagates with on `binary`, as production chooses it
+/// (`rampage_signatures::bundled_call_graph_for`): the embedded firmware graph where the embedded set applies, else
+/// the host-library graph, which a `candidate` bundle replaces (as it replaces the corpus, not the embedded layer).
+fn identification_call_graph<'a>(
+    binary: &rampage_loaders::Binary,
+    candidate: Option<&'a Bundled>,
+) -> Option<&'a rampage_signatures::CallGraph> {
+    match candidate {
+        Some(_) if rampage_signatures::bundled_embedded_for(binary).is_some() => {
+            rampage_signatures::bundled_embedded_call_graph()
+        }
+        Some(candidate) => candidate.call_graph.as_ref(),
+        None => rampage_signatures::bundled_call_graph_for(binary),
+    }
+}
+
 /// The names one evaluation gave each binary.
 #[derive(Debug, Clone)]
 pub struct Proposals {
@@ -295,16 +311,11 @@ impl Engine {
             .iter()
             .flat_map(|layer| layer.databases.iter().filter(move |database| database.arch() == arch))
             .collect();
-        let graph = match bundled {
-            Some(bundled) => {
-                databases.extend(bundled.databases.iter().find(|database| database.arch() == arch));
-                bundled.call_graph.as_ref()
-            }
-            None => {
-                databases.extend(rampage_signatures::bundled_ref(arch));
-                rampage_signatures::bundled_call_graph()
-            }
-        };
+        match bundled {
+            Some(bundled) => databases.extend(bundled.databases.iter().find(|database| database.arch() == arch)),
+            None => databases.extend(rampage_signatures::bundled_ref(arch)),
+        }
+        let graph = identification_call_graph(&loaded.binary, bundled);
         // Layered as production identification layers it: the embedded firmware set after the corpus, for
         // firmware-like targets only (a candidate bundle replaces the corpus, not the embedded set).
         databases.extend(rampage_signatures::bundled_embedded_for(&loaded.binary));
@@ -929,5 +940,33 @@ impl Engine {
             }
         }
         Ok(reach)
+    }
+}
+
+#[cfg(test)]
+mod call_graph_selection_tests {
+    use super::*;
+
+    fn fixture(path: &str) -> rampage_loaders::Binary {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        rampage_loaders::Binary::open(root.join(path)).unwrap()
+    }
+
+    /// A candidate bundle's call graph replaces the host graph only: firmware keeps the embedded graph, with or
+    /// without a candidate, as production identification does.
+    #[test]
+    fn a_candidate_call_graph_replaces_the_host_graph_not_the_embedded_one() {
+        let address = |graph: Option<&rampage_signatures::CallGraph>| graph.map(std::ptr::from_ref);
+        let graph = rampage_signatures::CallGraph::new("test", "MIT");
+        let candidate = Bundled { databases: Vec::new(), call_graph: Some(graph) };
+        let embedded = address(rampage_signatures::bundled_embedded_call_graph());
+        assert!(embedded.is_some());
+        let firmware = fixture("firmware/embedded-libs-m0.elf");
+        assert_eq!(address(identification_call_graph(&firmware, None)), embedded);
+        assert_eq!(address(identification_call_graph(&firmware, Some(&candidate))), embedded);
+        let host = fixture("bin/musl-static-x86_64.elf");
+        let bundled = address(rampage_signatures::bundled_call_graph());
+        assert_eq!(address(identification_call_graph(&host, None)), bundled);
+        assert_eq!(address(identification_call_graph(&host, Some(&candidate))), address(candidate.call_graph.as_ref()));
     }
 }
