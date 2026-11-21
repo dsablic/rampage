@@ -1105,7 +1105,10 @@ fn report_markdown(run: &Value, gate: Option<&GateRun>, diff: &Diff) -> String {
                 ));
             }
             if !gate.failing_slices.is_empty() {
-                text.push_str(&format!("\nSlices losing F1: {}.\n", gate.failing_slices.join(", ")));
+                let shown: Vec<&str> = gate.failing_slices.iter().take(20).map(String::as_str).collect();
+                let more = gate.failing_slices.len().saturating_sub(shown.len());
+                let rest = if more > 0 { format!(" and {more} more (`gate/gate.json`)") } else { String::new() };
+                text.push_str(&format!("\nSlices losing F1: {}{rest}.\n", shown.join(", ")));
             }
             if !gate.evaluations.is_empty() {
                 text.push_str(
@@ -1206,7 +1209,7 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
         canonical(&home.join(".claude/projects")),
     ];
     if !uid.is_empty() {
-        deny.push(canonical(Path::new(&format!("/private/tmp/claude-{uid}"))));
+        deny.push(canonical(&Path::new("/tmp").join(format!("claude-{uid}"))));
     }
     deny.extend(args.deny_read.iter().map(|path| canonical(path)));
     deny.sort();

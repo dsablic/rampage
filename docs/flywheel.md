@@ -424,7 +424,7 @@ lexical, so a comment naming one of these fails too.
 - the corpus directory and the flywheel directory, which hold the binaries, twins, caches, gate results and the
   ledger;
 - the repositories' `target/` directories;
-- `~/.claude/projects` and `/private/tmp/claude-<uid>`, where other sessions' transcripts and scratch files live;
+- `~/.claude/projects` and `/tmp/claude-<uid>`, where other sessions' transcripts and scratch files live;
 - every `--deny-read` path.
 
 It also denies writing the repository's checkouts, except git objects and the session worktree's own git directory.
@@ -491,6 +491,27 @@ whose gate fails never reads the final split.
 
 The worktrees, the session directory, the views and the binaries are removed at the end (`--keep-workspace` keeps
 them). The gate's worktree and target directory stay for the next run.
+
+### Checked without an agent (2026-11-21)
+
+Scripted sessions on corpus `libid-00da6363626a` stood in for the agent, all with `--session-script` (so no final
+read was possible). The ledger kept its two reads.
+
+| Script | Authoritative gate | Dev delta (TP / FP / F1) |
+|---|---|---|
+| (a) no change, one `flywheel-gate` call | fails at dev: base against itself, no final read | +0 / +0 / +0 |
+| (b) an allowed change plus one to `rampage-api/src/flywheel/evaluation.rs` | fails at policy, before any build; the session's gate call was refused the same way | - |
+| (c) every body of at most 8 bytes named `memcpy` in programs of over 200 functions (the crate's tests still pass) | fails train (+5130 FP), negatives (+670 names), dev and 126 slices | -1132 / +8769 / -0.0448 |
+| (d) upward call-graph propagation: an unnamed function whose calls are all named, matching exactly one training caller's sequence, takes that name | fails train (+4 FP) and the dev allowance (+96 FP against 28 allowed), though dev F1 rises more than fuzzy's | +2852 / +96 / +0.0191 |
+| (d) again with a deliberately loose gate file (`tp_per_fp = 29`, `max_train_fp_increase = 4`), to exercise a pass | passes; `final-dry-run.json` names read #3 of the ledger, 288 final binaries, and the reason; nothing was read | +2852 / +96 / +0.0191 |
+
+The base for comparison is the bundled databases as shipped: dev 68,528 correct, 922 false, 37,840 missed (F1
+0.7795). Fuzzy at 0.95/0.05 adds +2596 / +17 there. Timings on a 10-core machine with 6 workers:
+
+- the first base build in the gate directory: about 10 minutes, then incremental;
+- the scorer's load: 45 to 60 s per harness build, then cached;
+- base names: 1 to 3 minutes; the fuzzy reference: once per base;
+- a gate on a matcher change (build, tests, names, scoring): 6 to 10 minutes.
 
 ## Use and revert a promotion
 
