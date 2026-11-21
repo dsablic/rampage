@@ -2,6 +2,7 @@ pub mod arm_attributes;
 pub mod carve;
 pub mod container;
 mod details;
+mod dynsym;
 mod entropy;
 pub mod esp;
 pub mod labels;

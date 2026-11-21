@@ -914,11 +914,33 @@ impl Binary {
                 })
             })
             .collect();
+        // Without a `.dynsym` section (OpenWrt's `sstrip` removes every section header), the dynamic linker's own
+        // route through PT_DYNAMIC still reaches the dynamic symbols.
+        let sectionless = format == Format::Elf && parsed.dynamic_symbol_table().is_none();
+        let mut dynamic = (format == Format::Elf).then(|| crate::dynsym::read(image_bytes, sectionless)).flatten();
+        let dynamic_warnings =
+            dynamic.as_mut().map(|dynamic| std::mem::take(&mut dynamic.warnings)).unwrap_or_default();
+        let dynamic_symbols = dynamic.as_ref().map_or(&[][..], |dynamic| dynamic.symbols.as_slice());
+        symbols.extend(dynamic_symbols.iter().filter(|symbol| symbol.is_definition() && !symbol.name.is_empty()).map(
+            |symbol| {
+                let code = symbol.is_function();
+                Symbol {
+                    name: symbol.name.clone(),
+                    address: if code { code_address(symbol.value) } else { symbol.value },
+                    size: symbol.size,
+                    kind: match symbol.kind {
+                        _ if code => SymbolKind::Function,
+                        crate::dynsym::STT_OBJECT => SymbolKind::Data,
+                        _ => SymbolKind::Other,
+                    },
+                }
+            },
+        ));
         symbols.sort_by(|a, b| (a.address, &a.name).cmp(&(b.address, &b.name)));
         symbols.dedup();
 
-        let mut warnings = Vec::new();
-        let imports = parsed
+        let mut warnings = dynamic_warnings;
+        let mut imports = parsed
             .imports()
             .and_then(|imports| {
                 imports
@@ -937,7 +959,7 @@ impl Binary {
                 Vec::new()
             });
 
-        let exports = parsed
+        let mut exports = parsed
             .exports()
             .and_then(|exports| {
                 let mut found = Vec::new();
@@ -957,6 +979,22 @@ impl Binary {
                 Vec::new()
             });
 
+        if sectionless && let Some(dynamic) = &dynamic {
+            let executable = |address| segments.iter().any(|s: &Segment| s.perms.execute && s.contains(address));
+            imports.extend(
+                dynamic
+                    .symbols
+                    .iter()
+                    .filter(|symbol| symbol.is_undefined() && !symbol.name.is_empty())
+                    .map(|symbol| Import { library: None, name: symbol.name.clone() }),
+            );
+            exports.extend(dynamic.symbols.iter().filter(|symbol| !symbol.name.is_empty()).filter_map(|symbol| {
+                let address = symbol.exported_address()?;
+                let address = if executable(code_address(address)) { code_address(address) } else { address };
+                Some(Export { name: symbol.name.clone(), address })
+            }));
+        }
+
         // A zero entry (relative to the image base, which PE adds) is how every format spells "none".
         let raw_entry = match macho_main_entry_offset(&parsed) {
             Some(0) => None,
@@ -966,8 +1004,12 @@ impl Binary {
         let text_address = segments.iter().find(|segment| segment.name == "__TEXT").map(|segment| segment.address);
         let macho_starts =
             text_address.map(|text_address| starts::macho(&parsed, image_bytes, text_address)).unwrap_or_default();
+        // Dynamic symbols read through PT_DYNAMIC mark Thumb functions with the low bit, as `.dynsym` ones do.
+        let dynamic_functions = dynamic_symbols.iter().filter(|symbol| symbol.is_function() && symbol.is_definition());
+        let marked_starts: Vec<u64> =
+            macho_starts.iter().copied().chain(dynamic_functions.map(|symbol| symbol.value)).collect();
         let thumb = match arch {
-            Arch::Arm => thumb_ranges(&parsed, raw_entry, &segments, &sections, &macho_starts),
+            Arch::Arm => thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts),
             _ => Vec::new(),
         };
         let entry = raw_entry.map(code_address);
@@ -987,12 +1029,20 @@ impl Binary {
         });
         let tls_directory = starts::pe_tls_directory(&parsed);
         let arm_exidx_tables = starts::arm_exidx_tables(&parsed, &mut warnings);
-        let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
+        let mips_got = crate::slots::mips_got(&parsed, dynamic.as_ref().map(|dynamic| dynamic.symbols.len()));
+        if let Some(dynamic) = &mut dynamic {
+            dynamic.mips_got = mips_got;
+        }
+        let import_slots = crate::slots::collect(&parsed, image_bytes, dynamic.as_ref(), &mut warnings);
         let rebases = crate::slots::chained_rebases(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
         let elf_m_profile = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut warnings);
-        let mips_got = crate::slots::mips_got(&parsed);
-        let got_functions = crate::slots::mips_got_functions(&parsed);
+        let got_functions = crate::slots::mips_got_functions(&parsed, dynamic.as_ref());
+        // Constructors and destructors run from the dynamic section, so nothing else may call them.
+        let constructors = dynamic.as_ref().map_or(&[][..], |dynamic| dynamic.constructors.as_slice());
+        let mips = matches!(arch, Arch::Mips | Arch::Mips64);
+        function_starts
+            .extend(constructors.iter().filter(|&&start| !(mips && start & 3 != 0)).map(|&start| code_address(start)));
         let xtensa_abi_note =
             (format == Format::Elf && arch == Arch::Xtensa).then(|| elf_xtensa_call0(&parsed)).flatten();
         let xtensa_call0 = xtensa_abi_note == Some(true);

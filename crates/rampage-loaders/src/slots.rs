@@ -8,13 +8,20 @@ use object::{
     LittleEndian as LE, Object, ObjectSegment, ObjectSymbol, ObjectSymbolTable, ReadRef, RelocationTarget, macho,
 };
 
+use crate::dynsym::Dynamic;
 use crate::model::ImportSlot;
 
 /// Collects the import slots of `parsed`. `image` is the file data of this (possibly fat-sliced) image.
 /// Unreadable tables add a warning rather than failing the load.
-pub(crate) fn collect(parsed: &object::File, image: &[u8], warnings: &mut Vec<String>) -> Vec<ImportSlot> {
+/// `dynamic` is the table `PT_DYNAMIC` describes, read when the file has no `.dynsym` section.
+pub(crate) fn collect(
+    parsed: &object::File,
+    image: &[u8],
+    dynamic: Option<&Dynamic>,
+    warnings: &mut Vec<String>,
+) -> Vec<ImportSlot> {
     let result = match parsed {
-        object::File::Elf32(_) | object::File::Elf64(_) => Ok(elf(parsed)),
+        object::File::Elf32(_) | object::File::Elf64(_) => Ok(elf(parsed, dynamic)),
         object::File::MachO32(_) | object::File::MachO64(_) => macho(parsed, image),
         object::File::Pe32(file) => pe_iat(file).map_err(|error| error.to_string()),
         object::File::Pe64(file) => pe_iat(file).map_err(|error| error.to_string()),
@@ -29,8 +36,8 @@ pub(crate) fn collect(parsed: &object::File, image: &[u8], warnings: &mut Vec<St
     slots
 }
 
-fn elf(parsed: &object::File) -> Vec<ImportSlot> {
-    let Some(symbols) = parsed.dynamic_symbol_table() else { return Vec::new() };
+fn elf(parsed: &object::File, dynamic: Option<&Dynamic>) -> Vec<ImportSlot> {
+    let Some(symbols) = parsed.dynamic_symbol_table() else { return dynamic.map(sectionless).unwrap_or_default() };
     // Imports are undefined symbols; COPY relocations name data objects the executable defines itself.
     let slot = |address: u64, index: object::SymbolIndex| {
         let symbol = symbols.symbol_by_index(index).ok()?;
@@ -57,6 +64,30 @@ fn elf(parsed: &object::File) -> Vec<ImportSlot> {
     slots
 }
 
+/// [`elf`] for a file without section headers, from the table `PT_DYNAMIC` describes.
+fn sectionless(dynamic: &Dynamic) -> Vec<ImportSlot> {
+    let slot = |address: u64, index: usize| {
+        let symbol = dynamic.symbols.get(index)?;
+        if !symbol.is_undefined() && !symbol.is_function() {
+            return None;
+        }
+        (!symbol.name.is_empty()).then(|| ImportSlot { address, name: symbol.name.clone(), library: None })
+    };
+    let relocated = dynamic
+        .relocations
+        .iter()
+        .filter(|relocation| relocation.symbol != 0)
+        .filter_map(|relocation| slot(relocation.offset, usize::try_from(relocation.symbol).ok()?));
+    let mut slots: Vec<ImportSlot> = relocated.collect();
+    let undefined = |index: usize| dynamic.symbols.get(index).is_some_and(|symbol| symbol.is_undefined());
+    let layout = dynamic.mips_got;
+    let imported = layout.map(|layout| global_entries(layout, dynamic.is_64)).unwrap_or_default();
+    slots.extend(
+        imported.into_iter().filter(|&(_, index)| undefined(index)).filter_map(|(address, index)| slot(address, index)),
+    );
+    slots
+}
+
 /// A MIPS global GOT entry whose dynamic symbol is a function the image defines: the dynamic linker fills the
 /// entry from the symbol (its value plus the load bias), so the symbol, not the entry's stored bytes, says what a
 /// call through it reaches.
@@ -69,8 +100,21 @@ pub struct GotFunction {
 }
 
 /// The global GOT entries of `parsed` whose dynamic symbol is a defined function (see [`GotFunction`]).
-pub(crate) fn mips_got_functions(parsed: &object::File) -> Vec<GotFunction> {
-    let Some(symbols) = parsed.dynamic_symbol_table() else { return Vec::new() };
+pub(crate) fn mips_got_functions(parsed: &object::File, dynamic: Option<&Dynamic>) -> Vec<GotFunction> {
+    let Some(symbols) = parsed.dynamic_symbol_table() else {
+        let Some(dynamic) = dynamic else { return Vec::new() };
+        let Some(layout) = dynamic.mips_got else { return Vec::new() };
+        return global_entries(layout, dynamic.is_64)
+            .into_iter()
+            .filter_map(|(slot, index)| {
+                let symbol = dynamic.symbols.get(index)?;
+                if symbol.is_undefined() || symbol.kind != crate::dynsym::STT_FUNC || symbol.name.is_empty() {
+                    return None;
+                }
+                Some(GotFunction { slot, name: symbol.name.clone(), address: symbol.value })
+            })
+            .collect();
+    };
     mips_global_got(parsed)
         .into_iter()
         .filter_map(|(slot, index)| {
@@ -103,8 +147,8 @@ impl MipsGot {
 }
 
 /// The MIPS GOT layout of a dynamically linked MIPS ELF, which needs no section headers (routers often ship
-/// binaries without them).
-pub(crate) fn mips_got(parsed: &object::File) -> Option<MipsGot> {
+/// binaries without them). Without a `.dynsym` section, `symbols` counts the dynamic symbols `PT_DYNAMIC` gives.
+pub(crate) fn mips_got(parsed: &object::File, symbols: Option<usize>) -> Option<MipsGot> {
     use crate::details::{DT_MIPS_GOTSYM, DT_MIPS_LOCAL_GOTNO, DT_PLTGOT, dynamic};
     let entries = match parsed {
         object::File::Elf32(file) if parsed.architecture() == object::Architecture::Mips => dynamic(file).0,
@@ -113,27 +157,34 @@ pub(crate) fn mips_got(parsed: &object::File) -> Option<MipsGot> {
     };
     let value = |tag| entries.iter().find(|&&(entry_tag, _)| entry_tag == tag).map(|&(_, value)| value);
     // The iterator skips the null symbol at index 0, so count by the highest index.
-    let symbols =
-        parsed.dynamic_symbol_table().and_then(|symbols| symbols.symbols().map(|symbol| symbol.index().0).max());
+    let table = parsed.dynamic_symbol_table().map(|table| table.symbols().map(|symbol| symbol.index().0 + 1).max());
+    let symbols = match table {
+        Some(highest) => highest.unwrap_or(0),
+        None => symbols.unwrap_or(0),
+    };
     Some(MipsGot {
         address: value(DT_PLTGOT)?,
         local: value(DT_MIPS_LOCAL_GOTNO)?,
         first_symbol: value(DT_MIPS_GOTSYM)?,
-        symbols: symbols.map_or(0, |last| last as u64 + 1),
+        symbols: symbols as u64,
     })
 }
 
 /// MIPS GOT entries for dynamic symbols, which take no relocations: after `DT_MIPS_LOCAL_GOTNO` local entries,
 /// the GOT holds one entry per dynamic symbol from `DT_MIPS_GOTSYM` on. Returns each entry's address and symbol.
 fn mips_global_got(parsed: &object::File) -> Vec<(u64, object::SymbolIndex)> {
-    let Some(MipsGot { address: got, local, first_symbol: first, symbols: count }) = mips_got(parsed) else {
-        return Vec::new();
-    };
-    let size: u64 = if parsed.is_64() { 8 } else { 4 };
+    let Some(layout) = mips_got(parsed, None) else { return Vec::new() };
+    global_entries(layout, parsed.is_64()).into_iter().map(|(slot, index)| (slot, object::SymbolIndex(index))).collect()
+}
+
+/// Each global GOT entry's address and dynamic symbol index.
+fn global_entries(layout: MipsGot, is_64: bool) -> Vec<(u64, usize)> {
+    let MipsGot { address: got, local, first_symbol: first, symbols: count } = layout;
+    let size: u64 = if is_64 { 8 } else { 4 };
     (first..count)
         .filter_map(|index| {
             let entry = local.checked_add(index - first)?.checked_mul(size)?;
-            Some((got.checked_add(entry)?, object::SymbolIndex(usize::try_from(index).ok()?)))
+            Some((got.checked_add(entry)?, usize::try_from(index).ok()?))
         })
         .collect()
 }
