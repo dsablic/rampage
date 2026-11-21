@@ -77,13 +77,24 @@ const ALIASES: [(&str, &str); 9] = [
     ("binary", "path"),
 ];
 
+/// Unknown argument names that mean one admitted argument of one tool only: (tool, alias, admitted argument).
+const TOOL_ALIASES: [(&str, &str, &str); 3] = [
+    // References to a target; `from` lists the references a function makes.
+    ("xrefs", "target", "to"),
+    ("inspect_data", "count", "size"),
+    // `peripheral` takes a name or any address inside the peripheral.
+    ("peripheral_access", "at", "peripheral"),
+];
+
 /// Repairs the argument mistakes of a caller working without the schema, before [`check_arguments`]: an unknown
-/// name in [`ALIASES`] becomes its admitted argument when that one is not also given, and a string holding a
-/// decimal or `0x` hex number becomes that number where the schema admits only numbers. Booleans stay strict:
-/// they gate writes (`apply`, `force`).
-pub fn normalize_arguments(schema: &Value, arguments: &mut Map<String, Value>) {
+/// name in [`ALIASES`], or in [`TOOL_ALIASES`] for the tool `name`, becomes its admitted argument when that one is
+/// not also given, and a string holding a decimal or `0x` hex number becomes that number where the schema admits
+/// only numbers. Booleans stay strict: they gate writes (`apply`, `force`). Aliases add nothing to the schema.
+pub fn normalize_arguments(name: &str, schema: &Value, arguments: &mut Map<String, Value>) {
     if let Some(admitted) = admitted_arguments(schema) {
-        for (alias, meant) in ALIASES {
+        let tool_aliases =
+            TOOL_ALIASES.iter().filter(|(tool, ..)| *tool == name).map(|&(_, alias, meant)| (alias, meant));
+        for (alias, meant) in ALIASES.into_iter().chain(tool_aliases) {
             if !admitted.contains(alias)
                 && admitted.contains(meant)
                 && !arguments.contains_key(meant)
@@ -179,8 +190,10 @@ pub fn check_arguments(name: &str, schema: &Value, arguments: &Map<String, Value
             if unknown.len() > MAX_LISTED_UNKNOWN {
                 described.push(format!("and {} more", unknown.len() - MAX_LISTED_UNKNOWN));
             }
+            let hints: String =
+                unknown.iter().filter_map(|key| unknown_hint(name, key)).map(|hint| format!(" {hint}")).collect();
             return Err(format!(
-                "invalid arguments: unknown field{} {}; nothing was run.{}",
+                "invalid arguments: unknown field{} {}; nothing was run.{hints}{}",
                 if unknown.len() == 1 { "" } else { "s" },
                 described.join(", "),
                 listing()
@@ -190,13 +203,39 @@ pub fn check_arguments(name: &str, schema: &Value, arguments: &Map<String, Value
     let missing: Vec<&str> =
         required.iter().copied().filter(|key| arguments.get(*key).is_none_or(Value::is_null)).collect();
     if !missing.is_empty() {
+        let hint = missing_hint(name, &missing, arguments).map(|hint| format!(" {hint}")).unwrap_or_default();
         let missing: Vec<String> = missing.iter().map(|key| format!("`{key}`")).collect();
         return Err(format!(
-            "invalid arguments: missing field{} {}; nothing was run.{}",
+            "invalid arguments: missing field{} {}; nothing was run.{hint}{}",
             if missing.len() == 1 { "" } else { "s" },
             missing.join(", "),
             listing()
         ));
     }
     Ok(())
+}
+
+/// The call an unknown argument of the tool `name` shows the caller meant, where that is another tool or an
+/// argument this tool does not have.
+fn unknown_hint(name: &str, argument: &str) -> Option<&'static str> {
+    Some(match (name, argument) {
+        ("peripheral_access", "svd") => {
+            "peripheral_access reads the peripherals import_svd stored: run import_svd with svd=<the .svd file> and \
+             apply=true on the same path (and raw) first, then peripheral_access with peripheral=<name or address>."
+        }
+        ("class_evidence", "class_name" | "class" | "name") => {
+            "class_evidence has no class filter: it lists every class, paged with rtti_class_offset/rtti_class_limit \
+             and vftable_offset/vftable_limit; find the class in its rtti_classes and vftables."
+        }
+        _ => return None,
+    })
+}
+
+/// What a call to the tool `name` missing `missing` arguments most likely meant.
+fn missing_hint(name: &str, missing: &[&str], arguments: &Map<String, Value>) -> Option<&'static str> {
+    let path = arguments.get("path").and_then(Value::as_str).unwrap_or_default();
+    (name == "import_svd" && missing.contains(&"svd") && path.to_ascii_lowercase().ends_with(".svd")).then_some(
+        "`path` is the firmware image the map applies to and `svd` the .svd file: import_svd with path=<image> \
+         svd=<the .svd file>.",
+    )
 }

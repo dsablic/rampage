@@ -1159,7 +1159,11 @@ impl Project {
     pub fn peripheral_access(&self, query: &PeripheralAccessQuery) -> Result<PeripheralAccess, ApiError> {
         let map = self.peripheral_map();
         if map.is_empty() {
-            return Err(ApiError::NotFound("no peripherals are imported; run import_svd first".to_owned()));
+            return Err(ApiError::NotFound(
+                "no peripherals are imported; run import_svd with svd=<the .svd file> and apply=true on this path \
+                 (and raw) first"
+                    .to_owned(),
+            ));
         }
         let index = self
             .access_index()

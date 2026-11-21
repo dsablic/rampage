@@ -1248,7 +1248,7 @@ impl ServerHandler for RampageServer {
         if let Some(schema) = &schema {
             // Clients often call a deferred tool before loading its schema; take unambiguous aliases and numbers
             // sent as strings rather than refusing the call.
-            tools::normalize_arguments(schema, &mut arguments);
+            tools::normalize_arguments(&name, schema, &mut arguments);
         }
         if let Some(schema) = schema
             && let Err(message) = tools::check_arguments(&name, &schema, &arguments)

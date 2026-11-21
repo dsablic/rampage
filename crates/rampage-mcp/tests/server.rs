@@ -940,6 +940,34 @@ async fn unambiguous_argument_aliases_and_numeric_strings_are_accepted() {
     client.cancel().await.unwrap();
 }
 
+/// Haiku suites v3 and v4: per-tool argument names that mean one argument of that tool are taken as it; names that
+/// mean another tool's call get an error naming that call. Neither adds a schema property.
+#[tokio::test]
+async fn per_tool_aliases_are_taken_and_misplaced_arguments_name_the_right_call() {
+    let client = connect().await;
+    let path = fixture("hello-x64.elf");
+    let xrefs = call(&client, "xrefs", json!({ "path": path, "target": "main" })).await;
+    assert_ne!(xrefs.is_error, Some(true), "{}", text(&xrefs));
+    let inspected = call(&client, "inspect_data", json!({ "path": path, "at": "main", "count": "16" })).await;
+    assert_eq!(json_of(&inspected)["size"], 16, "{}", text(&inspected));
+    // `count` is no alias where it is not this tool's: disassemble has a `count` of its own, list_functions none.
+    let functions = call(&client, "list_functions", json!({ "path": path, "count": 5 })).await;
+    assert!(text(&functions).contains("unknown field `count`"), "{}", text(&functions));
+    let classes = call(&client, "class_evidence", json!({ "path": path, "class_name": "Foo" })).await;
+    assert!(text(&classes).contains("class_evidence has no class filter"), "{}", text(&classes));
+    // `at` is taken as `peripheral` (a name or an address inside it); `svd` belongs to import_svd.
+    let svd = "/tmp/device.svd";
+    let peripheral = call(&client, "peripheral_access", json!({ "path": path, "svd": svd, "at": "0x40000000" })).await;
+    let message = text(&peripheral);
+    assert!(message.contains("unknown field `svd`") && !message.contains("`at`"), "{message}");
+    assert!(message.contains("run import_svd with svd=") && message.contains("peripheral="), "{message}");
+    let unimported = call(&client, "peripheral_access", json!({ "path": path, "at": "0x40000000" })).await;
+    assert!(text(&unimported).contains("run import_svd with svd="), "{}", text(&unimported));
+    let import = call(&client, "import_svd", json!({ "path": svd })).await;
+    assert!(text(&import).contains("`path` is the firmware image"), "{}", text(&import));
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn pointer_observations_preserve_writable_slot_values_without_annotations() {
     let client = connect().await;
