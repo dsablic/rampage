@@ -532,6 +532,25 @@ fn private_registry(operator: &Path, tree: &Path, home: &Path) -> Result<(), Str
     std::fs::write(&stamp, digest).map_err(|error| error.to_string())
 }
 
+/// Unpacks every locked package (every platform's) into the private registry `home`, as the trusted harness, so the
+/// candidate's tests, which may not write the registry, find each one cargo resolves. Once per Cargo.lock.
+fn unpack_registry(cargo: &Path, tree: &Path, home: &Path) -> Result<(), String> {
+    let stamp = home.join(".unpacked");
+    let wanted = std::fs::read_to_string(home.join(".lock-sha256")).unwrap_or_default();
+    if std::fs::read_to_string(&stamp).ok().as_deref() == Some(wanted.as_str()) {
+        return Ok(());
+    }
+    output(Command::new(cargo).current_dir(tree).env("CARGO_HOME", home).env("CARGO_NET_OFFLINE", "true").args([
+        "metadata",
+        "--format-version",
+        "1",
+        "--locked",
+        "--all-features",
+    ]))
+    .map_err(|error| format!("unpacking the private registry: {error}"))?;
+    std::fs::write(&stamp, wanted).map_err(|error| error.to_string())
+}
+
 impl Harness<'_> {
     /// The gate's private registry, unpacked into by builds only.
     fn cargo_home(&self) -> PathBuf {
@@ -1644,11 +1663,9 @@ fn code_run(
 
     let gate = gate_worktree(&setup.repo, &setup.gate_dir, "worktree", &setup.base)?;
     let capture_tree = gate_worktree(&setup.repo, &setup.gate_dir, "capture", &setup.base)?;
-    private_registry(
-        &operator_cargo_home(&setup.home),
-        gate.work_tree.as_deref().unwrap_or(Path::new(".")),
-        &setup.gate_dir.join("cargo-home"),
-    )?;
+    let gate_tree = gate.work_tree.clone().unwrap_or_default();
+    private_registry(&operator_cargo_home(&setup.home), &gate_tree, &setup.gate_dir.join("cargo-home"))?;
+    unpack_registry(&setup.cargo, &gate_tree, &setup.gate_dir.join("cargo-home"))?;
     let views = Views::new(run_dir.join("views"), args.workers);
     for split in GATED {
         views.make(&engine.corpus, split)?;
@@ -1716,6 +1733,7 @@ fn code_run(
     )?;
     let home = session_root.join("cargo-home");
     private_registry(&operator_cargo_home(&setup.home), &reference, &home)?;
+    unpack_registry(&setup.cargo, &reference, &home)?;
     let tmp = session_root.join("tmp");
     create_dir(&tmp)?;
     let train_view = session_root.join("flywheel/corpus").join(format!("{}-train", engine.corpus.version()));
@@ -1952,11 +1970,9 @@ pub fn final_read(args: CodeFinalArgs) -> Result<ExitCode, String> {
     let result = (|| -> Result<ExitCode, String> {
         let gate = gate_worktree(&setup.repo, &setup.gate_dir, "worktree", &base)?;
         let capture = gate_worktree(&setup.repo, &setup.gate_dir, "capture", &base)?;
-        private_registry(
-            &operator_cargo_home(&setup.home),
-            gate.work_tree.as_deref().unwrap_or(Path::new(".")),
-            &setup.gate_dir.join("cargo-home"),
-        )?;
+        let gate_tree = gate.work_tree.clone().unwrap_or_default();
+        private_registry(&operator_cargo_home(&setup.home), &gate_tree, &setup.gate_dir.join("cargo-home"))?;
+        unpack_registry(&setup.cargo, &gate_tree, &setup.gate_dir.join("cargo-home"))?;
         let views = Views::new(out.join("views"), args.workers);
         views.make(&engine.corpus, Split::Train)?;
         let mut harness = Harness {
