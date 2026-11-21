@@ -698,7 +698,7 @@ impl Project {
         let decoder = self.binary.decoder();
         let decoder_error = decoder.as_ref().err().map(ToString::to_string);
         if let (Ok(analysis), Ok(mut decoder)) = (self.analysis(), decoder) {
-            if self.binary.arch == Arch::Arm {
+            if self.binary.has_code_modes() {
                 decoder.set_code_modes(&analysis.program.code_modes);
             }
             let mut scanned = 0;

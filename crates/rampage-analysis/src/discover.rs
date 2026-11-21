@@ -788,6 +788,10 @@ fn explore(
                         break;
                     }
                     instructions.insert(next);
+                    // The delay slot runs in the branch's mode; record it, as a mode boundary may follow the branch.
+                    if let Some(mode) = decoder.instruction_mode() {
+                        instruction_modes.push((next, mode));
+                    }
                     record_refs(&slot, &mut xrefs, &mut code_refs);
                     next = next.saturating_add(u64::from(slot.len));
                 }
