@@ -83,7 +83,7 @@ both earlier passes, so it is likely model variance. Tool errors seen, as small 
 
 ## MIPS and Xtensa follow-ups (2026-11-20)
 
-- [ ] MIPS: microMIPS/MIPS16e; multi-GOT shared libraries; MIPS library signatures (static libc stays unnamed);
+- [ ] MIPS: microMIPS (MIPS16e done 2026-11-21); multi-GOT shared libraries; MIPS library signatures (static libc stays unnamed);
       BEV exception vectors not seeded; `disassemble` from an arbitrary address doesn't know `$t9`.
 - [ ] Xtensa: zero-overhead loops in decompiled C; ROM function names (from a verified ROM symbol table, not
       memory); partitions in `fs_list` and SPIFFS/LittleFS/NVS contents; rBoot 0xEA images, encrypted flash and
@@ -467,7 +467,7 @@ acceptance run.
    `diff_firmware`, Android and `check_claim`. The set is built, not run:
    [acceptance set](docs/plans/2026-11-20-acceptance-set.md), `tools/acceptance/`. Deterministic checks first,
    then the eight Haiku tasks, then the maintainer's own vendor update pair.
-2. **MIPS16e (and microMIPS)** decoding and discovery. Added 2026-11-20: 76 of the 87 programs in the OpenWrt
+2. [x] (2026-11-21, M5 87/87, M1 95.3%) **MIPS16e (and microMIPS)** decoding and discovery. Added 2026-11-20: 76 of the 87 programs in the OpenWrt
    root filesystem, `busybox` among them, are MIPS16, so on routers the MIPS work reaches about one program in
    eight. A real sample needs it, so rule 2 schedules it. Check M5 of the acceptance set measures the gap first.
 3. **Flywheel steps 1–3** ([plan](docs/plans/2026-11-20-flywheel-next.md)): close row proposals, measure
@@ -489,11 +489,16 @@ rule stands.
 ## Acceptance pass follow-ups (2026-11-20)
 
 From [the acceptance report](docs/benchmarks/acceptance-2026-11-20.md).
-- [ ] Read dynamic symbols of section-less ELF files from `PT_DYNAMIC` (M5: five OpenWrt libraries list 0
-      functions). Goes with the MIPS16e track: both are needed on a real router.
+- [x] Read dynamic symbols of section-less ELF files from `PT_DYNAMIC` (M5: five OpenWrt libraries list 0
+      functions). Done 2026-11-21. Goes with the MIPS16e track: both are needed on a real router.
 - [ ] MIPS position-independent switch tables (M1: zlib's `inflate` and `inflateBack`).
 - [ ] Seed `DT_INIT`, `DT_FINI` and the init/fini arrays, plus function pointers in relocated data (M1: 90.7%
-      against a 95% bar).
+      against a 95% bar). Constructors done 2026-11-21 (M1 now 95.3%); pointers in relocated data remain.
+- [ ] MIPS16e follow-ups (when a sample needs them; design note "Remaining after review"): PLT and MIPS16e call
+      stubs unnamed in section-less programs (`find_main` low confidence on busybox); literal-pool words decompile
+      as loads; functions reached by a lone data pointer or method-pointer structs (rpcd plugins); fuzzy
+      signatures refuse all MIPS; 64-bit MIPS16e; `dropbear`/`px5g` counts fell after the string-pointer rule
+      (472→457, 74→65) without truth to say whether real functions were lost.
 - [ ] `diff_firmware` on Xtensa: code that only moved counts as changed (F2: 546 against 12).
       Check first whether the 4000-functions-per-side listing cap is the cause (the ESP32 app has ~8700).
 - [ ] ESP8266 IROM function recall, 61% (X6).

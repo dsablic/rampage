@@ -18,6 +18,15 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `class_name` on `class_evidence`, and `import_svd` with only a `.svd` path get errors naming the right call.
 - Fix: `get_type` with a decompiler worker stopped at the native type library for any unknown name; DWARF and Go
   runtime metadata are now searched, so a Go type is found by its package-qualified name or full import path.
+- ELF files without section headers (OpenWrt's `sstrip`) list their dynamic symbols, imports, exports and import
+  slots, read through `PT_DYNAMIC`, on every architecture. `DT_INIT`, `DT_FINI` and the init and fini arrays seed
+  function discovery.
+- MIPS16e code in 32-bit MIPS ELF files is decoded: `disassemble`, `list_functions`, `xrefs`, `decompile` and
+  `evaluate_function` work on it, including calls across `jalx` and through GOT entries. Most OpenWrt programs,
+  `busybox` among them, are MIPS16e. microMIPS and 64-bit MIPS16e are still reported as not decoded.
+- MIPS: musl's dynamic `_start_c` and MIPS16e function-pointer tables seed discovery; addresses of strings in the
+  executable segment no longer start functions.
+- `ANALYSIS_VERSION` 10; worker protocol 16.
 
 ## 1.9.0 (2026-11-21)
 
