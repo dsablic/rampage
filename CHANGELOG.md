@@ -13,6 +13,22 @@ see the [stability policy](docs/stability.md) for what the version promises.
   points (application hooks, the HAL's weak defaults) are never propagated.
 - `crates/rampage-eval/examples/embedded_call_graph.rs` rebuilds the embedded call graph reproducibly and refuses
   held-out builds. The flywheel engine chooses the call graph as production identification does.
+- MCP: `path` and `raw` are optional. A call without them works on the one binary the connection has opened,
+  with its selectors and its peripheral and annotation state; the result names it in `session_target`. With several
+  open, the error lists them. An explicit `path` always wins and reuses the connection's Raw selector for it only
+  when the file has no native header; `raw: null` asks for the native image.
+- MCP: Intel HEX and S-record files open by path alone when their records start with a Cortex-M vector table whose
+  initial stack pointer is in RAM; otherwise the error names the `raw` selector to pass. `disassemble` on a
+  Cortex-M Raw project without an entry starts at the Reset handler and says so.
+- MCP: an `evaluate_function` buffer whose `size` is short of its content takes the content's length (reporting
+  `requested_size`); `inspect_data` reads at most 1024 bytes and uses the pointer width for other word sizes
+  (reporting `truncated`, `requested_size`, `requested_word_size`); inspect_raw_code and inspect_sleigh limits and
+  decoder timeouts clamp to their caps. `evaluate_function` takes `arguments` as `args`, and a list sent as JSON
+  text.
+- MCP: `enable_tools` says where the firmware tools live when asked for `firmware` and accepts unambiguous aliases
+  (`svd`, `peripherals`, `yara`, `crypto`, `apk`, `dex`, `filesystem`, `signatures`). `import_svd` given the `.svd`
+  as `path` uses the session's binary as the image, and its previews say nothing was applied. A Raw selector
+  missing `base_address` gets the base a Cortex-M vector table suggests.
 
 ## 1.10.0 (2026-11-21)
 
