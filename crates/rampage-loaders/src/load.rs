@@ -400,6 +400,35 @@ impl Binary {
         self.mips16
     }
 
+    /// musl's MIPS `_start` (`crt_arch.h`): `bal 1f; move $fp, $0`, then two words, the address of the first and
+    /// of `_start_c`, each less the same base (`_gp` in a static build, nothing in a dynamic one); at `1:` it subtracts
+    /// the first from the link register to get that base, and calls `_start_c` through `$t9`. Returns `_start_c`
+    /// when it lies in code.
+    pub fn musl_mips_start_c(&self) -> Option<u64> {
+        if self.arch != Arch::Mips || self.format != Format::Elf {
+            return None;
+        }
+        let entry = self.entry?;
+        let word = |address: u64| {
+            let bytes: [u8; 4] = self.read(address, 4)?.try_into().ok()?;
+            Some(if self.big_endian { u32::from_be_bytes(bytes) } else { u32::from_le_bytes(bytes) })
+        };
+        // `bal` is `bgezal $zero, offset`; its link register then holds the address after its delay slot, where the
+        // words are, and it branches past them to `lw $gp, 0($ra)` (0x8ffc0000).
+        let bal = word(entry)?;
+        if bal & 0xffff_0000 != 0x0411_0000 {
+            return None;
+        }
+        let link = entry.checked_add(8)?;
+        let target = entry.checked_add(4)?.checked_add(u64::from(bal & 0xffff) << 2)?;
+        if word(target)? != 0x8ffc_0000 {
+            return None;
+        }
+        let base = (link as u32).wrapping_sub(word(link)?);
+        let start_c = u64::from(word(link.checked_add(4)?)?.wrapping_add(base));
+        (start_c & 3 == 0 && self.is_code(start_c)).then_some(start_c)
+    }
+
     /// Whether code runs in two instruction sets whose mode discovery learns per address: 32-bit ARM (A32 and
     /// Thumb) or a [`Binary::mips16`] image (MIPS32 and MIPS16e).
     pub fn has_code_modes(&self) -> bool {
@@ -1041,20 +1070,33 @@ impl Binary {
         let dynamic_functions = dynamic_symbols.iter().filter(|symbol| symbol.is_function() && symbol.is_definition());
         let marked = |symbol: &crate::dynsym::DynamicSymbol| symbol.value | u64::from(symbol.other & 0xf0 == 0xf0);
         let marked_constructors = dynamic.as_ref().map_or(&[][..], |dynamic| dynamic.constructors.as_slice());
-        let marked_starts: Vec<u64> = macho_starts
-            .iter()
-            .copied()
-            .chain(dynamic_functions.map(marked))
-            .chain(marked_constructors.iter().copied().filter(|_| mips16))
-            .collect();
+        // MIPS16e code dispatches through tables of odd function pointers (busybox's applet table) that no
+        // instruction references directly.
+        let pointer_tables =
+            if mips16 { mips16_pointer_tables(&segments, image_bytes, !parsed.is_little_endian()) } else { Vec::new() };
+        let marked_starts: Vec<u64> = macho_starts.iter().copied().chain(dynamic_functions.map(marked)).collect();
         let thumb = match arch {
             Arch::Arm => thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts),
             _ => Vec::new(),
         };
-        let mips16_ranges =
-            if mips16 { thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts) } else { Vec::new() };
+        // A MIPS16e pointer with no size names only where a function starts: its range is its first instruction, and
+        // the decoder keeps the mode along straight-line code from there.
+        let mips16_ranges = if mips16 {
+            let unsized_starts = marked_constructors.iter().chain(&pointer_tables).filter(|&&pointer| pointer & 1 == 1);
+            let starts = unsized_starts.map(|&pointer| (pointer & !1)..(pointer & !1).saturating_add(2));
+            merged(
+                thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts)
+                    .into_iter()
+                    .chain(starts)
+                    .collect(),
+            )
+        } else {
+            Vec::new()
+        };
+        let pointer_table_starts: Vec<u64> = pointer_tables.iter().map(|&pointer| code_address(pointer)).collect();
         let entry = raw_entry.map(code_address);
         let mut function_starts: Vec<u64> = macho_starts.into_iter().map(code_address).collect();
+        function_starts.extend(pointer_table_starts);
         let big_endian = !parsed.is_little_endian();
         // ARMv6 and later big-endian images (BE8) store instructions little-endian; older BE32 ones do not.
         let be8_flag = |flags| match flags {
@@ -1180,6 +1222,8 @@ impl Binary {
         let msvc = crate::msvc::read(&binary);
         function_starts.extend(crate::msvc::code_targets(&binary, &msvc));
         binary.msvc = (binary.format == Format::Pe).then_some(msvc);
+        // musl's MIPS `_start` reaches `_start_c` only through a word after its `bal`, which discovery cannot follow.
+        function_starts.extend(binary.musl_mips_start_c());
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
         binary.warnings.extend(warning);
@@ -1966,6 +2010,61 @@ pub(crate) fn xtensa_prologue_vote(binary: &Binary) -> bool {
     call0 > 0 && windowed.saturating_mul(4) < call0
 }
 
+/// Most pointers [`mips16_pointer_tables`] returns.
+const MAX_MIPS16_TABLE_POINTERS: usize = 1 << 16;
+/// Fewest consecutive odd code pointers that make a table.
+const MIN_MIPS16_TABLE_RUN: usize = 4;
+
+/// MIPS16e function pointers in tables: runs of at least [`MIN_MIPS16_TABLE_RUN`] consecutive aligned words in the
+/// segments' file data, each an odd address (the MIPS16e ISA bit) inside file-backed executable memory where no
+/// string starts. Returned with the ISA bit, deduplicated.
+fn mips16_pointer_tables(segments: &[Segment], image: &[u8], big_endian: bool) -> Vec<u64> {
+    let executable = |address: u64| {
+        segments.iter().any(|segment| {
+            segment.perms.execute
+                && address >= segment.address
+                && address - segment.address < segment.file_size.min(segment.size)
+        })
+    };
+    // Read-only data shares the executable segment, so a table of string pointers would pass for code pointers: a
+    // target that starts a NUL-terminated printable run is a string. At the even address, where code would start,
+    // a single printable byte before a NUL is also a MIPS16e instruction (`li $v0, 0` is `6a 00`).
+    let starts_text = |address: u64, minimum: usize| {
+        let Some(segment) = segments.iter().find(|segment| segment.contains(address)) else { return false };
+        let offset = segment.file_offset.saturating_add(address - segment.address);
+        let Some(bytes) = usize::try_from(offset).ok().and_then(|offset| image.get(offset..)) else { return false };
+        let printable = |byte: u8| byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t' | b'\n' | b'\r');
+        let run = bytes.iter().take(256).take_while(|&&byte| printable(byte)).count();
+        run >= minimum && bytes.get(run) == Some(&0)
+    };
+    let mut found = std::collections::BTreeSet::new();
+    for segment in segments {
+        let Some(start) = usize::try_from(segment.file_offset).ok() else { continue };
+        let length = usize::try_from(segment.file_size).unwrap_or(usize::MAX);
+        let Some(bytes) = image.get(start..start.saturating_add(length).min(image.len())) else { continue };
+        let skip = (segment.address.next_multiple_of(4) - segment.address) as usize;
+        let mut run = Vec::new();
+        for &word in bytes.get(skip..).unwrap_or_default().as_chunks::<4>().0 {
+            let value = u64::from(if big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) });
+            if value & 1 == 1 && executable(value & !1) && !starts_text(value, 1) && !starts_text(value & !1, 2) {
+                run.push(value);
+                continue;
+            }
+            if run.len() >= MIN_MIPS16_TABLE_RUN {
+                found.extend(run.iter().copied());
+            }
+            run.clear();
+        }
+        if run.len() >= MIN_MIPS16_TABLE_RUN {
+            found.extend(run);
+        }
+        if found.len() >= MAX_MIPS16_TABLE_POINTERS {
+            break;
+        }
+    }
+    found.into_iter().take(MAX_MIPS16_TABLE_POINTERS).collect()
+}
+
 /// `e_flags` bits of a MIPS ELF holding MIPS16e (`EF_MIPS_ARCH_ASE_M16`) or microMIPS (`EF_MIPS_MICROMIPS`) code.
 const EF_MIPS_ARCH_ASE_M16: u32 = 0x0400_0000;
 const EF_MIPS_MICROMIPS: u32 = 0x0200_0000;
@@ -2152,6 +2251,39 @@ fn symbol_kind_of(kind: object::SymbolKind) -> SymbolKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A table of at least four odd pointers into code seeds MIPS16e functions; shorter runs, pointers outside code
+    /// and pointers to strings do not.
+    #[test]
+    fn mips16_pointer_tables_need_runs_of_code_pointers() {
+        let mut image = vec![0u8; 0x200];
+        // Code at 0x1000..0x1100 (file 0..0x100): 0x6500 (`nop`) halfwords, and a string at 0x10f0.
+        for at in (0..0x100).step_by(2) {
+            image[at..at + 2].copy_from_slice(&0x6500u16.to_be_bytes());
+        }
+        image[0xf0..0xf6].copy_from_slice(b"hello\0");
+        let words = |image: &mut Vec<u8>, at: usize, values: &[u32]| {
+            for (index, value) in values.iter().enumerate() {
+                image[at + index * 4..at + index * 4 + 4].copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        // Data at 0x2000 (file 0x100): a table of four, a run of three, and a run broken by a string pointer.
+        words(&mut image, 0x100, &[0x1001, 0x1011, 0x1021, 0x1031, 0]);
+        words(&mut image, 0x120, &[0x1041, 0x1051, 0x1061, 0]);
+        words(&mut image, 0x140, &[0x1071, 0x1081, 0x10f1, 0x1091, 0x10a1, 0]);
+        words(&mut image, 0x160, &[0x3001, 0x3011, 0x3021, 0x3031, 0]);
+        let perms = |execute: bool| Perms { read: true, write: !execute, execute };
+        let segment = |address, file_offset, execute| Segment {
+            name: String::new(),
+            address,
+            size: 0x100,
+            file_offset,
+            file_size: 0x100,
+            perms: perms(execute),
+        };
+        let segments = [segment(0x1000, 0, true), segment(0x2000, 0x100, false)];
+        assert_eq!(mips16_pointer_tables(&segments, &image, true), [0x1001, 0x1011, 0x1021, 0x1031]);
+    }
 
     #[test]
     fn cold_metadata_open_skips_optional_recovery_for_whole_and_selected_images() {

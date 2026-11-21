@@ -58,20 +58,13 @@ impl MipsDisassembler {
         &self.inner.target
     }
 
+    /// Unlike ARM, where a mapping symbol can switch mode in straight-line code, MIPS changes mode only by a jump,
+    /// so straight-line execution keeps its mode whatever the loader's ranges say.
     fn is_mips16(&self, address: u64) -> bool {
         self.modes
             .get(&address)
             .copied()
-            .or_else(|| {
-                self.sequential_mode
-                    .filter(|&(at, _)| {
-                        at == address
-                            && self.decoded_in.is_some_and(|(previous, _)| {
-                                self.target().is_thumb(previous) == self.target().is_thumb(address)
-                            })
-                    })
-                    .map(|(_, mips16)| mips16)
-            })
+            .or_else(|| self.sequential_mode.filter(|&(at, _)| at == address).map(|(_, mips16)| mips16))
             .unwrap_or_else(|| self.target().is_thumb(address))
     }
 
@@ -309,14 +302,6 @@ impl Disassembler for MipsDisassembler {
     }
 
     fn code_mode_at(&self, address: u64) -> Option<bool> {
-        if let Some((next, mips16)) = self.sequential_mode
-            && next == address
-        {
-            let previous = self.decoded_in.map(|(at, _)| at)?;
-            if self.target().is_thumb(previous) == self.target().is_thumb(address) {
-                return Some(mips16);
-            }
-        }
         Some(self.is_mips16(address))
     }
 

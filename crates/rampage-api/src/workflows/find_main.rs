@@ -343,28 +343,9 @@ impl Project {
         Ok(None)
     }
 
-    /// musl's MIPS `_start` (`crt_arch.h`): `bal 1f; move $fp, $0`, then `.gpword .` and `.gpword _start_c` (each
-    /// an address less `_gp`), and at `1:` it forms `$gp` and `$t9` from them before `jalr $t9`. Returns
-    /// `_start_c`, once the first word checks out against the image's global pointer.
+    /// musl's MIPS `_start`, which calls `_start_c` through a word after its `bal` ([`Binary::musl_mips_start_c`]).
     fn musl_mips_start_c(&self, entry: u64) -> Option<u64> {
-        if self.binary.arch != Arch::Mips {
-            return None;
-        }
-        let word = |address: u64| {
-            let bytes: [u8; 4] = self.binary.read(address, 4)?.try_into().ok()?;
-            Some(if self.binary.big_endian { u32::from_be_bytes(bytes) } else { u32::from_le_bytes(bytes) })
-        };
-        // `bal` is `bgezal $zero, offset`; its link register then holds the address after its delay slot.
-        if word(entry)? & 0xffff_0000 != 0x0411_0000 {
-            return None;
-        }
-        let link = entry.checked_add(8)?;
-        let global_pointer = u32::try_from(self.binary.target().global_pointer?).ok()?;
-        if u64::from(word(link)?.wrapping_add(global_pointer)) != link {
-            return None;
-        }
-        let start_c = u64::from(word(link.checked_add(4)?)?.wrapping_add(global_pointer));
-        self.binary.is_code(start_c).then_some(start_c)
+        self.binary.musl_mips_start_c().filter(|_| self.binary.entry == Some(entry))
     }
 
     /// The address a GOT entry holds in the file, when the entry is not filled by the dynamic linker.
@@ -419,6 +400,8 @@ impl Project {
                     let formed = line.data_ref.filter(|_| !line.accesses);
                     let from_got = line.data_ref.filter(|_| line.accesses).and_then(|slot| self.got_value(slot));
                     let value = formed.or(line.immediate).or(from_got).filter(|&value| self.binary.is_code(value));
+                    // A MIPS16e function pointer carries the ISA bit; the function starts at the even address.
+                    let value = value.map(|value| if self.binary.mips16() { value & !1 } else { value });
                     loaded = value.map(|value| (value, describe(&line)));
                     continue;
                 }
