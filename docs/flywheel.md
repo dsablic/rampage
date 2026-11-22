@@ -592,8 +592,9 @@ them). The gate's worktrees, build target and private registry stay for the next
 
 ### Checked without an agent (2026-11-22)
 
-Scripted sessions on corpus `libid-00da6363626a` stood in for the agent, with the isolation above. No final read was
-made; the ledger kept its two reads.
+Scripted sessions on corpus `libid-00da6363626a` stood in for the agent, with the isolation above (an earlier round
+on 2026-11-21 ran (b), (d) and (e) the same way, with the results below). No final read was made; the ledger kept its
+two reads.
 
 | Script | Authoritative gate | Dev delta (TP / FP / F1) |
 |---|---|---|
@@ -602,15 +603,23 @@ made; the ledger kept its two reads.
 | (c) every body of at most 8 bytes named `memcpy` in programs of over 200 functions (the crate's tests still pass) | fails train (+5130 FP), negatives (+670 names), dev and 126 slices | -1132 / +8769 / -0.0448 |
 | (d) upward call-graph propagation: an unnamed function whose calls are all named, matching exactly one training caller's sequence, takes that name | fails train (+4 FP) and the dev allowance (+96 FP against 28 allowed), though dev F1 rises more than fuzzy's | +2852 / +96 / +0.0191 |
 | (e) identification panics in programs of over 200 functions (the crate's tests still pass) | fails at names; the session's answer says only that a stage named `names` failed, the panic and log stay in the operator's `gate.json` | - |
+| (f) an allowlisted file replaced by a link to a readable file outside the tree | fails at policy ("not a plain file"); the patch is empty and nothing of the target reaches the patch, the answer or the transcript | - |
 
 The probes in (a), run from the session's shell:
 
 - `tools/flywheel/corpus.json` is absent;
-- `curl https://example.com` fails (the proxy refused it and logged `refused CONNECT example.com:443`);
-- a TCP connection to 1.1.1.1:443 fails;
-- appending an fsmonitor hook to `~/.gitconfig` fails, and creating a directory in the home directory fails;
-- listing the corpus fails;
-- the same hook written into the session tree's own `.git/config` never ran, because the harness runs no git there.
+- `curl https://example.com` fails (the proxy refused it and logged `refused CONNECT example.com:443`), and a TCP
+  connection to 1.1.1.1:443 fails;
+- writing a program into `/opt/homebrew/bin`, `/opt/homebrew/opt/rustup/bin` or `/usr/local/bin` fails;
+- `defaults write` leaves no preference, `pbcopy` fails, `ps -A` fails;
+- appending to `~/.gitconfig` or writing a `.claude.json`-style file into the operator's home fails, while the
+  throwaway `HOME` in the session root is writable;
+- listing the corpus fails.
+
+The build, test, generation and naming profiles the run saved, used afterwards on their own: none could read a file
+in the shared users directory or list the home directory; the tests profile could not write the scored binary (its
+hash was unchanged) but could write its own directory; the generation profile could not list a non-training split's
+discovery cache.
 
 The base for comparison is the bundled databases as shipped: dev 68,528 correct, 922 false, 37,840 missed (F1
 0.7795). Fuzzy at 0.95/0.05 adds +2596 / +17 there. Timings on a 10-core machine with 6 workers:
@@ -618,8 +627,9 @@ The base for comparison is the bundled databases as shipped: dev 68,528 correct,
 - the first base build in a new gate directory: about 10 minutes, then incremental (no rebuild when the base is
   unchanged);
 - the scorer's load: about 45 s per harness build, then cached;
-- the base's names (two passes per split): 1 to 7 minutes; the fuzzy reference: once per base;
-- a gate on a matcher change (build, generation, tests in a fresh target, names, scoring): about 6 minutes.
+- the base's names (two passes per split): 1 to 9 minutes; the fuzzy reference: once per base;
+- a gate on a matcher change (build, generation, tests in a fresh target, names, scoring): about 6 minutes, plus the
+  answer's padding to the quantum (300 s by default; these runs used 60 s).
 
 An interrupted run (TERM) stopped its children and removed its session root.
 
