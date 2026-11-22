@@ -444,8 +444,8 @@ async fn identify_functions_names_library_code_in_a_cortex_m0_raw_image() {
 
 /// Correct names the Raw rows of docs/signature-corpus.md report, from the embedded signatures and from the call
 /// graph (no wrong or spurious name is allowed above).
-const EMBEDDED_M4F_RAW: (usize, usize) = (81, 14);
-const EMBEDDED_M0_RAW: (usize, usize) = (71, 32);
+const EMBEDDED_M4F_RAW: (usize, usize) = (91, 10);
+const EMBEDDED_M0_RAW: (usize, usize) = (73, 32);
 
 /// A CMSIS-SVD map imported once over MCP names a Cortex-M Raw project's registers in later calls with the same
 /// `raw` selector: decompiled C, xrefs by peripheral name and the per-register access listing.

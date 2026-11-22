@@ -74,6 +74,15 @@ static EMBEDDED: [Entry; 1] = [Entry::new(
     include_str!("../data/embedded-thumb.index.json"),
 )];
 
+/// The embedded set's operand tier (scheme 4, [`crate::THUMB_OPERAND_SCHEME`]), consulted after the embedded set:
+/// the same training references hashed with Thumb load/store offsets and stack adjustments masked, so a library
+/// function whose structure offsets changed with a kernel configuration or a compiler release is still named.
+static EMBEDDED_OPERANDS: [Entry; 1] = [Entry::new(
+    Arch::Arm,
+    include_bytes!("../data/embedded-thumb-operands.json.gz"),
+    include_str!("../data/embedded-thumb-operands.index.json"),
+)];
+
 fn entry(arch: Arch) -> Option<&'static Entry> {
     CATALOG.iter().find(|entry| entry.arch == arch)
 }
@@ -117,6 +126,17 @@ pub fn bundled_ref(arch: Arch) -> Option<&'static SignatureDb> {
 /// The embedded firmware library set for `arch` (Thumb only), cached like [`bundled_ref`].
 pub fn bundled_embedded_ref(arch: Arch) -> Option<&'static SignatureDb> {
     embedded_entry(arch)?.database().ok()
+}
+
+/// The embedded set's operand tier for `arch`, cached like [`bundled_ref`].
+pub fn bundled_embedded_operands_ref(arch: Arch) -> Option<&'static SignatureDb> {
+    EMBEDDED_OPERANDS.iter().find(|entry| entry.arch == arch)?.database().ok()
+}
+
+/// The embedded set's operand tier for `binary`, under the same firmware test as [`bundled_embedded_for`];
+/// identification consults it after the embedded set, which answers first wherever it has an answer.
+pub fn bundled_embedded_operands_for(binary: &Binary) -> Option<&'static SignatureDb> {
+    if firmware_like(binary) { bundled_embedded_operands_ref(binary.arch) } else { None }
 }
 
 /// The embedded firmware set for `binary`, when it looks like firmware ([`firmware_like`]); identification
@@ -172,6 +192,15 @@ mod tests {
             assert!(!database.is_empty());
             assert!(std::ptr::eq(bundled_embedded_ref(entry.arch).unwrap(), database));
         }
+        for entry in &EMBEDDED_OPERANDS {
+            let metadata = entry.metadata().expect("valid operand-tier metadata");
+            assert!(assets.insert(&metadata.asset));
+            let database = entry.database().expect("operand-tier asset must decode and match its index");
+            assert_eq!(database.arch(), entry.arch);
+            assert_eq!(database.scheme(), crate::THUMB_OPERAND_SCHEME);
+            assert!(!database.is_empty());
+            assert!(std::ptr::eq(bundled_embedded_operands_ref(entry.arch).unwrap(), database));
+        }
     }
 
     #[test]
@@ -181,6 +210,7 @@ mod tests {
         assert!(bundled_counts(Arch::S390x).is_none());
         assert!(SignatureDb::bundled_metadata(Arch::S390x).unwrap().is_none());
         assert!(bundled_embedded_ref(Arch::X86_64).is_none());
+        assert!(bundled_embedded_operands_ref(Arch::X86_64).is_none());
     }
 
     fn fixture(path: &str) -> Binary {
@@ -194,6 +224,7 @@ mod tests {
         let firmware = fixture("firmware/embedded-libs-m4f.elf");
         assert!(firmware_like(&firmware));
         assert!(bundled_embedded_for(&firmware).is_some());
+        assert!(bundled_embedded_operands_for(&firmware).is_some());
         // So is the embedded call graph, in place of the host-library one.
         let embedded = crate::bundled_embedded_call_graph().map(std::ptr::from_ref);
         assert!(embedded.is_some());
@@ -206,6 +237,7 @@ mod tests {
         assert!(linux.target().is_thumb(linux.entry.unwrap()));
         assert!(!firmware_like(&linux));
         assert!(bundled_embedded_for(&linux).is_none());
+        assert!(bundled_embedded_operands_for(&linux).is_none());
         assert!(bundled_ref(Arch::Arm).is_some(), "the corpus still applies");
         let host = crate::bundled_call_graph().map(std::ptr::from_ref);
         assert_eq!(crate::bundled_call_graph_for(&linux).map(std::ptr::from_ref), host);

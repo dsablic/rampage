@@ -185,9 +185,19 @@ Cortex-M0 at -O1, scored against their library truth (`tests/fixtures/data/eval-
   scattered 16-bit units (mostly FreeRTOS functions whose structure offsets follow the configuration): an
   operand-wildcard arm for Thumb, a generator, is the natural tool for those. Subtracting the ≥ 90% cases leaves
   about 96 functions (83 if the 75–90% cases go too), on two binaries.
+  *Shipped after this measurement (2026-11-22):* the embedded set's operand tier (hash scheme 4: Thumb load/store
+  offsets and stack adjustments masked bit by bit, `data/embedded-thumb-operands.json.gz`, 1.26 MB) and a call graph
+  that also trains on kernels with every application hook on. Gated on a new dev split (11 images from GCC 11.3,
+  12.2, 13.2 and a training toolchain with other options, an owned program and kernel configuration; 3,562 library
+  functions): 1,835 → 2,007 correct, false names 1 → 0, none added in training (each GCC release left out) or on
+  negatives. On these fixtures, read once afterwards: 95 → 101 (63.9%) and 103 → 105 (46.3%), 0 wrong. The shape
+  proxy above overestimated the reach: masking data immediates too failed the training gate, and most same-length
+  misses here differ in more than offsets. See the
+  [embedded firmware set](../signature-corpus.md#embedded-firmware-set).
 - The miners are not gate quality here either: on M0 they also named 6 functions wrongly and 3 spuriously.
 
-Two binaries are too few to choose a family by: they are the held-out gate itself, not a dev split, and there is
+Two binaries are too few to choose a family by: they are the held-out gate itself, not a dev split (one was built
+afterwards: `build.py dev`, see the signature corpus), and there is
 no training-versus-dev structure on firmware to run an unattended loop against.
 
 ## (c) Parameter type classes against DWARF

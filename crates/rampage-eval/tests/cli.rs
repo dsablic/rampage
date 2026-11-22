@@ -257,7 +257,7 @@ fn run_refuses_an_unknown_hash_scheme() {
     let scratch = std::env::temp_dir().join(format!("rampage-eval-scheme-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
     let future = scratch.join("future.json");
-    std::fs::write(&future, r#"{"arch":"x86_64","scheme":4,"entries":{}}"#).unwrap();
+    std::fs::write(&future, r#"{"arch":"x86_64","scheme":9,"entries":{}}"#).unwrap();
     let output = eval()
         .args(["run", "--db"])
         .arg(&future)
@@ -270,7 +270,7 @@ fn run_refuses_an_unknown_hash_scheme() {
     std::fs::remove_dir_all(&scratch).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("unknown signature hash scheme 4"), "{stderr}");
+    assert!(stderr.contains("unknown signature hash scheme 9"), "{stderr}");
 }
 
 #[test]

@@ -298,7 +298,8 @@ pub use search_request::{
 pub use session::{MAX_RAW_PROJECT_BYTES, MAX_RAW_PROJECTS, Session, find_decompiler_worker};
 pub use signature_import::load_signature_database;
 pub use signatures::{
-    CALL_GRAPH, EMBEDDED_SIGNATURES, SignatureApplication, SignatureMatch, USER_SIGNATURES, call_sequences,
+    CALL_GRAPH, EMBEDDED_SIGNATURES, SignatureApplication, SignatureMatch, USER_SIGNATURES, call_graph_names,
+    call_sequences,
 };
 pub use summary::FunctionSummary;
 pub use tool_views::{

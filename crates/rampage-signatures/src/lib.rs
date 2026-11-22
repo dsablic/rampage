@@ -21,6 +21,9 @@
 //! [`SignatureDb::identify_in`] hashes with it, so databases saved under scheme 1 keep matching exactly as before.
 //! New databases, the bundled corpora included, are scheme 2. Scheme 3 ([`LITERAL_POOL_SCHEME`]) adds Thumb
 //! literal pools, Thumb call targets and a stricter Thumb gate for firmware; the bundled embedded set uses it.
+//! Scheme 4 ([`THUMB_OPERAND_SCHEME`]) is scheme 3 with Thumb load/store offsets and stack adjustments masked too,
+//! bit by bit: the embedded set's operand tier, which names a library function whose structure offsets or stack
+//! slots changed with a kernel configuration or a compiler release while its code did not.
 //!
 //! A confidence gate rejects non-discriminating bodies so they are neither stored nor matched: a body whose
 //! masked form carries too little content (a single-branch thunk masks to almost nothing, all-nop padding is one
@@ -56,7 +59,7 @@ use std::ops::Range;
 
 pub use bundled::{
     BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_embedded_for,
-    bundled_embedded_ref, bundled_ref, firmware_like,
+    bundled_embedded_operands_for, bundled_embedded_operands_ref, bundled_embedded_ref, bundled_ref, firmware_like,
 };
 pub use callgraph::{CallGraph, CallSequence, bundled_call_graph, bundled_call_graph_for, bundled_embedded_call_graph};
 pub use compressed::{CombineError, SignatureDbError};
@@ -106,8 +109,15 @@ pub const CURRENT_SCHEME: u32 = 2;
 /// signature set uses it; scheme 2 databases are unchanged.
 pub const LITERAL_POOL_SCHEME: u32 = 3;
 
+/// Hash scheme 4: scheme 3 with the offsets of Thumb loads and stores (structure offsets and stack slots) and the
+/// stack adjustments (`ADD Rd, SP, #imm`, `ADD`/`SUB SP, SP, #imm`) masked as well. Only those immediate bits are
+/// masked, never opcode or register bits, so a load still differs from a store; data immediates are kept. Every
+/// other architecture hashes exactly as under scheme 3. The embedded set's operand tier
+/// (`data/embedded-thumb-operands.json.gz`) uses it, below the scheme-3 set.
+pub const THUMB_OPERAND_SCHEME: u32 = 4;
+
 /// The hash schemes this version reads.
-pub const KNOWN_SCHEMES: [u32; 3] = [LEGACY_SCHEME, CURRENT_SCHEME, LITERAL_POOL_SCHEME];
+pub const KNOWN_SCHEMES: [u32; 4] = [LEGACY_SCHEME, CURRENT_SCHEME, LITERAL_POOL_SCHEME, THUMB_OPERAND_SCHEME];
 
 /// Under [`LITERAL_POOL_SCHEME`], a literal-pool word below this value is masked as a possible address: the
 /// Cortex-M code and SRAM regions (and ordinary images on other Thumb targets) lie below it, so a pointer to a
@@ -648,6 +658,7 @@ fn thumb_pool_fingerprint(
     code_big_endian: bool,
     data_big_endian: bool,
     image: &MaskContext,
+    operands: bool,
 ) -> Fingerprint {
     let read_hw = |at: usize| {
         let raw = [bytes[at], bytes[at + 1]];
@@ -689,7 +700,11 @@ fn thumb_pool_fingerprint(
             }
             ThumbToken::Instruction { at, length: 4 } => {
                 let (hw1, hw2) = (read_hw(at), read_hw(at + 2));
-                let (m1, m2) = mask_thumb32(hw1, hw2, true);
+                let (mut m1, mut m2) = mask_thumb32(hw1, hw2, true);
+                if operands {
+                    let (keep1, keep2) = thumb32_operand_mask(hw1, hw2);
+                    (m1, m2) = (m1 & keep1, m2 & keep2);
+                }
                 let mut encoding = [0u8; 4];
                 encoding[..2].copy_from_slice(&m1.to_le_bytes());
                 encoding[2..].copy_from_slice(&m2.to_le_bytes());
@@ -702,11 +717,56 @@ fn thumb_pool_fingerprint(
                     let offset = i64::from(((u32::from(hw1) & 0x07ff) << 21) as i32 >> 20);
                     address.wrapping_add(at as u64).wrapping_add(4).wrapping_add_signed(offset)
                 });
-                fingerprint.push(&mask_thumb16(hw1, true).to_le_bytes(), branch);
+                let keep = if operands { thumb16_operand_mask(hw1) } else { 0xffff };
+                fingerprint.push(&(mask_thumb16(hw1, true) & keep).to_le_bytes(), branch);
             }
         }
     }
     fingerprint
+}
+
+/// The bits scheme 4 ([`THUMB_OPERAND_SCHEME`]) keeps of a 16-bit Thumb instruction: every bit except the
+/// immediate field of
+/// - a load or store with an immediate offset (`LDR`/`STR`/`LDRB`/`STRB`/`LDRH`/`STRH` `[Rn, #imm5]`, and
+///   `LDR`/`STR` `[SP, #imm8]`): structure offsets and stack slots;
+/// - `ADD Rd, SP, #imm8` and `ADD`/`SUB SP, SP, #imm7`: stack addresses and frame sizes.
+///
+/// Opcode and register bits stay, as do data immediates (`MOVS`, `CMP`, `ADDS`: they tell a driver's bit masks and a
+/// kernel's constants apart), shift amounts and PC-relative loads (`LDR Rt, [PC, #imm8]`, `ADR`), whose offsets
+/// place the literal pool scheme 3 hashes as data.
+fn thumb16_operand_mask(hw: u16) -> u16 {
+    let field = if hw & 0xe000 == 0x6000 || hw & 0xf000 == 0x8000 {
+        0x07c0
+    } else if hw & 0xf000 == 0x9000 || hw & 0xf800 == 0xa800 {
+        0x00ff
+    } else if hw & 0xff00 == 0xb000 {
+        0x007f
+    } else {
+        0
+    };
+    !field
+}
+
+/// The bits scheme 4 keeps of a 32-bit Thumb instruction (first and second halfword): every bit except the offset
+/// of `LDR`/`STR` (any size, signed or not) `[Rn, #imm12]` and `[Rn, #+/-imm8]` (offset, pre- and post-indexed),
+/// `LDRD`/`STRD [Rn, #+/-imm8 * 4]` and `VLDR`/`VSTR [Rn, #+/-imm8 * 4]`, with `Rn` not the PC. The add/subtract
+/// bit, the indexing kind, opcode and register bits stay, and so does every data-processing immediate.
+fn thumb32_operand_mask(hw1: u16, hw2: u16) -> (u16, u16) {
+    // LDR/STR (immediate) T2/T3: 1111 100S 1 size L Rn | Rt imm12.
+    let imm12 = hw1 & 0xfe80 == 0xf880;
+    // LDR/STR (immediate) T4: 1111 100S 0 size L Rn | Rt 1 P U W imm8.
+    let imm8 = hw1 & 0xfe80 == 0xf800 && hw2 & 0x0800 != 0;
+    // LDRD/STRD (immediate): 1110 100P U1WL Rn | Rt Rt2 imm8, with P or W set (else LDREX, TBB and friends).
+    let dual = hw1 & 0xfe40 == 0xe840 && hw1 & 0x0120 != 0;
+    // VLDR/VSTR: 1110 1101 UD0L Rn | Vd 101 sz imm8.
+    let vector = hw1 & 0xff20 == 0xed00 && hw2 & 0x0e00 == 0x0a00;
+    let field = match () {
+        _ if hw1 & 0x000f == 0x000f => 0,
+        _ if imm12 => 0x0fff,
+        _ if imm8 || dual || vector => 0x00ff,
+        _ => 0,
+    };
+    (0xffff, !field)
 }
 
 /// Decodes a scheme-3 Thumb body into instructions, literal-pool words and branch tables, front to back.
@@ -1012,6 +1072,22 @@ pub fn masked_body_in(target: &Target, image: &MaskContext, bytes: &[u8], addres
     Some(body)
 }
 
+/// Whether scheme 4 ([`THUMB_OPERAND_SCHEME`]) masks any field of the little-endian Thumb function at `address`: a
+/// load or store offset or a stack adjustment, whatever its value. A body with none hashes under scheme 4 exactly
+/// as its scheme-3 twin would, so a scheme-4 entry for it can only repeat the scheme-3 set's answer; the operand
+/// tier leaves such bodies out. `false` for anything but Thumb code.
+pub fn thumb_operand_fields(target: &Target, bytes: &[u8], address: u64) -> bool {
+    if target.arch != Arch::Arm || target.big_endian || !target.is_thumb(address) {
+        return false;
+    }
+    let read_hw = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+    thumb_tokens(bytes, address, &read_hw, target.data_big_endian).into_iter().any(|token| match token {
+        ThumbToken::Instruction { at, length: 4 } => thumb32_operand_mask(read_hw(at), read_hw(at + 2)) != (!0, !0),
+        ThumbToken::Instruction { at, .. } => thumb16_operand_mask(read_hw(at)) != !0,
+        _ => false,
+    })
+}
+
 /// The hash of a function under `scheme` (see [`LEGACY_SCHEME`], [`CURRENT_SCHEME`] and [`LITERAL_POOL_SCHEME`]),
 /// or `None` for an unknown scheme or a body the scheme's confidence gate rejects. `image` is ignored by scheme 1.
 /// Scheme 3 hashes Thumb code with its literal pools as data (address-like words masked) and gates it more
@@ -1033,16 +1109,18 @@ fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>
 
 /// The ungated fingerprint [`hash`] gates, or `None` for an unsupported architecture.
 fn fingerprint(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>) -> Option<Fingerprint> {
-    fingerprint_with(target, bytes, address, image, false)
+    fingerprint_with(target, bytes, address, image, false, false)
 }
 
-/// [`fingerprint`], with `pools` selecting scheme 3's Thumb handling (with `image`, it is scheme 3).
+/// [`fingerprint`], with `pools` selecting scheme 3's Thumb handling (with `image`, it is scheme 3), and `operands`
+/// scheme 4's on top of it.
 fn fingerprint_with(
     target: &Target,
     bytes: &[u8],
     address: u64,
     image: Option<&MaskContext>,
     pools: bool,
+    operands: bool,
 ) -> Option<Fingerprint> {
     let big_endian = target.big_endian;
     Some(match target.arch {
@@ -1054,7 +1132,9 @@ fn fingerprint_with(
         }
         Arch::Aarch64 => fixed_word_fingerprint(bytes, address, false, mask_aarch64, aarch64_branch_target),
         Arch::Arm if target.is_thumb(address) => match image {
-            Some(image) if pools => thumb_pool_fingerprint(bytes, address, big_endian, target.data_big_endian, image),
+            Some(image) if pools => {
+                thumb_pool_fingerprint(bytes, address, big_endian, target.data_big_endian, image, operands)
+            }
             _ => thumb_fingerprint(bytes, big_endian, image.is_some()),
         },
         Arch::Arm => fixed_word_fingerprint(bytes, address, big_endian, mask_arm_a32, no_branch),
@@ -1080,7 +1160,8 @@ fn fingerprint_scheme(
     match scheme {
         LEGACY_SCHEME => fingerprint(target, bytes, address, None),
         CURRENT_SCHEME => fingerprint(target, bytes, address, Some(image)),
-        LITERAL_POOL_SCHEME => fingerprint_with(target, bytes, address, Some(image), true),
+        LITERAL_POOL_SCHEME => fingerprint_with(target, bytes, address, Some(image), true, false),
+        THUMB_OPERAND_SCHEME => fingerprint_with(target, bytes, address, Some(image), true, true),
         _ => None,
     }
 }
@@ -1715,7 +1796,7 @@ impl SignatureDb {
         db.fid = wire.fid;
         db.validate_fid_namespace().map_err(serde::de::Error::custom)?;
         if !KNOWN_SCHEMES.contains(&db.scheme) {
-            let message = format!("unknown signature hash scheme {} (this version knows 1, 2 and 3)", db.scheme);
+            let message = format!("unknown signature hash scheme {} (this version knows 1 to 4)", db.scheme);
             return Err(serde::de::Error::custom(message));
         }
         if let Some(patterns) = &db.pat
@@ -2274,6 +2355,56 @@ mod tests {
         assert_eq!(pool_hash(&code, 0x100), pool_hash(&padded_v7, 0x100));
     }
 
+    fn operand_hash(halfwords: &[u16]) -> Option<FunctionHash> {
+        let bytes = halfwords_to_bytes(halfwords, false);
+        function_hash_scheme(THUMB_OPERAND_SCHEME, &thumb_target(false), &MaskContext::default(), &bytes, 0x100)
+    }
+
+    #[test]
+    fn scheme_4_masks_offsets_but_keeps_opcodes_registers_and_constants() {
+        // push {r4, lr}; ldr r0, [r1, #4]; str r0, [sp, #8]; movs r2, #5; sub sp, #8; ldr.w r4, [r1, #0x40];
+        // add sp, #8; pop {r4, pc}
+        let base = [0xb510, 0x6848, 0x9002, 0x2205, 0xb082, 0xf8d1, 0x4040, 0xb002, 0xbd10];
+        assert!(operand_hash(&base).is_some());
+        // Other structure offsets, stack slots and frame size: the same scheme-4 hash, another scheme-3 one.
+        let moved = [0xb510, 0x6908, 0x9005, 0x2205, 0xb084, 0xf8d1, 0x4064, 0xb004, 0xbd10];
+        assert_eq!(operand_hash(&base), operand_hash(&moved));
+        let scheme_3 = |halfwords: &[u16]| pool_hash(&halfwords_to_bytes(halfwords, false), 0x100);
+        assert_ne!(scheme_3(&base), scheme_3(&moved));
+        // A store for the load, another register, str.w for ldr.w, another constant, add sp for sub sp: opcode,
+        // register and data-immediate bits stay.
+        for changed in [
+            [0xb510, 0x6048, 0x9002, 0x2205, 0xb082, 0xf8d1, 0x4040, 0xb002, 0xbd10],
+            [0xb510, 0x6849, 0x9002, 0x2205, 0xb082, 0xf8d1, 0x4040, 0xb002, 0xbd10],
+            [0xb510, 0x6848, 0x9002, 0x2205, 0xb082, 0xf8c1, 0x4040, 0xb002, 0xbd10],
+            [0xb510, 0x6848, 0x9002, 0x2206, 0xb082, 0xf8d1, 0x4040, 0xb002, 0xbd10],
+            [0xb510, 0x6848, 0x9002, 0x2205, 0xb002, 0xf8d1, 0x4040, 0xb002, 0xbd10],
+        ] {
+            assert_ne!(operand_hash(&base), operand_hash(&changed), "{changed:04x?}");
+        }
+    }
+
+    #[test]
+    fn scheme_4_operand_masks_cover_only_offset_fields() {
+        assert_eq!(thumb16_operand_mask(0x6848), !0x07c0); // ldr r0, [r1, #4]
+        assert_eq!(thumb16_operand_mask(0x8848), !0x07c0); // ldrh r0, [r1, #2]
+        assert_eq!(thumb16_operand_mask(0x9a03), !0x00ff); // ldr r2, [sp, #12]
+        assert_eq!(thumb16_operand_mask(0xa801), !0x00ff); // add r0, sp, #4
+        assert_eq!(thumb16_operand_mask(0xb082), !0x007f); // sub sp, #8
+        assert_eq!(thumb16_operand_mask(0x2205), 0xffff); // movs r2, #5: constants stay
+        assert_eq!(thumb16_operand_mask(0x4801), 0xffff); // ldr r0, [pc, #4]: places the literal pool
+        assert_eq!(thumb16_operand_mask(0x0089), 0xffff); // lsls r1, r1, #2: shift amounts stay
+        assert_eq!(thumb32_operand_mask(0xf8d1, 0x4040), (0xffff, !0x0fff)); // ldr.w r4, [r1, #0x40]
+        assert_eq!(thumb32_operand_mask(0xf8df, 0x4040), (0xffff, 0xffff)); // ldr.w r4, [pc, #0x40]
+        assert_eq!(thumb32_operand_mask(0xf851, 0x4d04), (0xffff, !0x00ff)); // ldr r4, [r1, #-4]!
+        assert_eq!(thumb32_operand_mask(0xe9d1, 0x2302), (0xffff, !0x00ff)); // ldrd r2, r3, [r1, #8]
+        assert_eq!(thumb32_operand_mask(0xe8d1, 0x2f4f), (0xffff, 0xffff)); // ldrexb: no offset
+        assert_eq!(thumb32_operand_mask(0xed91, 0x0a02), (0xffff, !0x00ff)); // vldr s0, [r1, #8]
+        assert_eq!(thumb32_operand_mask(0xf240, 0x1034), (0xffff, 0xffff)); // movw r0, #0x134
+        assert_eq!(thumb32_operand_mask(0xf101, 0x0010), (0xffff, 0xffff)); // add.w r0, r1, #16
+        assert_eq!(thumb32_operand_mask(0xf000, 0xf800), (0xffff, 0xffff)); // bl: scheme 3 masks it
+    }
+
     fn token_kinds(bytes: &[u8], address: u64) -> Vec<(&'static str, usize, usize)> {
         let read_hw = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
         thumb_tokens(bytes, address, &read_hw, false)
@@ -2407,7 +2538,7 @@ mod tests {
         let found = loaded.identify_in(&thumb_target(false), &image, &pooled(0x2000_9990, 0), 0x0800_0000);
         assert_eq!(found, Some("counter_bump"));
         assert_eq!(SignatureDb::from_gzip(&loaded.to_gzip().unwrap()).unwrap().scheme(), LITERAL_POOL_SCHEME);
-        let unknown = db.to_json().replace("\"scheme\":3", "\"scheme\":4");
+        let unknown = db.to_json().replace("\"scheme\":3", "\"scheme\":5");
         assert!(SignatureDb::from_json(&unknown).is_err());
     }
 

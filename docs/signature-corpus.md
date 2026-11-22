@@ -107,13 +107,23 @@ target/debug/examples/embedded_signatures --output WORK/db.json --gzip WORK/db.j
 python3 -I tools/embedded-signatures/build.py profiles > WORK/profiles.json
 target/debug/examples/signature_bundle_index --database WORK/db.json.gz --profiles WORK/profiles.json \
   --asset embedded-thumb.json.gz --output crates/rampage-signatures/data/embedded-thumb.index.json
-cargo build --release -p rampage-eval --example embedded_call_graph
+python3 -I tools/embedded-signatures/build.py refs --config hooks   # 90 kernels with every hook on (WORK/refs-hooks)
+cargo build --release -p rampage-eval --example embedded_call_graph --example embedded_operands
 target/release/examples/embedded_call_graph \
-  --output crates/rampage-signatures/data/embedded-callgraph.json.gz WORK/refs/*.elf
+  --output crates/rampage-signatures/data/embedded-callgraph.json.gz WORK/refs/*.elf WORK/refs-hooks/*.elf
+python3 -I tools/embedded-signatures/build.py fetch --dev          # dev toolchains, 13.3, negative sources
+python3 -I tools/embedded-signatures/build.py negatives            # 30 negative references (WORK/negatives)
+target/release/examples/embedded_operands build --negatives WORK/negatives --output WORK/operands.json \
+  --gzip WORK/operands.json.gz WORK/refs/*.elf WORK/refs-hooks/*.elf
+python3 -I tools/embedded-signatures/build.py profiles --operands > WORK/profiles-operands.json
+target/debug/examples/signature_bundle_index --database WORK/operands.json.gz \
+  --profiles WORK/profiles-operands.json --asset embedded-thumb-operands.json.gz \
+  --output crates/rampage-signatures/data/embedded-thumb-operands.index.json
 ```
 
-**Embedded call graph.** `data/embedded-callgraph.json.gz` (65 KB gzip; 4,486 caller names, 7,707 distinct call
-sequences) holds the same training references' call sequences: each reference function's direct calls and tail
+**Embedded call graph.** `data/embedded-callgraph.json.gz` (66 KB gzip; 4,486 caller names, 7,754 distinct call
+sequences) holds the same training references' call sequences, plus the kernels built with every application hook
+on (`build.py refs --config hooks`, 90 references): each reference function's direct calls and tail
 jumps in call-site order, as the callees' symbol names. Firmware that gets the embedded set propagates names with
 it after the signatures, under the bundled call graph's rule (source `rampage-builtin call graph`): a named
 library caller whose sequence fits training names its unnamed callees, two-sided and anchored (see the
@@ -128,7 +138,65 @@ nothing defines (application hooks such as `vApplicationGetIdleTaskMemory`, link
 its own code, so propagation must not name that code after the library. A stub of a routine another reference
 defines (`memset` in a FreeRTOS reference) keeps the routine's name as a callee. On the held-out fixtures this costs
 names the fixtures happen to take from the library unchanged: 10 on M4F (the weak HAL defaults it links, and
-`__aeabi_idiv0`) and `__aeabi_idiv0` on M0.
+`__aeabi_idiv0`) and `__aeabi_idiv0` on M0. The hooks kernels exist for the same reason: an enabled hook
+(`vApplicationMallocFailedHook` in `pvPortMalloc`) is one more call in a kernel function's sequence, and without a
+training sequence holding it there propagation named the hook after the library function that held that position
+in another configuration (`prvInsertBlockIntoFreeList`, on dev).
+
+**Operand tier.** `data/embedded-thumb-operands.json.gz` (1.26 MB gzip, 2.35 MB JSON; 21,053 masked entries and
+4,291 callee keys, `embedded-thumb-operands.index.json`) hashes the same references, and the hooks kernels, under
+hash scheme 4 (`THUMB_OPERAND_SCHEME`): scheme 3 with the offset of every Thumb load and store (`LDR`/`STR` of any
+size `[Rn, #imm]`, `[SP, #imm]`, `LDRD`/`STRD`, `VLDR`/`VSTR`, with `Rn` not the PC) and the stack adjustments
+(`ADD Rd, SP, #imm`, `ADD`/`SUB SP, SP, #imm`) masked, bit by bit. Opcode bits, registers, the add/subtract bit, data
+immediates, shift amounts and PC-relative loads stay. Identification consults it after the scheme-3 set, for the same
+firmware, with the same source (`rampage-builtin embedded`): it names a library function whose structure offsets or
+stack slots follow the kernel configuration or the compiler release while its code does not. Scheme 4 coarsens
+scheme 3, so a body the scheme-3 set answers is never consulted here, and a body with no masked field (which could
+only repeat the scheme-3 answer) is left out. Masked hashes two names share are tombstones, and so is every hash a
+negative reference holds: `build.py negatives` builds the flywheel corpus's zlib, LZ4, cJSON, inih and tinyexpr
+for Thumb (no embedded signature covers them), and their names never ship. `crates/rampage-eval/examples/
+embedded_operands.rs` builds the tier and runs its gate.
+
+Masking data immediates as well (`MOVS`/`CMP`/`ADDS` constants and Thumb-2 modified immediates) named 74 more dev
+functions but failed the training gate: drivers that differ only in a register bit (`HAL_I2S_DeInit` and
+`HAL_SPI_DeInit`) and -O0 one-line stores (`vTaskMissedYield` and `HAL_PWR_DisablePVD`) then share a body across
+toolchains. A stricter instruction gate (8 to 12) or requiring callee keys of every calling body cost recall without
+removing those collisions.
+
+**Splits.** Training is the references above (GCC 12.3, 13.3, 15.2; clang 22 for compiler-rt). The final split is
+the two GCC 14.3 fixtures below; it is read only to report a change, never to choose one. The dev split, the
+one to iterate on, is `build.py dev`: an owned application (`tools/embedded-signatures/dev-app`), unlike the
+fixture's program, built with the dev kernel configuration (unlike the training ones and the fixture's), scored
+against the library functions of the same toolchain's references. Every cell keeps GCC and changes what training
+has not seen:
+
+| Dev cells | Toolchain | Cores and options | What is new to training |
+| --- | --- | --- | --- |
+| `dev-gcc11.3-*` | xPack GCC 11.3.1 (its own newlib 4.2 build) | M4F -Os nano + HAL, M0 -O1 full, M3 -O2 nano | the GCC release (older) |
+| `dev-gcc12.2-*` | Arm GNU Toolchain 12.2.rel1 | the same | the GCC release (older) |
+| `dev-gcc13.2-*` | Arm GNU Toolchain 13.2.rel1 | the same | the GCC release |
+| `dev-gcc13.3-*` | Arm GNU Toolchain 13.3.rel1 (training) | M4F -O1 nano + HAL, M0 -Os full | options and kernel configuration only |
+
+The 11 dev images hold 3,562 library functions. The gate is the host arms' (see the [flywheel](flywheel.md#the-gate)):
+training, each GCC release left out in turn, may gain no false positive and lose F1 on no reference; dev must gain,
+with at most one more false positive per 100 names gained and F1 lost on no image; the 30 negative references may
+get no name they did not have.
+
+| Gate (operand tier and the hooks call graph together) | Correct before | Correct after | False before | False after |
+| --- | ---: | ---: | ---: | ---: |
+| Training, GCC 12.3 left out | 24,273 | 24,303 | 84 | 84 |
+| Training, GCC 13.3 left out | 25,097 | 25,139 | 26 | 26 |
+| Training, GCC 15.2 left out | 13,271 | 13,288 | 20 | 20 |
+| Dev (11 images, 3,562 library functions) | 1,835 (51.5%) | 2,007 (56.3%) | 1 | 0 |
+| Negatives (30 references) | — | — | 21 | 21 |
+
+The training rows score the signatures alone over the extents discovery finds in each symbolized reference (a
+stripped whole-archive link reaches few of its functions). The 21 false names on negatives are the shipped
+databases' own (`__getopt_r` and others on unresolved-symbol stubs, `xEventGroupSetBitsFromISR` on an inih
+function) and unchanged. The hooks call graph alone, without the tier, gains two dev names and removes the one
+false name, but loses `xTaskIncrementTick.part.0` on one image (its caller's sequence now has a hook-bearing
+rival), which fails the per-image rule on its own; it ships with the tier, under which that image gains 24 names
+and still loses that one.
 
 **Held-out measurement.** Arm GNU Toolchain 14.3.rel1 (GCC 14.3.1, newlib 4.5.0 as that release built it) is not
 used for training. `build.py fixture` builds two owned FreeRTOS applications with it
@@ -138,16 +206,24 @@ use a FreeRTOS configuration unlike the two training ones. The committed strippe
 scored against the library functions of the symbolized builds (`--library` the 14.3 references, `--program` the
 fixture's own objects), so any name on the fixture's own code counts as spurious:
 
-| Fixture | Library functions | Signatures | With the call graph | Wrong or spurious | Precision | Recall |
+| Fixture | Library functions | Signatures and operand tier | With the call graph | Wrong or spurious | Precision | Recall |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `embedded-libs-m4f` (ELF) | 158 | 81 | 95 | 0 | 100% | 60.1% (was 51.3%) |
-| `embedded-libs-m4f` (Raw, vector table) | 158 | 81 | 95 | 0 | 100% | 60.1% (was 51.3%) |
-| `embedded-libs-m0` (ELF) | 227 | 71 | 103 | 0 | 100% | 45.4% (was 31.3%) |
-| `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 103 | 0 | 100% | 45.4% (was 31.3%) |
+| `embedded-libs-m4f` (ELF) | 158 | 91 | 101 | 0 | 100% | 63.9% (was 60.1%) |
+| `embedded-libs-m4f` (Raw, vector table) | 158 | 91 | 101 | 0 | 100% | 63.9% (was 60.1%) |
+| `embedded-libs-m0` (ELF) | 227 | 73 | 105 | 0 | 100% | 46.3% (was 45.4%) |
+| `embedded-libs-m0` (Raw, vector table) | 227 | 73 | 105 | 0 | 100% | 46.3% (was 45.4%) |
+
+The operand tier and the hooks call graph were measured on these fixtures once, after both were chosen and
+gated on dev (final read 1 of this split). The tier names `xQueueGenericReset`, `xQueueGenericCreate`, the
+ARMv7-M port's three exception handlers and `pvPortMalloc` on M4F, `vRestoreContextOfFirstTask` and
+`SVC_Handler` on M0, and takes over four names the call graph gave before; the call graph change alone changes
+neither fixture. The gain is far below dev's: the fixtures' misses are mostly code GCC 14.3 laid out differently
+(other lengths), which no operand mask reaches. Before the call graph (2026-11-21) the signatures alone recalled
+51.3% and 31.3%.
 
 The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate the
-signature database alone on the ELF rows; `crates/rampage-api/tests/bundled_signatures.rs` gates identification
-as the product runs it (signatures, then the call graph) on the ELFs, and the MCP Raw-project tests
+scheme-3 database alone on the ELF rows (81 and 71); `crates/rampage-api/tests/bundled_signatures.rs` gates
+identification as the product runs it (signatures, the operand tier, then the call graph) on the ELFs, and the MCP Raw-project tests
 (`crates/rampage-mcp/tests/raw_project.rs`) on the Raw rows, each requiring exactly those counts with every name
 matching the truth. The fixtures also join the toolid truth as `arm-none-eabi-gcc`
 builds. Misses are mostly code a different GCC generated differently (newlib's C, FreeRTOS), kernel functions whose layout depends on the
@@ -159,8 +235,9 @@ with 15.2) the signatures alone recall 36.7% (M4F) and 15.0% (M0), still with no
 recognised far better: newlib and libgcc archive code is byte-identical within a toolchain release.
 
 Limits: one HAL family (STM32F4), GCC-built newlib and FreeRTOS only (no IAR, Keil/armcc, picolibc or vendor
-SDKs), little-endian Thumb only, and FreeRTOS signatures match only configurations whose struct layouts agree
-with a trained one. A firmware's own copy of a library function with identical code is named after the library.
+SDKs), little-endian Thumb only, and FreeRTOS signatures match only configurations whose code agrees with a
+trained one up to structure offsets and stack slots (the operand tier); a configuration that changes a function's
+length or instructions is not reached. A firmware's own copy of a library function with identical code is named after the library.
 
 ## Recognition policy
 

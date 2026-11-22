@@ -6,6 +6,18 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `identify_functions` on Cortex-M firmware consults a new operand tier after the embedded set
+  (`data/embedded-thumb-operands.json.gz`, 1.26 MB): the same training references hashed under scheme 4, which also
+  masks Thumb load/store offsets and stack adjustments, so a library function whose structure offsets follow the
+  kernel configuration or the compiler release is still named (source `rampage-builtin embedded`). The embedded call
+  graph also trains on FreeRTOS kernels with every application hook on, so an enabled hook is no longer named after
+  the library function that held its call position elsewhere. On the held-out GCC 14.3 fixtures recall rises from
+  60.1% to 63.9% (Cortex-M4F) and from 45.4% to 46.3% (Cortex-M0), with no wrong or spurious name; on the new dev
+  split (11 images from GCC 11.3, 12.2, 13.2 and 13.3) from 51.5% to 56.3%, with one false name fewer.
+- `tools/embedded-signatures/build.py` builds a dev split (`dev`, from an owned program, kernel configuration and
+  toolchains training does not use), a negative split (`negatives`) and the hooks kernels (`refs --config hooks`);
+  `crates/rampage-eval/examples/embedded_operands.rs` builds the operand tier and runs its training (each GCC release
+  left out), dev and negative gates.
 - `identify_functions` runs call-graph propagation on Cortex-M firmware, from a new embedded call graph
   (`data/embedded-callgraph.json.gz`, 65 KB) built from the embedded set's training references. On the held-out
   GCC 14.3 fixtures recall rises from 51.3% to 60.1% (Cortex-M4F) and from 31.3% to 45.4% (Cortex-M0), with no

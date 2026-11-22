@@ -22,7 +22,8 @@ pub const USER_SIGNATURES: &str = "user database";
 pub const CALL_GRAPH: &str = "rampage-builtin call graph";
 
 /// The [`SignatureMatch::source`] of a name the bundled embedded firmware set gave (newlib, libgcc, compiler-rt,
-/// FreeRTOS, STM32F4 HAL), consulted for firmware-like Thumb targets only (`rampage_signatures::firmware_like`).
+/// FreeRTOS, STM32F4 HAL) or its operand tier (`rampage_signatures::bundled_embedded_operands_for`), consulted for
+/// firmware-like Thumb targets only (`rampage_signatures::firmware_like`).
 pub const EMBEDDED_SIGNATURES: &str = "rampage-builtin embedded";
 
 #[derive(Debug, Serialize)]
@@ -225,14 +226,17 @@ impl Project {
             ));
         }
         let call_graph = if bundled { rampage_signatures::bundled_call_graph_for(&self.binary) } else { None };
-        // The corpus, then (firmware) the embedded set: different hash schemes, so layered.
+        // The corpus, then (firmware) the embedded set and its operand tier: different hash schemes, so layered.
         let corpus = bundled.then(|| rampage_signatures::bundled_ref(self.binary.arch)).flatten();
         let embedded = bundled.then(|| rampage_signatures::bundled_embedded_for(&self.binary)).flatten();
+        // Its operand tier (scheme 4) answers only where the embedded set has no answer.
+        let operands = bundled.then(|| rampage_signatures::bundled_embedded_operands_for(&self.binary)).flatten();
         let user = user.map(|database| (USER_SIGNATURES, database));
         let bundled = corpus
             .map(|database| (BUILTIN_PACK, database))
             .into_iter()
-            .chain(embedded.map(|database| (EMBEDDED_SIGNATURES, database)));
+            .chain(embedded.map(|database| (EMBEDDED_SIGNATURES, database)))
+            .chain(operands.map(|database| (EMBEDDED_SIGNATURES, database)));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
         self.apply_layered_signatures_with_preflight(
             &databases,

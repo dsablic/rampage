@@ -7,11 +7,17 @@ Subcommands:
                into WORK/tc/<release> and WORK/src/<name>
   refs         link symbolized reference ELFs (WORK/refs/*.elf) from the training toolchains' newlib, newlib-nano,
                libm and libgcc archives, and from FreeRTOS and STM32F4 HAL/LL sources compiled at several
-               optimisation levels
+               optimisation levels; `--config hooks` links the kernels with every application hook on
+               (WORK/refs-hooks), which the operand tier and the call graph also train on
   compiler-rt  build LLVM compiler-rt builtins references with clang (--clang, default Homebrew llvm@22)
   fixture      build the held-out firmware fixtures with a toolchain not used for training (14.3.rel1); with --eval,
                write their stripped twins, raw images and libid truth into tests/fixtures
   profiles     print the bundled index's build profiles (JSON) for signature_bundle_index
+  dev          build the dev split (WORK/dev): the owned dev-app firmware with toolchains, options and a kernel
+               configuration training does not use, each with a stripped twin and libid truth (`fetch --dev`
+               first). Iterate on dev; the 14.3 fixtures are the final split
+  negatives    build the negative split (WORK/negatives): Thumb references of libraries no embedded signature
+               covers (the flywheel corpus's zlib, LZ4, cJSON, inih, tinyexpr), where any name is a false one
 
 The whole regeneration (see docs/signature-corpus.md#embedded-firmware-set):
 
@@ -73,6 +79,17 @@ SOURCES = {
     ),
 }
 
+# Development toolchains, used for the dev split only: never for training, and none is the held-out 14.3. The xPack
+# build is the only arm64 macOS GCC 11 (Arm published 11.3.rel1 for x86-64 macOS only); its newlib is built from
+# Arm's sources by the xPack project. release -> (url, sha256).
+XPACK_URL = ("https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v11.3.1-1.1/"
+             "xpack-arm-none-eabi-gcc-11.3.1-1.1-darwin-arm64.tar.gz")
+DEV_TOOLCHAINS = {
+    "xpack-11.3.1-1.1": (XPACK_URL, "99de78184f5548c65b980130c9438a31a602ddbbe9515f3d82bf000b67f8c835"),
+    "12.2.rel1": (ARM_URL.format(v="12.2.rel1"), "21a9e875250bcb0db8df4cb23dd43c94c00a1d3b98ecba9cdd6ed51586b12248"),
+    "13.2.rel1": (ARM_URL.format(v="13.2.rel1"), "39c44f8af42695b7b871df42e346c09fee670ea8dfc11f17083e296ea2b0d279"),
+}
+
 COMPILER_RT_URL = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz"
 COMPILER_RT_SHA256 = "922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888"
 
@@ -121,14 +138,25 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def fetch(work):
+def fetch(work, dev=False):
+    """The pinned training and held-out inputs; with `dev`, instead the dev toolchains, the 13.3 toolchain the dev
+    split's configuration cells use and the negative libraries' sources."""
     downloads = work / "dl"
     downloads.mkdir(parents=True, exist_ok=True)
-    items = [(f"arm-{v}.tar.xz", ARM_URL.format(v=v), digest, work / "tc" / v, 1) for v, digest in TOOLCHAINS.items()]
-    items += [(f"{name}.tar.gz", url, digest, work / "src" / name, 1) for name, (url, digest) in SOURCES.items()]
-    # Only compiler-rt's directory of the LLVM monorepo archive is unpacked.
-    items.append(("llvm-project-22.1.8.src.tar.xz", COMPILER_RT_URL, COMPILER_RT_SHA256,
-                  work / "src" / "compiler-rt-22.1.8", 2))
+    if dev:
+        items = [(f"{release}.tar.{url.rsplit('.', 1)[1]}", url, digest, work / "tc" / release, 1)
+                 for release, (url, digest) in DEV_TOOLCHAINS.items()]
+        items.append(("arm-13.3.rel1.tar.xz", ARM_URL.format(v="13.3.rel1"), TOOLCHAINS["13.3.rel1"],
+                      work / "tc" / "13.3.rel1", 1))
+        items += [(f"{name}.tar.gz", url, digest, work / "src" / name, 1)
+                  for name, (url, digest, _) in negative_sources().items()]
+    else:
+        items = [(f"arm-{v}.tar.xz", ARM_URL.format(v=v), digest, work / "tc" / v, 1)
+                 for v, digest in TOOLCHAINS.items()]
+        items += [(f"{name}.tar.gz", url, digest, work / "src" / name, 1) for name, (url, digest) in SOURCES.items()]
+        # Only compiler-rt's directory of the LLVM monorepo archive is unpacked.
+        items.append(("llvm-project-22.1.8.src.tar.xz", COMPILER_RT_URL, COMPILER_RT_SHA256,
+                      work / "src" / "compiler-rt-22.1.8", 2))
     for file, url, digest, destination, strip in items:
         archive = downloads / file
         if not archive.exists():
@@ -367,21 +395,24 @@ def compiler_rt_refs(work, clangs, out):
     print(f"{len(tasks)} compiler-rt references in {out}", file=sys.stderr)
 
 
-def refs(work, releases, out):
+def refs(work, releases, out, configs=None):
+    """Every reference of `releases`; with `configs`, only the FreeRTOS kernels in those configurations (`hooks`
+    builds the references the operand tier and the call graph add, into their own directory)."""
     out.mkdir(parents=True, exist_ok=True)
     tasks = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
         for release in releases:
             toolchain = Toolchain(work, release)
-            for output, inputs in library_refs(toolchain, out):
-                tasks.append(pool.submit(link_reference, toolchain, output, inputs))
+            if configs is None:
+                for output, inputs in library_refs(toolchain, out):
+                    tasks.append(pool.submit(link_reference, toolchain, output, inputs))
+                for optimisation in OPTIMISATIONS:
+                    tasks.append(pool.submit(build_hal, work, toolchain, optimisation, out))
             for kernel in ["freertos-V11.1.0", "freertos-V10.6.2"]:
                 for core in FREERTOS_PORTS:
-                    for config in ["full", "small"]:
+                    for config in configs or ["full", "small"]:
                         for optimisation in OPTIMISATIONS:
                             tasks.append(pool.submit(build_freertos, work, toolchain, kernel, core, config, optimisation, out))
-            for optimisation in OPTIMISATIONS:
-                tasks.append(pool.submit(build_hal, work, toolchain, optimisation, out))
         for task in tasks:
             task.result()
     print(f"{len(tasks)} references in {out}", file=sys.stderr)
@@ -456,14 +487,153 @@ def commit(work, evaluator, name, elf, destination):
     image.chmod(0o644)
 
 
+# The dev split: cell -> (toolchain release, core, optimisation, libc, uses HAL). Every cell keeps GCC and changes
+# what training has not seen: the GCC release (xPack 11.3, 12.2 and 13.2 never train), or, on a training toolchain
+# (13.3), only the options and the kernel configuration. All build the dev program with the dev kernel
+# configuration (dev-app/FreeRTOSConfig.h), unlike the two training ones and the fixture's.
+DEV_CELLS = {
+    f"dev-{tag}-{core}-{optimisation}": (release, core, optimisation, libc, core == "m4f")
+    for release, tag in [("xpack-11.3.1-1.1", "gcc11.3"), ("12.2.rel1", "gcc12.2"), ("13.2.rel1", "gcc13.2")]
+    for core, optimisation, libc in [("m4f", "Os", "nano"), ("m0", "O1", "full"), ("m3", "O2", "nano")]
+}
+DEV_CELLS.update({
+    "dev-gcc13.3-m4f-O1": ("13.3.rel1", "m4f", "O1", "nano", True),
+    "dev-gcc13.3-m0-Os": ("13.3.rel1", "m0", "Os", "full", False),
+})
+DEV_HAL_MODULES = ["", "_cortex", "_rcc", "_gpio", "_spi", "_i2c", "_adc", "_adc_ex", "_crc", "_dma", "_pwr"]
+
+
+def build_firmware(work, toolchain, core, optimisation, libc, hal, app, output):
+    """Links one FreeRTOS firmware from `app`'s main.c, startup.c, dev.ld and FreeRTOSConfig.h, as `fixture` links
+    the fixtures. Returns copies of the program's own objects (main and startup), beside `output`."""
+    build = work / "build" / output.stem
+    if build.exists():
+        shutil.rmtree(build)
+    kernel = work / "src" / "freertos-V11.1.0"
+    port = kernel / "portable" / "GCC" / FREERTOS_PORTS[core]
+    sources = [app / "main.c", app / "startup.c"]
+    sources += [kernel / file for file in FREERTOS_FILES] + port_sources(port)
+    sources += [kernel / "portable" / "MemMang" / "heap_4.c"]
+    flags = [*CORES[core], f"-{optimisation}", "-ffunction-sections", "-fdata-sections", "-g0"]
+    flags += [f"-DEMBSIG_PRIO_BITS={3 if core == 'm0' else 4}", f"-DEMBSIG_PORT_OPTIMISED={0 if core == 'm0' else 1}"]
+    includes = [app, kernel / "include", port]
+    if hal:
+        flags += ["-DSTM32F407xx", "-DUSE_HAL_DRIVER", "-DEMBSIG_HAL"]
+        includes += [hal_configuration(work, build / "conf"), *hal_includes(work)]
+        hal_source = work / "src" / "f4hal-v1.8.3" / "Src"
+        sources += [hal_source / f"stm32f4xx_hal{module}.c" for module in DEV_HAL_MODULES]
+        sources += [work / "src" / "cmsis-device-f4-v2.6.10" / "Source" / "Templates" / "system_stm32f4xx.c"]
+    flags += [f"-I{path}" for path in includes]
+    objects = compile_objects(toolchain, flags, sources, build / "obj")
+    specs = ["--specs=nano.specs"] if libc == "nano" else []
+    link = [toolchain.gcc, *CORES[core], *specs, "--specs=nosys.specs", "-nostartfiles", "-Wl,--gc-sections"]
+    link += ["-Wl,--build-id=none", f"-Wl,-T,{app / 'dev.ld'}", "-Wl,-e,Reset_Handler", *objects, "-lm", "-o", output]
+    run(link)
+    program = output.parent / "program"
+    program.mkdir(parents=True, exist_ok=True)
+    kept = []
+    for obj in objects[:2]:
+        kept.append(program / obj.name)
+        shutil.copy(obj, kept[-1])
+    shutil.rmtree(build)
+    return kept
+
+
+def dev(work, evaluator, cells):
+    """The dev split under WORK/dev/<cell>/: the symbolized firmware, its stripped twin and its libid truth (the
+    functions the same toolchain's library references define, minus the dev program's objects). A dev
+    toolchain's references are linked first, into WORK/refs-dev/<release>; the 13.3 cells use training's."""
+    app = HERE / "dev-app"
+    for name in cells:
+        release, core, optimisation, libc, hal = DEV_CELLS[name]
+        toolchain = Toolchain(work, release)
+        if release in DEV_TOOLCHAINS:
+            libraries = work / "refs-dev" / release
+            if not libraries.exists():
+                partial = libraries.with_name(release + ".partial")
+                refs(work, [release], partial)
+                partial.rename(libraries)
+            libraries = sorted(libraries.glob("*.elf"))
+        else:
+            libraries = sorted((work / "refs").glob(f"*-gcc{toolchain.version}-*.elf"))
+        if not libraries:
+            raise RuntimeError(f"{name}: no library references for {release}")
+        cell = work / "dev" / name
+        if cell.exists():
+            shutil.rmtree(cell)
+        cell.mkdir(parents=True)
+        elf = cell / f"{name}.elf"
+        program = build_firmware(work, toolchain, core, optimisation, libc, hal, app, elf)
+        stripped = cell / f"{name}.stripped.elf"
+        run([evaluator, "strip", elf, stripped])
+        command = [evaluator, "truth", elf, "--stripped", stripped]
+        for library in libraries:
+            command += ["--library", library]
+        for obj in program:
+            command += ["--program", obj]
+        (cell / f"{name}.truth.json").write_text(run(command).stdout)
+        print(f"{elf}: GCC {toolchain.version} {core} -{optimisation} newlib-{libc}", file=sys.stderr)
+
+
+def negative_sources():
+    """The negative libraries, pinned as the flywheel corpus pins them (tools/flywheel/corpus.json): name ->
+    (url, sha256, (include directories, sources))."""
+    corpus = json.loads((REPO / "tools" / "flywheel" / "corpus.json").read_text())
+    wanted = {"zlib": "1.3.1", "lz4": "1.10.0", "cjson": "1.7.18", "inih": "r58", "tinyexpr": "1.1.1"}
+    found = {}
+    for library in corpus["libraries"]:
+        version = wanted.get(library["name"].lower())
+        for entry in library["versions"]:
+            if entry["version"] == version:
+                found[f"neg-{library['name'].lower()}-{version}"] = (
+                    entry["url"], entry["sha256"], (library["include"], library["sources"]))
+    if len(found) != len(wanted):
+        raise RuntimeError(f"negative sources: found {sorted(found)} of {sorted(wanted)} in tools/flywheel/corpus.json")
+    return found
+
+
+def negatives(work, release, out):
+    """Thumb references of the negative libraries (no embedded signature covers them) for three cores at -Os and
+    -O2, linked like the library references (stubs for the C library they call). Any name on them is false."""
+    out.mkdir(parents=True, exist_ok=True)
+    toolchain = Toolchain(work, release)
+
+    def build(root, flags, sources, output):
+        objects = compile_objects(toolchain, flags, sources, work / "build" / output.stem)
+        link_reference(toolchain, output, objects)
+        shutil.rmtree(work / "build" / output.stem)
+
+    tasks = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        for name, (_, _, (include, sources)) in negative_sources().items():
+            root = work / "src" / name
+            for core in ["m0", "m3", "m4f"]:
+                for optimisation in ["Os", "O2"]:
+                    flags = [*CORES[core], f"-{optimisation}", "-ffunction-sections", "-g0", "-w"]
+                    flags += [f"-I{root / path}" for path in include]
+                    output = out / f"{name}-gcc{toolchain.version}-{core}-{optimisation}.elf"
+                    tasks.append(pool.submit(build, root, flags, [root / source for source in sources], output))
+        for task in tasks:
+            task.result()
+    print(f"{len(tasks)} negative references in {out}", file=sys.stderr)
+
+
 NEWLIB_VERSIONS = {"12.3.rel1": "4.3.0", "13.3.rel1": "4.4.0", "14.3.rel1": "4.5.0", "15.2.rel1": "4.5.0"}
 GCC_VERSIONS = {"12.3.rel1": "12.3.1", "13.3.rel1": "13.3.1", "14.3.rel1": "14.3.1", "15.2.rel1": "15.2.1"}
 RECIPE = ("tools/embedded-signatures/build.py {step}; hashed by crates/rampage-eval/examples/embedded_signatures.rs "
           "(scheme 3 over discovered extents, collision-safe union, exact fallbacks withheld)")
 
 
-def profiles(releases):
-    """The bundled index's build profiles: one per library and toolchain."""
+OPERAND_RECIPE = ("tools/embedded-signatures/build.py {step}; hashed by "
+                  "crates/rampage-eval/examples/embedded_operands.rs (scheme 4: scheme 3 with Thumb load/store offsets "
+                  "and stack adjustments masked; collision-safe union, the negative split as tombstones)")
+
+
+def profiles(releases, operands=False):
+    """The bundled index's build profiles: one per library and toolchain (`operands`: the operand tier's, whose
+    kernels also include the hooks configuration)."""
+    recipe = OPERAND_RECIPE if operands else RECIPE
+    kernels = "the full, small and hooks" if operands else "the full and small"
     multilibs = "thumb v6-m/nofp, v7-m/nofp, v7e-m/nofp, v7e-m+fp/hard, v7e-m+dp/hard"
     rows = []
     for release in releases:
@@ -485,7 +655,7 @@ def profiles(releases):
                 "optimization": "prebuilt multilib archives as the toolchain ships them (build flags unrecorded)",
                 "license": license_,
                 "source": toolchain_url,
-                "source_recipe": RECIPE.format(step=f"refs: whole-archive link of {scope} per multilib"),
+                "source_recipe": recipe.format(step=f"refs: whole-archive link of {scope} per multilib"),
                 "archive_sha256": TOOLCHAINS[release],
                 "archive_identity_unavailable": None,
             })
@@ -500,7 +670,7 @@ def profiles(releases):
                 "optimization": " ".join(f"-{level}" for level in OPTIMISATIONS),
                 "license": "MIT",
                 "source": url,
-                "source_recipe": RECIPE.format(step="refs: kernel, port and heap_4 with the full and small "
+                "source_recipe": recipe.format(step=f"refs: kernel, port and heap_4 with {kernels} "
                                                "FreeRTOSConfig.h under tools/embedded-signatures"),
                 "archive_sha256": digest,
                 "archive_identity_unavailable": None,
@@ -515,7 +685,7 @@ def profiles(releases):
             "optimization": " ".join(f"-{level}" for level in OPTIMISATIONS),
             "license": "BSD-3-Clause (HAL/LL); Apache-2.0 (cmsis-device-f4, CMSIS core)",
             "source": url,
-            "source_recipe": RECIPE.format(step="refs: every Src/*.c except templates"),
+            "source_recipe": recipe.format(step="refs: every Src/*.c except templates"),
             "archive_sha256": digest,
             "archive_identity_unavailable": None,
         })
@@ -528,7 +698,7 @@ def profiles(releases):
         "optimization": "-O2 -Os -O3",
         "license": "Apache-2.0 WITH LLVM-exception",
         "source": COMPILER_RT_URL,
-        "source_recipe": RECIPE.format(step="compiler-rt: generic C builtins with the ARM assembly replacing them"),
+        "source_recipe": recipe.format(step="compiler-rt: generic C builtins with the ARM assembly replacing them"),
         "archive_sha256": COMPILER_RT_SHA256,
         "archive_identity_unavailable": None,
     })
@@ -537,24 +707,37 @@ def profiles(releases):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["fetch", "refs", "compiler-rt", "fixture", "profiles"])
+    parser.add_argument("command", choices=["fetch", "refs", "compiler-rt", "fixture", "profiles", "dev", "negatives"])
+    parser.add_argument("--dev", action="store_true", help="fetch: the dev split's toolchains and negative sources")
+    parser.add_argument("--operands", action="store_true", help="profiles: the operand tier's index profiles")
+    parser.add_argument("--cell", action="append", help="dev: build only these cells (default: all)")
+    parser.add_argument("--config", action="append", choices=["full", "small", "hooks"],
+                        help="refs: only the FreeRTOS kernels in these configurations (hooks: the operand tier's and "
+                        "call graph's extra references, into WORK/refs-hooks)")
     parser.add_argument("--work", type=Path, default=Path("/private/var/tmp/rampage-embsig-work"))
     parser.add_argument("--toolchain", action="append", help="toolchain release (refs: default the training set)")
     parser.add_argument("--clang", action="append", help="compiler-rt: clang executable (default: Homebrew llvm@22)")
     parser.add_argument("--output", type=Path, help="refs: default WORK/refs; fixture: default WORK/fixtures")
     parser.add_argument("--eval", type=Path, help="fixture: rampage-eval, to write the committed stripped ELFs, raw "
-                        "images and truth into tests/fixtures")
+                        "images and truth into tests/fixtures; dev: rampage-eval (required)")
     arguments = parser.parse_args()
     work = arguments.work.resolve()
     if arguments.command == "fetch":
-        fetch(work)
+        fetch(work, arguments.dev)
+    elif arguments.command == "dev":
+        if not arguments.eval:
+            parser.error("dev needs --eval PATH-TO-rampage-eval")
+        dev(work, arguments.eval.resolve(), arguments.cell or list(DEV_CELLS))
+    elif arguments.command == "negatives":
+        negatives(work, (arguments.toolchain or ["13.2.rel1"])[0], arguments.output or work / "negatives")
     elif arguments.command == "refs":
-        refs(work, arguments.toolchain or TRAINING, arguments.output or work / "refs")
+        default = work / ("refs-hooks" if arguments.config == ["hooks"] else "refs")
+        refs(work, arguments.toolchain or TRAINING, arguments.output or default, arguments.config)
     elif arguments.command == "compiler-rt":
         clangs = arguments.clang or ["/opt/homebrew/opt/llvm@22/bin/clang"]
         compiler_rt_refs(work, clangs, arguments.output or work / "refs")
     elif arguments.command == "profiles":
-        print(json.dumps(profiles(arguments.toolchain or TRAINING), indent=2))
+        print(json.dumps(profiles(arguments.toolchain or TRAINING, arguments.operands), indent=2))
     else:
         destination = arguments.output or work / "fixtures"
         destination.mkdir(parents=True, exist_ok=True)
