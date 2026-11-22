@@ -42,6 +42,10 @@ pub fn allowed(path: &str, allowlist: &[&str]) -> bool {
     if path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == ".." || part == ".") {
         return false;
     }
+    // Files git reads as configuration (filters, attributes, submodules) are never part of a change.
+    if path.split('/').any(|part| part.starts_with(".git")) {
+        return false;
+    }
     allowlist.iter().any(|entry| match entry.strip_suffix('/') {
         Some(directory) => path.strip_prefix(directory).is_some_and(|rest| rest.starts_with('/') && rest.len() > 1),
         None => path == *entry,
@@ -232,6 +236,7 @@ pub fn policy_violations(diff: &Diff, allowlist: &[&str], limits: Limits) -> Vec
     }
     let mut current = String::new();
     let (mut added, mut literal) = (0, 0);
+    let mut added_text: BTreeMap<String, String> = BTreeMap::new();
     for line in diff.patch.lines() {
         if let Some(header) = line.strip_prefix("diff --git ") {
             current = match header.strip_prefix("a/").and_then(|rest| rest.split_once(" b/")) {
@@ -265,9 +270,16 @@ pub fn policy_violations(diff: &Diff, allowlist: &[&str], limits: Limits) -> Vec
             if literal_line(text) {
                 literal += 1;
             }
-            if let Some(marker) = forbidden(text) {
-                violations.push(format!("{current}: added line uses `{marker}`: {}", text.trim()));
-            }
+            let file = added_text.entry(current.clone()).or_default();
+            file.push_str(text);
+            file.push('\n');
+        }
+    }
+    // The marker check reads each file's added content as one text, whitespace collapsed, so a marker split across
+    // lines (`include_bytes` / `!(...)`, `std` / `::` / `fs`) is found. It names the marker, never the content.
+    for (file, text) in &added_text {
+        if let Some(marker) = forbidden(text) {
+            violations.push(format!("{file}: added content uses `{marker}`"));
         }
     }
     if added > limits.max_added_lines {
@@ -307,7 +319,8 @@ impl Repo {
     /// git with no global or system configuration, no hooks, no fsmonitor, no external diff or textconv, and the
     /// recorded directories: a configuration file, hook or `.git` file the agent wrote changes nothing it runs.
     pub fn git(&self) -> Command {
-        let mut command = Command::new("git");
+        let tools = crate::flywheel_code_sandbox::tools();
+        let mut command = crate::flywheel_code_sandbox::tool(&tools.git);
         for variable in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_CONFIG", "GIT_EXEC_PATH"]
         {
             command.env_remove(variable);
@@ -318,7 +331,8 @@ impl Repo {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_DIR", &self.git_dir)
             .args(["-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null", "-c", "core.untrackedCache=false"])
-            .args(["-c", "diff.external=", "-c", "core.pager=cat", "-c", "protocol.allow=never"]);
+            .args(["-c", "diff.external=", "-c", "core.pager=cat", "-c", "protocol.allow=never"])
+            .args(["-c", "core.attributesFile=/dev/null"]);
         match &self.work_tree {
             Some(tree) => {
                 command.env("GIT_WORK_TREE", tree).current_dir(tree);
@@ -338,7 +352,7 @@ impl Repo {
 
 /// The repository the harness was started in: its common git directory, read once from the operator's checkout.
 pub fn operator_repo(checkout: &Path) -> Result<(Repo, PathBuf), String> {
-    let mut command = Command::new("git");
+    let mut command = crate::flywheel_code_sandbox::tool(&crate::flywheel_code_sandbox::tools().git);
     command.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").arg("-C").arg(checkout);
     let common = output(command.args(["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"]))?;
     let mut lines = common.lines();
@@ -384,7 +398,8 @@ pub fn export_tree(repo: &Repo, base: &str, destination: &Path, excluded: &[&str
     std::fs::create_dir_all(destination).map_err(|error| format!("{}: {error}", destination.display()))?;
     let archive = destination.with_extension("tar");
     output(repo.git().args(["archive", "--format=tar", "-o"]).arg(&archive).arg(base))?;
-    let extracted = output(Command::new("tar").arg("-xf").arg(&archive).arg("-C").arg(destination));
+    let tar = &crate::flywheel_code_sandbox::tools().tar;
+    let extracted = output(crate::flywheel_code_sandbox::tool(tar).arg("-xf").arg(&archive).arg("-C").arg(destination));
     let _ = std::fs::remove_file(&archive);
     extracted?;
     for path in excluded {
@@ -425,7 +440,7 @@ fn walk(root: &Path, skip: &[&str]) -> Result<BTreeMap<String, Entry>, String> {
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
-                let bytes = std::fs::read(item.path()).map_err(|error| format!("{key}: {error}"))?;
+                let bytes = read_nofollow(root, &key).map_err(|error| format!("{key}: {error}"))?;
                 let executable = metadata.permissions().mode() & 0o111 != 0;
                 entries.insert(key, Entry::File { executable, digest: Sha256::digest(&bytes).into() });
             } else {
@@ -439,7 +454,7 @@ fn walk(root: &Path, skip: &[&str]) -> Result<BTreeMap<String, Entry>, String> {
 /// What changed in `session` against the harness's reference export `reference`: changed paths (added, modified or
 /// deleted), and those that are special. Read with plain file operations; nothing runs in the session's tree. Its
 /// top-level `.git` (the session's own history) and the generated heuristics file are left out.
-pub fn read_changes(session: &Path, reference: &Path) -> Result<(Vec<String>, Vec<String>), String> {
+pub fn read_changes(session: &Path, reference: &Path) -> Result<Changes, String> {
     let skip = [".git"];
     let (now, before) = (walk(session, &skip)?, walk(reference, &skip)?);
     let mut changed = BTreeSet::new();
@@ -474,27 +489,102 @@ pub fn read_changes(session: &Path, reference: &Path) -> Result<(Vec<String>, Ve
             changed.insert(path.clone());
         }
     }
-    Ok((changed.into_iter().collect(), special.into_iter().collect()))
+    let digests = now
+        .into_iter()
+        .filter_map(|(path, entry)| match entry {
+            Entry::File { digest, .. } => Some((path, digest)),
+            Entry::Special => None,
+        })
+        .collect();
+    Ok(Changes { changed: changed.into_iter().collect(), special: special.into_iter().collect(), digests })
+}
+
+/// What [`read_changes`] found: changed paths, special ones, and every plain file's digest as it was read.
+pub struct Changes {
+    pub changed: Vec<String>,
+    pub special: Vec<String>,
+    pub digests: BTreeMap<String, [u8; 32]>,
+}
+
+/// The bytes of the plain file `relative` under `root`, opened one component at a time without following a symlink
+/// anywhere below `root`: a directory or file swapped for a link mid-read is an error, never a read through it.
+pub fn read_nofollow(root: &Path, relative: &str) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    let name = |bytes: &[u8]| std::ffi::CString::new(bytes).map_err(|_| std::io::Error::other("NUL in a path"));
+    let open = |directory: Option<&OwnedFd>, path: &std::ffi::CStr, flags: libc::c_int| -> std::io::Result<OwnedFd> {
+        // SAFETY: valid NUL-terminated path and directory descriptor; the result is checked before use.
+        let fd = unsafe {
+            match directory {
+                Some(directory) => libc::openat(directory.as_raw_fd(), path.as_ptr(), flags),
+                None => libc::open(path.as_ptr(), flags),
+            }
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: a fresh descriptor this function owns.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    };
+    let directory_flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let mut directory = open(None, &name(root.as_os_str().as_bytes())?, directory_flags)?;
+    let parts: Vec<&str> = relative.split('/').collect();
+    let Some((last, parents)) = parts.split_last() else { return Err(std::io::Error::other("empty path")) };
+    for part in parents.iter().chain(std::iter::once(last)) {
+        if part.is_empty() || *part == "." || *part == ".." {
+            return Err(std::io::Error::other("unusual path component"));
+        }
+    }
+    for part in parents {
+        directory = open(Some(&directory), &name(part.as_bytes())?, directory_flags)?;
+    }
+    let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+    let mut file = std::fs::File::from(open(Some(&directory), &name(last.as_bytes())?, flags)?);
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a plain file"));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// The change in `session` as a [`Diff`]: the allowlisted plain files are copied into the harness's worktree `gate`
 /// (reset to `base` first) and diffed there by the harness's git; other changed paths are only listed, never copied.
 pub fn capture(session: &Path, reference: &Path, gate: &Repo, base: &str, allowlist: &[&str]) -> Result<Diff, String> {
-    let (paths, special) = read_changes(session, reference)?;
     let tree = gate.work_tree.clone().ok_or("the gate repository has no work tree")?;
     output(gate.git().args(["reset", "--quiet", "--hard", base]))?;
     output(gate.git().args(["clean", "-q", "-ffdx"]))?;
-    for path in paths.iter().filter(|path| allowed(path, allowlist) && !special.contains(path)) {
-        let (from, to) = (session.join(path), tree.join(path));
-        if from.is_file() {
-            if let Some(parent) = to.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+    // The session is stopped while its tree is read, and every file is read without following a link and must
+    // hash as the walk saw it: a file swapped for a link to anything outside the tree yields nothing.
+    let (paths, mut special) = {
+        let _frozen = crate::flywheel_code_sandbox::freeze_session();
+        let changes = read_changes(session, reference)?;
+        let mut special = changes.special.clone();
+        for path in changes.changed.iter().filter(|path| allowed(path, allowlist) && !changes.special.contains(path)) {
+            let to = tree.join(path);
+            match changes.digests.get(path) {
+                Some(digest) => match read_nofollow(session, path) {
+                    Ok(bytes) if <[u8; 32]>::from(Sha256::digest(&bytes)) == *digest => {
+                        if let Some(parent) = to.parent() {
+                            std::fs::create_dir_all(parent)
+                                .map_err(|error| format!("{}: {error}", parent.display()))?;
+                        }
+                        std::fs::write(&to, &bytes).map_err(|error| format!("{path}: {error}"))?;
+                    }
+                    _ => special.push(path.clone()),
+                },
+                None => {
+                    if to.exists() {
+                        std::fs::remove_file(&to).map_err(|error| format!("{path}: {error}"))?;
+                    }
+                }
             }
-            std::fs::copy(&from, &to).map_err(|error| format!("{path}: {error}"))?;
-        } else if to.exists() {
-            std::fs::remove_file(&to).map_err(|error| format!("{path}: {error}"))?;
         }
-    }
+        (changes.changed, special)
+    };
+    special.sort();
+    special.dedup();
     output(gate.git().args(["add", "-A"]))?;
     let patch = output(gate.git().args(["diff", "--cached", "--binary", "--no-renames", "--full-index"]).args([
         "--no-ext-diff",
@@ -704,6 +794,53 @@ mod tests {
             assert!(!violations(&format!("{FILE}{header}\n")).is_empty(), "{header}");
         }
         assert!(violations(&format!("{FILE}new file mode 100644\n")).is_empty());
+    }
+
+    /// A marker split across lines is still found, and the refusal names the marker, never the content.
+    #[test]
+    fn markers_split_across_lines_are_refused_without_echoing_the_content() {
+        for split in [
+            "+const T: &[u8] = include_bytes\n+!(\"/srv/shared/blob\");\n",
+            "+#\n+[\n+path = \"/srv/shared/blob.rs\"]\n+mod table;\n",
+            "+let t = std\n+::\n+fs\n+::\n+read(\"/srv/shared/blob\");\n",
+            "+let v = env\n+:: var(\"HOME\");\n",
+        ] {
+            let found = violations(&format!("{FILE}{split}"));
+            assert_eq!(found.len(), 1, "{split}: {found:?}");
+            assert!(!found[0].contains("/srv/shared") && !found[0].contains("HOME"), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn git_attribute_and_module_files_are_never_allowed() {
+        for path in [
+            "crates/rampage-signatures/src/heuristics/.gitattributes",
+            "crates/rampage-signatures/tests/.gitmodules",
+            "crates/rampage-signatures/tests/.git/config",
+        ] {
+            assert!(!allowed(path, LIBID_ALLOWLIST), "{path}");
+        }
+    }
+
+    /// A file read for a change is opened one component at a time without following a link: a directory or file
+    /// swapped for a link to anything outside the tree reads nothing.
+    #[test]
+    #[cfg(unix)]
+    fn reads_never_follow_a_link_below_the_tree() {
+        let root = canonical(&std::env::temp_dir()).join(format!("rampage-code-nofollow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (tree, outside) = (root.join("tree"), root.join("outside"));
+        std::fs::create_dir_all(tree.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("truth.txt"), "truth").unwrap();
+        std::fs::write(tree.join("src/lib.rs"), "fn a() {}").unwrap();
+        assert_eq!(read_nofollow(&tree, "src/lib.rs").unwrap(), b"fn a() {}");
+        std::os::unix::fs::symlink(outside.join("truth.txt"), tree.join("src/link.rs")).unwrap();
+        assert!(read_nofollow(&tree, "src/link.rs").is_err());
+        std::os::unix::fs::symlink(&outside, tree.join("swapped")).unwrap();
+        assert!(read_nofollow(&tree, "swapped/truth.txt").is_err());
+        assert!(read_nofollow(&tree, "src/../../outside/truth.txt").is_err());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -413,10 +413,11 @@ It also fails on:
 - more than `--max-added-lines` (800) added lines, or more than `--max-literal-lines` (40) added lines that are mostly
   literal data (four or more number or string literals, or a string over 64 characters): a table of names or hashes
   does not fit in source;
-- an added line with a marker of file, environment, process or network access, such as `std::fs`, `env!`,
-  `include_str!`, `unsafe` or `#[path` (whitespace normalised first). This check is advisory: it is lexical, a comment
-  naming one of these fails too, and the sandbox, not the check, is what keeps the agent's code from reading what it
-  may not.
+- any `.git*` file (attributes, modules, ignore rules);
+- added content with a marker of file, environment, process or network access, such as `std::fs`, `env!`,
+  `include_str!`, `unsafe` or `#[path`, read per file as one text with whitespace collapsed, so a marker split across
+  lines counts. This check is advisory: it is lexical, a comment naming one of these fails too, and the sandbox, not
+  the check, is what keeps the agent's code from reading what it may not.
 
 ### Data from the training split
 
@@ -455,42 +456,73 @@ passed the allowlist and the literal cap. Like the bundled databases, it is in-s
 
 Every process the agent's code runs in is under a `sandbox-exec` profile:
 
-| Process | Cannot read | Cannot write | Network |
-|---|---|---|---|
-| The session (`claude`, its Bash, or the script) | the corpus, the flywheel directory, both repository checkouts (target directories, other worktrees, the git object store), `~/.claude` except Claude Code's own state files, `/tmp/claude-<uid>`, `--deny-read` paths | the home directory, except Claude Code's own state files and the session root | the proxy only |
-| The candidate's build | the same | everything but the gate's build target, the gate's private registry, its log directory and a temp directory | none |
-| The candidate's tests | the same | everything but a fresh test target of their own, their log directory and cargo's lock files | none |
-| Generation and naming with the candidate | the same, but a view of one split's stripped binaries (training: with its truth) and the base's discovery, read only | everything but their own cache and output | none |
+| Process | Can read | Can write | Network | Other channels |
+|---|---|---|---|---|
+| The session (`claude`, its Bash, or the script) | everything but the denied paths: the corpus, the flywheel directory, both repository checkouts (target directories, other worktrees, the git object store), `~/.claude`, `~/.claude.json`, `~/Library/Keychains`, `/tmp/claude-<uid>`, `--deny-read` paths | its session root only (its tree, a throwaway `HOME`, its cargo home and temp directory) | the proxy only | no preferences daemon (`cfprefsd`), pasteboard or keychain service; no view of or signal to other processes |
+| The candidate's build | only the system (`/System`, `/usr`, `/bin`, `/sbin`, `/private/etc`, `/private/var/db`, `/dev`), the developer tools and SDK, the Rust toolchain, the pinned programs' installations, the gate worktree and the gate's private registry | the gate's build target and registry, its log directory | none | no mach service, POSIX shared memory or semaphore; no view of or signal to other processes |
+| The candidate's tests | the same | a fresh test target and an output directory of their own (apart from the built binary), cargo's lock files | none | the same |
+| Generation | the same, but the training view, the built binary and the training split's discovery instead of the worktree | a directory of its own | none | the same |
+| Naming | the same, but one split's view, the built binary and that split's discovery | a directory of its own | none | the same |
 
-- **Writes:** no agent-influenced process can write the operator's home (shell, git and cargo configuration),
-  repository, git object store, corpus or flywheel directory. The gate's build target is written only by builds;
-  tests get a fresh target directory, so they cannot plant anything in the build the authoritative gate or the next
-  run uses.
-- **The harness's git** runs with no global or system configuration, no hooks, no fsmonitor and no external diff or
-  textconv, with its git directory and work tree given explicitly as recorded when it made them. It runs only in its
-  own worktree (the gate's) and the operator's repository, which no agent-influenced process can write.
+- **Reads:** the candidate's processes read nothing by default, so a file the session leaves outside the denied paths
+  (in a shared or temporary directory) cannot be pulled into a build, a test, the generated data or a final read's
+  rebuild. Their environment is cleared: the operator's variables (API keys, `RUSTC_WRAPPER`, `RUSTFLAGS`) do not reach
+  them, and the C compiler, archiver and SDK are passed by path because `xcrun` cannot run in there.
+- **Writes:** the session writes only its root. Its `HOME` is a throwaway directory there, so nothing it or Claude
+  Code writes reaches the operator's home (shell, git, cargo or Claude Code configuration, MCP servers), the package
+  manager's directories ahead of `/usr/bin` on PATH, or other apps' preferences. The gate's build target is written
+  only by builds; tests get a fresh target and their own directory; every built binary is hashed when copied out of
+  the target and checked before each run.
+- **The harness's own programs** (git, ps, tar, cp, cargo, cargo-nextest, the runner's interpreter, claude, the C
+  toolchain) are resolved to absolute paths once, before any session starts, and every child gets an explicit PATH
+  and environment. System tools come from their fixed locations (`/bin/ps`, `/usr/bin/tar`, ...).
+- **The harness's git** runs with no global or system configuration, no hooks, no fsmonitor, no attributes file and no
+  external diff or textconv, with its git directory and work tree given explicitly as recorded when it made them. It
+  runs only in its own worktrees and the operator's repository, which no agent-influenced process can write. A change
+  may hold no `.git*` file (attributes, modules, ignore rules).
+- **Reading the change:** the session is stopped (SIGSTOP on its tree, its tagged and marked processes) while its tree
+  is read; each file is opened one component at a time without following a link and must hash as the walk saw it. A
+  file or directory swapped for a link yields nothing. Policy refusals name the path and the marker, never the content.
 - **Neutral views:** a candidate names dev, the negatives and the final split from views with random directory names,
   neutral binary ids (`b0001`...), the same role and no library version, so its arguments, paths and manifest do not
   say which split it is. The number of binaries still differs between splits.
-- **Interrupts:** Ctrl-C or TERM stops every child process and removes the session root and views. A session script's
-  descendants are stopped when it ends, even ones that left its process group.
-- **Tested:** scripted sessions that try to read final files, list the corpus or write the checkout fail
-  (`flywheel_code_sandbox` and `CodeProfileTest` with a fake `claude`, which also reads its settings from the session
-  root); from inside the session's sandbox a TCP connection anywhere but the proxy fails, and the proxy refuses
-  hosts not allowed; a candidate test cannot write the gate's build target or the home directory; an fsmonitor hook
-  set in `~/.gitconfig` runs under plain git but not under the harness's git; the session tree has no
-  `tools/flywheel/corpus.json`; a naming failure reaches the session as "naming a split failed" and nothing else.
+- **Timing:** each session gate answer is padded to a multiple of `--answer-quantum-s` (300), so how long the
+  candidate's code took on dev carries little.
+- **Cleanup:** every profile of a run carries a marker (one denied and one allowed file that no other profile tells
+  apart). A process that cleared its environment, left its process group and was reparented still carries it: when
+  the session ends, when the run ends and on Ctrl-C or TERM, the harness stops every process of the user's started
+  during the run whose sandbox answers to the marker, and removes the session root and views. The operator's other
+  processes carry no marker.
+- **Authentication:** an agent session needs `ANTHROPIC_API_KEY` (the runner then starts `claude --bare`). The
+  operator's keychain and Claude Code login are out of reach: `~/Library/Keychains` is denied and the keychain service
+  lookups (`com.apple.SecurityServer`, `com.apple.securityd.xpc`) are refused. Using the operator's OAuth login instead
+  would need those mach services and the login keychain readable, which this harness does not allow.
+- **Tested:** scripted sessions that try to read final files, list the corpus or write the checkout fail; the session
+  cannot write `/opt/homebrew/bin` (or any directory outside its root), write a preference through `defaults`, use the
+  pasteboard or list processes; a TCP connection anywhere but the proxy fails and the proxy refuses hosts not allowed;
+  a candidate process cannot read a file in a temporary or shared directory, list the shared users directory or the home
+  directory, or list processes, and a test cannot write the build target or the scored binary; a marker split across
+  lines (`include_bytes` / `!(...)`, `#` / `[path ...]`, `std` / `::` / `fs`) is refused without echoing it; a file read
+  for a change never follows a link; an escaped, re-parented process with a cleared environment is found by its marker
+  and nothing else is; a frozen session makes no progress; an fsmonitor hook set in `~/.gitconfig` runs under plain git
+  but not under the harness's git; the session tree has no `tools/flywheel/corpus.json`; a naming failure reaches the
+  session as "names: failed" and nothing else.
 
 What it does not cover:
 
-- **Claude Code's minimal home set is a guess.** The paths the session may write under the home directory
-  (`~/.claude.json`, parts of `~/.claude`, `~/Library/Caches/claude-cli-nodejs`, `~/.local/state/claude`) were not
-  confirmed with a live session; `--claude-allow` adds paths. The first live run may need that.
+- **Claude Code under the sandbox is untested.** It has never run there (no paid run yet): whether it starts with a
+  throwaway `HOME`, no cfprefsd, no process listing, and writes only under the session root is for the first live run
+  to show.
 - **The model's API host is reachable** from the session's shell through the proxy, as Claude Code needs it.
 - **Counts:** a candidate could tell splits apart by how many binaries a view holds.
+- **Residual timing:** padding rounds each answer up to the quantum; a candidate that slows naming by a full quantum
+  still moves an answer by one step (about two bits per gate call, eight calls).
 - **Other channels:** the session can read the rest of the machine that is not denied (system files, the toolchain,
   the documentation in its tree, which gives aggregate final figures and the final split's library versions, but no
   sources or binaries of them). The sandbox is a macOS seatbelt profile, not a separate user or VM.
+- **The marker check is lexical and advisory.** It reads each file's added content as one text with whitespace
+  collapsed, and a comment naming a marker fails too; the read allowlist, not the check, keeps a build from pulling in
+  outside data.
 
 ### The gate
 
@@ -528,7 +560,10 @@ fuzzy matching at 0.95/0.05 over the base on dev and the negatives, the best mat
 `flywheel-code-final --corpus C --label L --reason TEXT` reads the final split once for run `L`:
 
 - It refuses a run whose gate did not pass, a `candidate.diff` that is not the one the run gated, and a change already
-  read on the same base (it looks for the change's hash and the base in the ledger).
+  read on the same base (it looks for the change's hash and the base in the ledger). The hash is of the exact diff, so
+  the same change with different whitespace counts as a new change; a reviewer should treat a second read of a
+  near-identical change as spent.
+- The run's denied paths (from `run.json`) and `--deny-read` paths hold while the final split is named.
 - It builds the base and the candidate again first, so a change that no longer builds does not use up the read.
 - It then appends the read to the corpus's `final-ledger.jsonl` with the reason and a `code_run` field (label,
   family, base, change hash), names the final split with both builds in the sandbox from a neutral view, and applies

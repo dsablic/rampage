@@ -28,7 +28,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::agent_bench_run::DEFAULT_RUNNER;
-use super::flywheel_code_sandbox::{Network, Proxy, Sandbox, canonical, interrupt, run_logged};
+use super::flywheel_code_sandbox::{
+    Ipc, Marker, Network, Proxy, Sandbox, canonical, interrupt, kill_all, marked, run_logged_with, tool, tools,
+};
 use super::flywheel_code_workspace::{
     Diff, GENERATED, LIBID_ALLOWLIST, Limits, Repo, SESSION_EXCLUDED, add_worktree, apply_diff, capture, export_tree,
     gate_client, make_view, operator_repo, output, policy_violations, remove_worktree,
@@ -46,29 +48,6 @@ const MAX_CASES: usize = 40;
 
 /// The hosts the session's proxy tunnels to by default: the model's API, nothing else.
 const DEFAULT_HOSTS: &[&str] = &["api.anthropic.com:443"];
-
-/// What Claude Code itself may write under the home directory, every other path of which the session may not write;
-/// the rest of `~/.claude` (other sessions' transcripts, history, settings) it may not read either. A best guess at
-/// the minimal set for Claude Code 2.1.x on macOS, not yet confirmed by a live run; `--claude-allow` adds paths.
-const CLAUDE_HOME_WRITABLE: &[&str] = &[
-    ".claude.json",
-    ".claude.json.backup",
-    ".claude.json.lock",
-    ".claude/cache",
-    ".claude/debug",
-    ".claude/plugins",
-    ".claude/session-env",
-    ".claude/sessions",
-    ".claude/shell-snapshots",
-    ".claude/state",
-    ".claude/statsig",
-    ".claude/telemetry",
-    ".claude/todos",
-    ".claude/policy-limits.json",
-    ".claude/remote-settings.json",
-    "Library/Caches/claude-cli-nodejs",
-    ".local/state/claude",
-];
 
 /// A family the code loop can run: what the agent may change and which crate's tests gate it.
 struct Family {
@@ -235,9 +214,9 @@ pub struct CodeRunArgs {
     /// `host:port` the session's proxy may tunnel to besides the model's API (repeatable).
     #[arg(long)]
     allow_host: Vec<String>,
-    /// More paths under the home directory Claude Code may write (repeatable), for the first live runs.
-    #[arg(long)]
-    claude_allow: Vec<PathBuf>,
+    /// Seconds a session gate answer is padded to a multiple of, so the time it took says little about dev.
+    #[arg(long, default_value_t = 300)]
+    answer_quantum_s: u64,
     /// Skip the fuzzy 0.95/0.05 reference column (it re-analyses every binary once per base).
     #[arg(long)]
     no_fuzzy_reference: bool,
@@ -283,6 +262,9 @@ pub struct CodeFinalArgs {
     repository_root: Option<PathBuf>,
     #[arg(long)]
     gate: Option<PathBuf>,
+    /// More paths the naming processes may not read (repeatable); the run's own denials always hold.
+    #[arg(long)]
+    deny_read: Vec<PathBuf>,
 }
 
 /// One gate stage's verdict.
@@ -327,7 +309,7 @@ struct GateRun {
     /// The size of the generated heuristics data.
     generated_bytes: usize,
     #[serde(skip)]
-    binary: Option<PathBuf>,
+    binary: Option<Binary>,
     elapsed_ms: u64,
 }
 
@@ -379,9 +361,11 @@ impl Views {
         Views { root, workers, dirs: Mutex::new(BTreeMap::new()) }
     }
 
-    /// The discovery cache the base writes and candidates read.
-    fn cache(&self) -> PathBuf {
-        self.root.join("cache")
+    /// The discovery cache of `split`'s view, which the base writes and candidates (and, for training, the generator)
+    /// read: one per split, so a process reading one split's discovery reads no other's.
+    fn cache(&self, split: Split) -> Result<PathBuf, String> {
+        let (view, _) = self.get(split)?;
+        Ok(self.root.join(format!("cache-{}", view.file_name().unwrap_or_default().to_string_lossy())))
     }
 
     /// Makes the view of `split`.
@@ -411,6 +395,29 @@ impl Views {
     }
 }
 
+/// A binary the gate built and then runs, with its SHA-256 as built, checked again before every run.
+#[derive(Debug, Clone, Default)]
+struct Binary {
+    path: PathBuf,
+    sha256: String,
+}
+
+impl Binary {
+    fn of(path: PathBuf) -> Result<Binary, String> {
+        let sha256 = rampage_api::flywheel::sha256_file(&path).map_err(|error| error.to_string())?;
+        Ok(Binary { path, sha256 })
+    }
+
+    fn check(&self) -> Result<(), String> {
+        let now = rampage_api::flywheel::sha256_file(&self.path).map_err(|error| error.to_string())?;
+        if now == self.sha256 {
+            Ok(())
+        } else {
+            Err(format!("{} changed after it was built; refusing to run it", self.path.display()))
+        }
+    }
+}
+
 /// Everything a gate run needs.
 struct Harness<'a> {
     base: String,
@@ -425,28 +432,17 @@ struct Harness<'a> {
     config: GateConfig,
     limits: LimitArgs,
     base_names: BTreeMap<Split, Named>,
-    base_binary: PathBuf,
+    base_binary: Binary,
     base_build_id: String,
     /// What no agent-influenced process may read.
     deny: Vec<PathBuf>,
+    /// What the candidate's deny-by-default sandboxes may read besides their carve-outs.
+    system_read: Vec<PathBuf>,
+    /// This run's sandbox marker, which finds every process its sandboxes started.
+    marker: Marker,
     family: &'static Family,
-    cargo: PathBuf,
-    nextest: bool,
     /// One gate at a time: they share the gate worktree.
     busy: Mutex<()>,
-}
-
-/// The `program` an absolute path names, or the first match on PATH.
-fn find_program(program: &str) -> Result<PathBuf, String> {
-    let path = Path::new(program);
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    let search = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&search)
-        .map(|directory| directory.join(program))
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| format!("{program} is not on PATH"))
 }
 
 /// The last `lines` lines of a log.
@@ -517,7 +513,7 @@ fn private_registry(operator: &Path, tree: &Path, home: &Path) -> Result<(), Str
     let own_index = home.join("registry/index").join(&index);
     if !own_index.exists() {
         create_dir(&home.join("registry/index"))?;
-        output(Command::new("cp").args(["-c", "-R"]).arg(index_root.join(&index)).arg(&own_index))?;
+        output(tool(&tools().cp).args(["-c", "-R"]).arg(index_root.join(&index)).arg(&own_index))?;
     }
     let (cache, own_cache) = (operator.join("registry/cache").join(&index), home.join("registry/cache").join(&index));
     create_dir(&own_cache)?;
@@ -532,22 +528,38 @@ fn private_registry(operator: &Path, tree: &Path, home: &Path) -> Result<(), Str
     std::fs::write(&stamp, digest).map_err(|error| error.to_string())
 }
 
+/// cargo by its pinned path with only the variables a build needs: the operator's other variables (API keys,
+/// `RUSTC_WRAPPER`, `RUSTFLAGS`) do not reach it.
+fn cargo_command(command: &mut Command, home: &Path, tmp: &Path) {
+    let tools = tools();
+    command
+        .env("HOME", tmp)
+        .env("TMPDIR", tmp)
+        .env("CARGO_HOME", home)
+        .env("RUSTUP_HOME", &tools.rustup_home)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TERM_COLOR", "never")
+        .env("LANG", "C");
+    for (key, value) in tools.toolchain_environment() {
+        command.env(key, value);
+    }
+}
+
 /// Unpacks every locked package (every platform's) into the private registry `home`, as the trusted harness, so the
 /// candidate's tests, which may not write the registry, find each one cargo resolves. Once per Cargo.lock.
-fn unpack_registry(cargo: &Path, tree: &Path, home: &Path) -> Result<(), String> {
+fn unpack_registry(tree: &Path, home: &Path) -> Result<(), String> {
     let stamp = home.join(".unpacked");
     let wanted = std::fs::read_to_string(home.join(".lock-sha256")).unwrap_or_default();
     if std::fs::read_to_string(&stamp).ok().as_deref() == Some(wanted.as_str()) {
         return Ok(());
     }
-    output(Command::new(cargo).current_dir(tree).env("CARGO_HOME", home).env("CARGO_NET_OFFLINE", "true").args([
-        "metadata",
-        "--format-version",
-        "1",
-        "--locked",
-        "--all-features",
-    ]))
-    .map_err(|error| format!("unpacking the private registry: {error}"))?;
+    let tmp = home.join("tmp");
+    create_dir(&tmp)?;
+    let mut command = tool(&tools().cargo);
+    command.env_clear().env("PATH", tools().path()).current_dir(tree);
+    cargo_command(&mut command, home, &tmp);
+    output(command.args(["metadata", "--format-version", "1", "--locked", "--all-features"]))
+        .map_err(|error| format!("unpacking the private registry: {error}"))?;
     std::fs::write(&stamp, wanted).map_err(|error| error.to_string())
 }
 
@@ -561,22 +573,27 @@ impl Harness<'_> {
         self.gate.work_tree.clone().unwrap_or_default()
     }
 
-    /// A sandbox for the agent's code: no network, no writes but `writable`, `readable` carved out of the denied paths.
+    /// A sandbox for the agent's code: reads only the system, the toolchain and `readable`; writes only `writable`; no
+    /// network, no mach service, shared memory or view of other processes; this run's marker.
     fn candidate_sandbox(&self, readable: &[&Path], writable: &[&Path]) -> Sandbox {
         Sandbox {
             deny: self.deny.clone(),
             protect: Vec::new(),
             deny_all_writes: true,
+            deny_all_reads: true,
+            system_read: self.system_read.clone(),
             read_only: readable.iter().map(|path| path.to_path_buf()).collect(),
             allow: writable.iter().map(|path| path.to_path_buf()).collect(),
             network: Network::Denied,
+            ipc: Ipc::Closed,
+            marker: Some(self.marker.clone()),
         }
     }
 
     /// cargo in the gate worktree with `target` as its target directory, offline from the gate's private registry, in
     /// the sandbox, its output in `out_dir/log`. Builds may write the registry (unpacking archives; some dependencies'
     /// build scripts generate code into their own sources); the candidate's tests, which run the agent's code, may
-    /// write only cargo's lock files in it.
+    /// write only cargo's lock files in it, and `out_dir` is then a directory of their own.
     fn cargo(
         &self,
         out_dir: &Path,
@@ -601,22 +618,17 @@ impl Harness<'_> {
             writable.extend(locks.iter().map(PathBuf::as_path));
             self.candidate_sandbox(&[&tree, &home], &writable)
         };
-        let mut command = sandbox.command(&out_dir.join(format!("{log}.sb")), &self.cargo)?;
-        command
-            .args(args)
-            .current_dir(&tree)
-            .env("CARGO_HOME", &home)
-            .env("CARGO_TARGET_DIR", target)
-            .env("CARGO_NET_OFFLINE", "true")
-            .env("CARGO_TERM_COLOR", "never")
-            .env("TMPDIR", &tmp);
+        let mut command = sandbox.command(&out_dir.join(format!("{log}.sb")), &tools().cargo)?;
+        command.args(args).current_dir(&tree).env("CARGO_TARGET_DIR", target);
+        cargo_command(&mut command, &home, &tmp);
         let log = out_dir.join(log);
-        Ok((run_logged(&mut command, &log, Duration::from_secs(3600))?, log))
+        let ok = run_logged_with(&mut command, &log, Duration::from_secs(3600), Some(&self.marker), false)?;
+        Ok((ok, log))
     }
 
     /// Builds rampage-eval in the gate worktree into the build target, which no candidate process writes, and copies
-    /// the binary into `out_dir/bin`.
-    fn build(&self, out_dir: &Path, log: &str) -> Result<Option<PathBuf>, String> {
+    /// the binary into `out_dir/bin`, recording its hash.
+    fn build(&self, out_dir: &Path, log: &str) -> Result<Option<Binary>, String> {
         let target = self.gate_dir.join("target");
         let args = ["build", "--release", "--locked", "-p", "rampage-eval", "--bin", "rampage-eval"];
         let (built, _) = self.cargo(out_dir, log, &target, &args, true)?;
@@ -628,55 +640,71 @@ impl Harness<'_> {
         let binary = bin_dir.join("rampage-eval");
         std::fs::copy(target.join("release/rampage-eval"), &binary)
             .map_err(|error| format!("copying the build: {error}"))?;
-        Ok(Some(binary))
+        Binary::of(binary).map(Some)
     }
 
-    /// One build naming one split in the sandbox, from the split's view, timed from here. The candidate reads the
-    /// base's discovery and writes only its own cache and output; the base's first pass writes the discovery.
-    fn names(&self, binary: &Path, split: Split, out_dir: &Path, discovery: Discovery) -> Result<Named, String> {
+    /// A sandboxed run of one of the gate's built binaries (checked against its recorded hash first) with a minimal
+    /// environment, its output in `log`.
+    fn run_binary(
+        &self,
+        binary: &Binary,
+        sandbox: &Sandbox,
+        dir: &Path,
+        args: &[&std::ffi::OsStr],
+    ) -> Result<bool, String> {
+        binary.check()?;
+        let mut command = sandbox.command(&dir.join("sandbox.sb"), &binary.path)?;
+        command.args(args).env("HOME", dir).env("TMPDIR", dir).env("LANG", "C");
+        run_logged_with(&mut command, &dir.join("log"), Duration::from_secs(3 * 3600), Some(&self.marker), false)
+    }
+
+    /// One build naming one split in the sandbox, from the split's view, timed from here. It reads the split's view,
+    /// the binary and (a candidate) that split's discovery cache; it writes only a directory of its own. The base's
+    /// first pass writes the discovery cache.
+    fn names(&self, binary: &Binary, split: Split, out_dir: &Path, discovery: Discovery) -> Result<Named, String> {
         let (view, ids) = self.views.get(split)?;
-        let tag = if split == Split::Train {
-            "train".to_owned()
-        } else {
-            view.file_name().unwrap_or_default().to_string_lossy().into_owned()
-        };
-        let out = out_dir.join(format!("names-{tag}.json"));
-        let own = out_dir.join(format!("cache-{tag}"));
-        create_dir(&own)?;
-        let shared = self.views.cache();
+        let tag = view.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let dir = out_dir.join(format!("names-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        create_dir(&dir)?;
+        let out = dir.join("names.json");
+        let own = dir.join("cache");
+        let shared = self.views.cache(split)?;
         create_dir(&shared)?;
-        let binary_dir = binary.parent().unwrap_or(Path::new("/"));
+        let binary_dir = binary.path.parent().unwrap_or(Path::new("/"));
         let role = if split == Split::Train { "train" } else { "heldout" };
         let (sandbox, flywheel_dir) = match discovery {
-            Discovery::Write => (self.candidate_sandbox(&[&view, binary_dir], &[&shared, out_dir]), shared.clone()),
-            Discovery::Read(_) => {
-                (self.candidate_sandbox(&[&view, binary_dir, &shared], &[&own, out_dir]), own.clone())
-            }
+            Discovery::Write => (self.candidate_sandbox(&[&view, binary_dir], &[&shared, &dir]), shared.clone()),
+            Discovery::Read(_) => (self.candidate_sandbox(&[&view, binary_dir, &shared], &[&dir]), own.clone()),
         };
-        let mut command = sandbox.command(&out_dir.join(format!("names-{tag}.sb")), binary)?;
-        command
-            .arg("flywheel-code-names")
-            .arg("--corpus")
-            .arg(&view)
-            .args(["--split", role])
-            .arg("--out")
-            .arg(&out)
-            .arg("--flywheel-dir")
-            .arg(&flywheel_dir)
-            .args(["--workers", &self.views.workers.to_string()])
-            .env("TMPDIR", out_dir);
+        let workers = self.views.workers.to_string();
+        let discovery_dir = Paths::new(shared.clone()).cache();
+        let mut args: Vec<&std::ffi::OsStr> = vec![
+            "flywheel-code-names".as_ref(),
+            "--corpus".as_ref(),
+            view.as_os_str(),
+            "--split".as_ref(),
+            role.as_ref(),
+            "--out".as_ref(),
+            out.as_os_str(),
+            "--flywheel-dir".as_ref(),
+            flywheel_dir.as_os_str(),
+            "--workers".as_ref(),
+            workers.as_ref(),
+        ];
         if let Discovery::Read(key) = &discovery {
-            command.args(["--discovery-key", key]).arg("--discovery-dir").arg(Paths::new(shared.clone()).cache());
+            args.extend([
+                "--discovery-key".as_ref(),
+                key.as_ref(),
+                "--discovery-dir".as_ref(),
+                discovery_dir.as_os_str(),
+            ]);
         }
         let started = Instant::now();
-        let ok = run_logged(&mut command, &out_dir.join(format!("names-{tag}.log")), Duration::from_secs(3 * 3600))?;
+        let ok = self.run_binary(binary, &sandbox, &dir, &args)?;
         let wall_ms = started.elapsed().as_millis() as u64;
         if !ok {
-            return Err(format!(
-                "naming {} failed; see {}",
-                split.name(),
-                out_dir.join(format!("names-{tag}.log")).display()
-            ));
+            return Err(format!("naming {} failed; see {}", split.name(), dir.join("log").display()));
         }
         let mut names: SplitNames = read_json(&out)?;
         if !ids.is_empty() {
@@ -695,33 +723,39 @@ impl Harness<'_> {
         Ok((self.names(&self.base_binary, split, out_dir, Discovery::Read(id.clone()))?, id))
     }
 
-    /// Generates the heuristics data with the candidate from the training view in the sandbox; when it differs from
-    /// the worktree's, puts it there and builds again. The generated binary, or a failed stage.
-    fn generate(&self, binary: PathBuf, out_dir: &Path, run: &mut GateRun) -> Result<Option<PathBuf>, String> {
+    /// Generates the heuristics data with the candidate from the training view and the training split's discovery
+    /// only, in the sandbox; when it differs from the worktree's, puts it there and builds again. The generated binary,
+    /// or a failed stage. A failed generation's log stays with the operator.
+    fn generate(&self, binary: Binary, out_dir: &Path, run: &mut GateRun) -> Result<Option<Binary>, String> {
         let (view, _) = self.views.get(Split::Train)?;
-        let shared = self.views.cache();
-        let own = out_dir.join("cache-generate");
-        create_dir(&own)?;
-        let data = out_dir.join("heuristics.bin");
-        let binary_dir = binary.parent().unwrap_or(Path::new("/")).to_path_buf();
-        let sandbox = self.candidate_sandbox(&[&view, &binary_dir, &shared], &[&own, out_dir]);
-        let mut command = sandbox.command(&out_dir.join("generate.sb"), &binary)?;
-        command
-            .arg("flywheel-code-generate")
-            .arg("--corpus")
-            .arg(&view)
-            .arg("--out")
-            .arg(&data)
-            .arg("--flywheel-dir")
-            .arg(&own)
-            .args(["--discovery-key", &self.base_build_id])
-            .arg("--discovery-dir")
-            .arg(Paths::new(shared.clone()).cache())
-            .args(["--workers", &self.views.workers.to_string()])
-            .env("TMPDIR", out_dir);
-        if !run_logged(&mut command, &out_dir.join("generate.log"), Duration::from_secs(3600))? {
+        let shared = self.views.cache(Split::Train)?;
+        let dir = out_dir.join("generate");
+        let _ = std::fs::remove_dir_all(&dir);
+        create_dir(&dir)?;
+        let own = dir.join("cache");
+        let data = dir.join("heuristics.bin");
+        let binary_dir = binary.path.parent().unwrap_or(Path::new("/")).to_path_buf();
+        let sandbox = self.candidate_sandbox(&[&view, &binary_dir, &shared], &[&dir]);
+        let workers = self.views.workers.to_string();
+        let discovery_dir = Paths::new(shared.clone()).cache();
+        let args: Vec<&std::ffi::OsStr> = vec![
+            "flywheel-code-generate".as_ref(),
+            "--corpus".as_ref(),
+            view.as_os_str(),
+            "--out".as_ref(),
+            data.as_os_str(),
+            "--flywheel-dir".as_ref(),
+            own.as_os_str(),
+            "--discovery-key".as_ref(),
+            self.base_build_id.as_ref(),
+            "--discovery-dir".as_ref(),
+            discovery_dir.as_os_str(),
+            "--workers".as_ref(),
+            workers.as_ref(),
+        ];
+        if !self.run_binary(&binary, &sandbox, &dir, &args)? {
             run.stages.push(stage("generate", false, "generating the heuristics data from the training split failed"));
-            run.log_tail = Some(tail(&out_dir.join("generate.log"), 40));
+            run.operator_notes.push(format!("generation failed; see {}", dir.join("log").display()));
             return Ok(None);
         }
         let bytes = std::fs::read(&data).map_err(|error| error.to_string())?;
@@ -747,8 +781,9 @@ impl Harness<'_> {
     }
 
     /// Policy, then the candidate build: apply, build, generate, and (with `tests`) the family crate's tests in a
-    /// fresh target directory of their own. The candidate binary, or `None` with the failed stage in `run`.
-    fn prepare(&self, diff: &Diff, out_dir: &Path, run: &mut GateRun, tests: bool) -> Result<Option<PathBuf>, String> {
+    /// fresh target directory and an output directory of their own, apart from the binary. The candidate binary, or
+    /// `None` with the failed stage in `run`.
+    fn prepare(&self, diff: &Diff, out_dir: &Path, run: &mut GateRun, tests: bool) -> Result<Option<Binary>, String> {
         let limits =
             Limits { max_added_lines: self.limits.max_added_lines, max_literal_lines: self.limits.max_literal_lines };
         let violations = policy_violations(diff, self.family.allowlist, limits);
@@ -766,14 +801,17 @@ impl Harness<'_> {
         run.stages.push(stage("build", true, "cargo build --release -p rampage-eval"));
         let Some(binary) = self.generate(binary, out_dir, run)? else { return Ok(None) };
         if tests {
-            let target = out_dir.join("test-target");
+            let tests_dir = out_dir.join("tests");
+            let _ = std::fs::remove_dir_all(&tests_dir);
+            create_dir(&tests_dir)?;
+            let target = tests_dir.join("target");
             let crate_name = self.family.test_crate;
-            let args: Vec<&str> = if self.nextest {
+            let args: Vec<&str> = if tools().nextest.is_some() {
                 vec!["nextest", "run", "--locked", "--no-fail-fast", "-p", crate_name]
             } else {
                 vec!["test", "--locked", "--no-fail-fast", "-p", crate_name]
             };
-            let (tested, log) = self.cargo(out_dir, "tests.log", &target, &args, false)?;
+            let (tested, log) = self.cargo(&tests_dir, "tests.log", &target, &args, false)?;
             let _ = std::fs::remove_dir_all(&target);
             if !tested {
                 run.stages.push(stage("tests", false, format!("{crate_name} tests failed")));
@@ -1165,7 +1203,7 @@ fn serve_gates(
     harness: &Harness<'_>,
     spool: &Path,
     tree: (&Path, &Path),
-    max: usize,
+    (max, quantum): (usize, Duration),
     stop: &AtomicBool,
     calls: &Mutex<Vec<Value>>,
 ) {
@@ -1204,6 +1242,15 @@ fn serve_gates(
                 }
             }
             let _ = write_json(&out.join("answer.json"), &value);
+            // Padded to a multiple of the quantum: how long the candidate's code took on dev says little.
+            let elapsed = started.elapsed();
+            if !quantum.is_zero() {
+                let rounds = elapsed.as_secs_f64() / quantum.as_secs_f64();
+                let padded = quantum.mul_f64(rounds.ceil().max(1.0));
+                while started.elapsed() < padded && !stop.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
             let _ = answer(spool, &id, &value, passed);
             let summary = match &result {
                 Ok(run) => json!({
@@ -1232,6 +1279,9 @@ struct SessionSetup<'a> {
     max_turns: u32,
     timeout_s: u64,
     budget_usd: f64,
+    marker: &'a Marker,
+    /// claude, by the path resolved before the session.
+    claude: Option<&'a Path>,
 }
 
 /// Runs the session: the agent through the runner, or a script standing in for it, both inside the session's sandbox
@@ -1244,8 +1294,8 @@ fn run_session(setup: &SessionSetup<'_>) -> Result<Value, String> {
         Some(script) => {
             let sandbox = setup.sandbox.reading(&[script.parent().unwrap_or(Path::new("/"))]);
             let mut command = sandbox.command(&setup.dir.join("session.sb"), Path::new("/bin/sh"))?;
-            command.arg(script).current_dir(setup.worktree).env_clear();
-            for key in ["HOME", "USER", "LOGNAME", "LANG", "SHELL", "TERM"] {
+            command.arg(script).current_dir(setup.worktree);
+            for key in ["USER", "LOGNAME", "LANG", "SHELL", "TERM"] {
                 if let Ok(value) = std::env::var(key) {
                     command.env(key, value);
                 }
@@ -1254,7 +1304,8 @@ fn run_session(setup: &SessionSetup<'_>) -> Result<Value, String> {
                 command.env(key, value);
             }
             let transcript = setup.dir.join("transcript.txt");
-            let ok = run_logged(&mut command, &transcript, Duration::from_secs(setup.timeout_s))?;
+            let limit = Duration::from_secs(setup.timeout_s);
+            let ok = run_logged_with(&mut command, &transcript, limit, Some(setup.marker), true)?;
             Ok(json!({
                 "exit": if ok { "ok" } else { "error" },
                 "runner": {"name": "session-script", "script": script},
@@ -1270,7 +1321,21 @@ fn run_session(setup: &SessionSetup<'_>) -> Result<Value, String> {
             let settings = setup.session_root.join("settings.json");
             write_json(&settings, &session_settings(&setup.sandbox.deny, setup.environment))?;
             let result_path = setup.dir.join("result.json");
-            let mut command = Command::new(&setup.runner[0]);
+            // The runner itself runs outside the sandbox, by its pinned path, with an explicit environment; it starts
+            // claude by its pinned path inside the session's sandbox.
+            let mut command = tool(&setup.runner[0]);
+            command.env_clear().env("PATH", tools().path());
+            for key in ["USER", "LOGNAME", "LANG", "SHELL", "TERM", "ANTHROPIC_API_KEY"] {
+                if let Ok(value) = std::env::var(key) {
+                    command.env(key, value);
+                }
+            }
+            if let Some(home) = setup.environment.get("HOME") {
+                command.env("HOME", home);
+            }
+            if let Some(claude) = setup.claude {
+                command.arg("--claude-bin").arg(claude);
+            }
             command
                 .args(&setup.runner[1..])
                 .args(["--profile", "code"])
@@ -1296,7 +1361,8 @@ fn run_session(setup: &SessionSetup<'_>) -> Result<Value, String> {
             for (key, value) in setup.environment {
                 command.arg("--env").arg(format!("{key}={value}"));
             }
-            let finished = run_logged(&mut command, &setup.dir.join("runner.log"), limit)?;
+            let finished =
+                run_logged_with(&mut command, &setup.dir.join("runner.log"), limit, Some(setup.marker), true)?;
             read_json::<Value>(&result_path)
                 .map_err(|error| format!("runner ended (in time: {finished}) without a result: {error}"))
         }
@@ -1503,8 +1569,6 @@ struct Setup {
     engine: Engine,
     flywheel: PathBuf,
     gate_dir: PathBuf,
-    cargo: PathBuf,
-    nextest: bool,
     home: PathBuf,
 }
 
@@ -1516,6 +1580,11 @@ fn setup(
     gate_dir: Option<&Path>,
     workers: usize,
 ) -> Result<Setup, String> {
+    // Every program the harness runs is resolved now, before any session could plant one.
+    let tools = tools();
+    if !tools.cargo.is_file() {
+        return Err("cargo is not on PATH".to_owned());
+    }
     let root = repository_root
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
@@ -1526,10 +1595,8 @@ fn setup(
     let flywheel = canonical(engine.paths.root());
     let gate_dir = canonical(&gate_dir.map(Path::to_path_buf).unwrap_or_else(|| flywheel.join("code-runs/gate")));
     create_dir(&gate_dir)?;
-    let cargo = find_program(&std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned()))?;
-    let nextest = Command::new(&cargo).args(["nextest", "--version"]).output().is_ok_and(|out| out.status.success());
     let home = canonical(&std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default());
-    Ok(Setup { repo, checkout, main_checkout, base, engine, flywheel, gate_dir, cargo, nextest, home })
+    Ok(Setup { repo, checkout, main_checkout, base, engine, flywheel, gate_dir, home })
 }
 
 impl Setup {
@@ -1538,17 +1605,19 @@ impl Setup {
     /// Claude Code's per-user directory (transcripts, history), other sessions' scratch
     /// files, and anything the operator adds.
     fn deny(&self, extra: &[PathBuf]) -> Vec<PathBuf> {
-        let uid = output(Command::new("id").arg("-u")).unwrap_or_default().trim().to_owned();
-        let mut deny = vec![
+        // SAFETY: getuid has no preconditions.
+        let uid = unsafe { libc::getuid() };
+        let deny = vec![
             canonical(&self.engine.corpus.root),
             self.flywheel.clone(),
             self.main_checkout.clone(),
             self.checkout.clone(),
             canonical(&self.home.join(".claude")),
+            canonical(&self.home.join(".claude.json")),
+            canonical(&self.home.join("Library/Keychains")),
+            canonical(&Path::new("/tmp").join(format!("claude-{uid}"))),
         ];
-        if !uid.is_empty() {
-            deny.push(canonical(&Path::new("/tmp").join(format!("claude-{uid}"))));
-        }
+        let mut deny = deny;
         deny.extend(extra.iter().map(|path| canonical(path)));
         deny.sort();
         deny.dedup();
@@ -1598,6 +1667,24 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
     if runner.is_empty() {
         return Err("empty runner command".to_owned());
     }
+    // The runner's interpreter and claude by absolute paths, resolved before the session.
+    if !runner[0].is_absolute() {
+        runner[0] =
+            on_path(&runner[0].to_string_lossy()).ok_or_else(|| format!("{} is not on PATH", runner[0].display()))?;
+    }
+    let claude = on_path("claude");
+    if args.session_script.is_none() {
+        if std::env::var_os("ANTHROPIC_API_KEY").is_none_or(|key| key.is_empty()) {
+            return Err(
+                "an agent session authenticates with ANTHROPIC_API_KEY: the operator's keychain and Claude Code \
+                        login are not reachable from its sandbox and throwaway home"
+                    .to_owned(),
+            );
+        }
+        if claude.is_none() {
+            return Err("claude is not on PATH".to_owned());
+        }
+    }
     for part in runner.iter_mut().skip(1) {
         if part.extension().is_some_and(|extension| extension == "py" || extension == "sh") && part.is_relative() {
             *part = setup.checkout.join(&*part);
@@ -1621,6 +1708,8 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
     };
     let on_interrupt = cleanup.clone();
     interrupt::set_cleanup(Box::new(move || on_interrupt.run()));
+    let marker = Marker::new(&format!("{label}{}{:?}", std::process::id(), std::time::SystemTime::now()));
+    interrupt::register_marker(&marker);
     let result = code_run(
         &args,
         family,
@@ -1630,13 +1719,23 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
         &run_dir,
         &session_root,
         &deny,
-        &runner,
+        (&runner, claude.as_deref()),
         script.as_deref(),
+        &marker,
         started,
     );
+    // A last sweep: every process any of this run's sandboxes started, wherever it went.
+    kill_all(&marked(&marker, started.elapsed()));
+    marker.remove();
     cleanup.run();
     interrupt::clear_cleanup();
     result
+}
+
+/// `name`'s first match on the PATH the harness started with.
+fn on_path(name: &str) -> Option<PathBuf> {
+    let search = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&search).map(|directory| directory.join(name)).find(|candidate| candidate.is_file())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1649,10 +1748,12 @@ fn code_run(
     run_dir: &Path,
     session_root: &Path,
     deny: &[PathBuf],
-    runner: &[PathBuf],
+    (runner, claude): (&[PathBuf], Option<&Path>),
     script: Option<&Path>,
+    marker: &Marker,
     started: Instant,
 ) -> Result<ExitCode, String> {
+    let claude = claude.map(Path::to_path_buf);
     let engine = &setup.engine;
     eprintln!("code run {label}: base {}, run directory {}", setup.base, run_dir.display());
 
@@ -1665,7 +1766,7 @@ fn code_run(
     let capture_tree = gate_worktree(&setup.repo, &setup.gate_dir, "capture", &setup.base)?;
     let gate_tree = gate.work_tree.clone().unwrap_or_default();
     private_registry(&operator_cargo_home(&setup.home), &gate_tree, &setup.gate_dir.join("cargo-home"))?;
-    unpack_registry(&setup.cargo, &gate_tree, &setup.gate_dir.join("cargo-home"))?;
+    unpack_registry(&gate_tree, &setup.gate_dir.join("cargo-home"))?;
     let views = Views::new(run_dir.join("views"), args.workers);
     for split in GATED {
         views.make(&engine.corpus, split)?;
@@ -1682,12 +1783,12 @@ fn code_run(
         config,
         limits: args.limits,
         base_names: BTreeMap::new(),
-        base_binary: base_dir.join("bin/rampage-eval"),
+        base_binary: Binary::default(),
         base_build_id: String::new(),
         deny: deny.to_vec(),
+        system_read: tools().system_read(),
+        marker: marker.clone(),
         family,
-        cargo: setup.cargo.clone(),
-        nextest: setup.nextest,
         busy: Mutex::new(()),
     };
     // The base build and its names: the baseline every gate compares with.
@@ -1718,7 +1819,7 @@ fn code_run(
     export_tree(&setup.repo, &setup.base, &reference, SESSION_EXCLUDED)?;
     let session_git = Repo { git_dir: worktree.join(".git"), work_tree: Some(worktree.clone()) };
     output(
-        Command::new("git")
+        tool(&tools().git)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .args(["init", "-q"])
@@ -1733,7 +1834,7 @@ fn code_run(
     )?;
     let home = session_root.join("cargo-home");
     private_registry(&operator_cargo_home(&setup.home), &reference, &home)?;
-    unpack_registry(&setup.cargo, &reference, &home)?;
+    unpack_registry(&reference, &home)?;
     let tmp = session_root.join("tmp");
     create_dir(&tmp)?;
     let train_view = session_root.join("flywheel/corpus").join(format!("{}-train", engine.corpus.version()));
@@ -1759,20 +1860,23 @@ fn code_run(
     let mut hosts: Vec<String> = DEFAULT_HOSTS.iter().map(|host| (*host).to_owned()).collect();
     hosts.extend(args.allow_host.iter().cloned());
     let proxy = Proxy::start(hosts.clone(), session_dir.join("proxy.log"))?;
-    let client_project = setup.home.join(".claude/projects").join(
-        worktree.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>(),
-    );
-    let mut writable: Vec<PathBuf> = vec![session_root.to_path_buf(), client_project];
-    writable.extend(CLAUDE_HOME_WRITABLE.iter().map(|path| setup.home.join(path)));
-    writable.extend(args.claude_allow.iter().map(|path| canonical(path)));
+    // A throwaway home: Claude Code keeps its state there, and nothing it or the agent writes reaches the operator's
+    // home, whose configuration (shell, git, cargo, Claude Code's MCP servers) the next session would run.
+    let session_home = session_root.join("home");
+    create_dir(&session_home.join(".claude"))?;
     let session_sandbox = Sandbox {
         deny: deny.to_vec(),
-        protect: vec![setup.home.clone()],
-        deny_all_writes: false,
-        read_only: Vec::new(),
-        allow: writable,
+        deny_all_writes: true,
+        allow: vec![session_root.to_path_buf()],
         network: Network::Proxy(proxy.port),
+        ipc: Ipc::Session,
+        marker: Some(marker.clone()),
+        ..Sandbox::default()
     };
+    // No pinned program lies where the session can write.
+    if let Some(program) = tools().programs().into_iter().find(|program| canonical(program).starts_with(session_root)) {
+        return Err(format!("{} lies in the session's root", program.display()));
+    }
     let proxy_url = format!("http://127.0.0.1:{}", proxy.port);
     let path = std::env::var("PATH").unwrap_or_default();
     let environment: BTreeMap<String, String> = [
@@ -1781,6 +1885,7 @@ fn code_run(
         ("CARGO_NET_OFFLINE", "true".to_owned()),
         ("CARGO_TERM_COLOR", "never".to_owned()),
         ("TMPDIR", tmp.display().to_string()),
+        ("HOME", session_home.display().to_string()),
         ("HTTPS_PROXY", proxy_url.clone()),
         ("HTTP_PROXY", proxy_url.clone()),
         ("https_proxy", proxy_url.clone()),
@@ -1801,9 +1906,11 @@ fn code_run(
     let calls = Mutex::new(Vec::new());
     let stop = AtomicBool::new(false);
     let add_dirs = [session_root.join("flywheel"), bin.clone()];
+    let quantum = Duration::from_secs(args.answer_quantum_s);
     let session = std::thread::scope(|scope| {
-        let server = scope
-            .spawn(|| serve_gates(&harness, &spool, (&worktree, &reference), args.max_session_gates, &stop, &calls));
+        let server = scope.spawn(|| {
+            serve_gates(&harness, &spool, (&worktree, &reference), (args.max_session_gates, quantum), &stop, &calls)
+        });
         let result = run_session(&SessionSetup {
             dir: &session_dir,
             session_root,
@@ -1817,6 +1924,8 @@ fn code_run(
             max_turns: args.max_turns,
             timeout_s: args.timeout_s,
             budget_usd: args.budget_usd,
+            marker,
+            claude: claude.as_deref(),
         });
         stop.store(true, Ordering::SeqCst);
         let _ = server.join();
@@ -1967,14 +2076,22 @@ pub fn final_read(args: CodeFinalArgs) -> Result<ExitCode, String> {
         Cleanup { directories: vec![out.join("views"), out.join("base/bin"), out.join("candidate/bin")], keep: false };
     let on_interrupt = cleanup.clone();
     interrupt::set_cleanup(Box::new(move || on_interrupt.run()));
+    let marker = Marker::new(&format!("final{}{:?}", std::process::id(), std::time::SystemTime::now()));
+    interrupt::register_marker(&marker);
+    let started = Instant::now();
     let result = (|| -> Result<ExitCode, String> {
         let gate = gate_worktree(&setup.repo, &setup.gate_dir, "worktree", &base)?;
         let capture = gate_worktree(&setup.repo, &setup.gate_dir, "capture", &base)?;
         let gate_tree = gate.work_tree.clone().unwrap_or_default();
         private_registry(&operator_cargo_home(&setup.home), &gate_tree, &setup.gate_dir.join("cargo-home"))?;
-        unpack_registry(&setup.cargo, &gate_tree, &setup.gate_dir.join("cargo-home"))?;
+        unpack_registry(&gate_tree, &setup.gate_dir.join("cargo-home"))?;
         let views = Views::new(out.join("views"), args.workers);
         views.make(&engine.corpus, Split::Train)?;
+        // The run's own denials and the operator's extra ones hold while the final split is named too.
+        let mut extra: Vec<PathBuf> = args.deny_read.clone();
+        extra.extend(
+            record["sandbox"]["deny"].as_array().into_iter().flatten().filter_map(Value::as_str).map(PathBuf::from),
+        );
         let mut harness = Harness {
             base: base.clone(),
             run_dir: run_dir.clone(),
@@ -1991,12 +2108,12 @@ pub fn final_read(args: CodeFinalArgs) -> Result<ExitCode, String> {
                 max_literal_lines: usize::MAX,
             },
             base_names: BTreeMap::new(),
-            base_binary: PathBuf::new(),
+            base_binary: Binary::default(),
             base_build_id: String::new(),
-            deny: setup.deny(&[]),
+            deny: setup.deny(&extra),
+            system_read: tools().system_read(),
+            marker: marker.clone(),
             family,
-            cargo: setup.cargo.clone(),
-            nextest: setup.nextest,
             busy: Mutex::new(()),
         };
         // Builds first: a change that no longer builds must not use up the read.
@@ -2074,6 +2191,8 @@ pub fn final_read(args: CodeFinalArgs) -> Result<ExitCode, String> {
         );
         Ok(if verdict.passed { ExitCode::SUCCESS } else { ExitCode::from(1) })
     })();
+    kill_all(&marked(&marker, started.elapsed()));
+    marker.remove();
     cleanup.run();
     interrupt::clear_cleanup();
     result
@@ -2243,6 +2362,20 @@ mod tests {
         ] {
             assert!(prompt.contains(needle), "{needle}");
         }
+    }
+
+    /// The gate runs a built binary only while it hashes as built: anything that rewrote it in between is caught.
+    #[test]
+    fn a_built_binary_that_changed_is_refused() {
+        let root = canonical(&std::env::temp_dir()).join(format!("rampage-code-binary-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rampage-eval");
+        std::fs::write(&path, "built").unwrap();
+        let binary = Binary::of(path.clone()).unwrap();
+        assert!(binary.check().is_ok());
+        std::fs::write(&path, "planted by a test").unwrap();
+        assert!(binary.check().is_err());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
