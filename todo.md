@@ -49,7 +49,7 @@ Then, in order, one track at a time, each reviewed before merge:
 5. [x] (2026-11-20, first slice: stored decompilations and effective views; later slices below) **Incremental analysis and a fuller analysis store**: cache xrefs, strings and types, and re-analyse only what
    an edit touches.
 
-After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below.
+After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below, which now starts with the firmware analysis gaps (0.1–0.7).
 
 Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
 1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
@@ -484,6 +484,38 @@ Queued behind the flywheel work, one at a time; each needs its own design and go
 From [the roadmap refresh](docs/plans/2026-11-20-roadmap-refresh.md), which gives the reasons, with the
 maintainer's amendments of 2026-11-20. One track at a time, each reviewed before merge and closed by its
 acceptance run.
+
+**First, ahead of the numbered items (added 2026-11-22 by the maintainer): firmware analysis gaps.** These come
+from an agent run and a hand analysis of a private vendor image: a Cortex-M audio device whose application is
+LZSS-compressed and runs from RAM. Acceptance is that image (local only, never committed or named) plus a public
+fixture for each item. Start with 0.1 and 0.2.
+
+- [ ] 0.1 **A decoded image that runs from RAM is mapped read-only** (likely correctness bug). The application
+      decodes to its load address in RAM and runs there, but the Raw project maps that primary region `r-x`. The
+      decompiler warns "Read-only address is written" on every global store, and Ghidra may fold reads of these
+      "read-only" globals into constants, so decompiled output can be silently wrong. Fix: map a decoded image
+      whose load address is RAM (or that the code stores into) as writable, and let the `raw` selector state
+      region permissions. Add a test that a global the decompiler reads is not constant-folded.
+- [ ] 0.2 **References to struct fields reached through base + offset.** Embedded code loads a base address from
+      a literal pool and reads `ldrb rX, [rY, #11]`. Finding who reads one field (a link-state flag) took a
+      Python scan. Xrefs and `binary search` references should resolve pool base plus immediate offset (and
+      register-relative stores) to the field's address, with evidence.
+- [ ] 0.3 **Decoded bytes to a file from the CLI.** `write_decoded_range` is MCP-only and CLI `binary decode`
+      writes nothing, so CLI agents (and the hand analysis) re-implemented the LZSS decoder to get a file to
+      scan. Add `--output` (new file only, same refusals as the MCP tool).
+- [ ] 0.4 **A peripheral map without an SVD.** Identifying which code configures which peripheral (here, serial
+      audio) meant histogramming address-like words, and data tables swamped the signal. Build the map from
+      load/store instructions only: the bases and offsets each function touches, by function and by block.
+- [ ] 0.5 **Vector tables:**
+      - A table installed through VTOR just below a mapped scatter copy (VTOR 0x1000000, copy at 0x1000300) is
+        refused, so the handlers it names are never seeded. Accept a table that overlaps a mapped region or
+        backed bytes.
+      - When an image starts with code rather than a vector table, the check refuses every word without saying
+        to set `entry` (and drop vector seeding). Add that hint.
+- [ ] 0.6 **Decompiler call names:** calls render as `func_0x…` while everything else uses `sub_…`. Use one
+      naming scheme so names round-trip between tools.
+- [ ] 0.7 **CLI and docs naming:** the docs say `binary_info`, the CLI says `binary inspect`. Add aliases for
+      the MCP tool names, or an error that suggests the right subcommand.
 
 1. [x] (2026-11-20, open-source inputs: [report](docs/benchmarks/acceptance-2026-11-20.md); the maintainer has no
    second vendor version, so the vendor step was a single-file run) **Acceptance pass on real samples** (local, never committed or named) for MIPS, Xtensa and ESP images,
