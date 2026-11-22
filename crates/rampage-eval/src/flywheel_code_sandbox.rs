@@ -394,6 +394,7 @@ fn tagged(variable: &str, token: &str) -> BTreeSet<u32> {
         .collect()
 }
 
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     /// libsystem_sandbox: 1 when `pid`'s sandbox denies `operation` on the filter's argument, 0 when it allows it
     /// (and for an unsandboxed process).
@@ -401,9 +402,17 @@ unsafe extern "C" {
 }
 
 /// `SANDBOX_FILTER_PATH`.
+#[cfg(target_os = "macos")]
 const FILTER_PATH: libc::c_int = 1;
 
+/// Whether `pid` runs under a profile carrying `marker`. The sandbox exists only on macOS; elsewhere nothing carries it.
+#[cfg(not(target_os = "macos"))]
+fn carries(_pid: u32, _marker: &Marker) -> bool {
+    false
+}
+
 /// Whether `pid` runs under a profile carrying `marker`.
+#[cfg(target_os = "macos")]
 fn carries(pid: u32, marker: &Marker) -> bool {
     let denied = |path: &Path| -> Option<bool> {
         let path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).ok()?;
@@ -832,6 +841,7 @@ mod tests {
         assert!(Sandbox { network: Network::Denied, ..Sandbox::default() }.profile().ends_with("(deny network*)\n"));
     }
 
+    #[cfg(target_os = "macos")]
     fn temporary(name: &str) -> PathBuf {
         let root = canonical(&std::env::temp_dir()).join(format!("rampage-code-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
