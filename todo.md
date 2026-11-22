@@ -487,13 +487,15 @@ acceptance run.
    unnamed: only application code calls it). Step 3 harness merged 2026-11-22 (`flywheel-code-run`, two
    security reviews fixed). **Paused by the maintainer before the first paid run** ($5 cap, Sonnet; needs
    `ANTHROPIC_API_KEY`; Claude Code has not yet run inside the sandbox).
-4. [x] (2026-11-22, branch, not merged) **Signature recall on firmware** (the arms and call graph gated on the embedded set). Built a dev split (`build.py dev`:
+4. [x] (2026-11-22) **Signature recall on firmware** (the arms and call graph gated on the embedded set). Built a dev split (`build.py dev`:
    11 images from GCC 11.3, 12.2, 13.2 and 13.3 with an owned program and kernel configuration) and a negative split;
    the 14.3 fixtures are now the final split (read once). Shipped a Thumb operand tier (scheme 4: load/store
    offsets and stack adjustments) and a call graph that also trains on hook-enabled kernels: dev 51.5→56.3%, final
    M4F 60.1→63.9%, M0 45.4→46.3%, no wrong names. No Cortex-M input in the acceptance set; a private vendor image
    (Cortex-M, not GCC/newlib) gets no names before or after. Open: masking data immediates failed the training gate;
    most remaining final misses differ in length, not operands ([embedded set](docs/signature-corpus.md#embedded-firmware-set)).
+   Follow-up: the databases shipped before this name `xEventGroupSetBitsFromISR` on an inih function in the
+   held-out negatives (6 false names), and `__getopt_r` on stubs in the tombstone half; look at why.
 5. **Object files and static archives** (roadmap 4.3).
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
    layout, `__CxxFrameHandler4`, Swift metadata.
