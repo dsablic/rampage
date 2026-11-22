@@ -54,6 +54,20 @@ After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below.
 Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
 1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
 
+## Haiku suite v4 pass for 1.11.0 (2026-11-22)
+
+rampage only, 1 rep, label haiku-v4-1.11.0: 18/20 strict, $0.31, 12 tool errors (19 at 1.10.0, 41 at 1.9.0).
+Misses: emulate-libc-arm64-elf gave the `"status"` slip a third time (right value); libid-names-m0-raw answered
+`unknown` with four of five names (`strtol` is not named on the held-out M0 build). Tool errors: 6 `decompile`
+byte-budget refusals on large M0 functions (one even in `view=summary`), 2 `enable_tools("firmware")`, 2
+`import_svd` given the `.svd` before any binary was open, 1 a raw `.bin` opened without a selector, 1 `_strtol_r` by name.
+- [ ] `evaluate_function`: put the value first and drop `"status": "ok"` from successful results (the slip has now
+      recurred on three releases).
+- [ ] `decompile` on a large function: a summary view that cannot fit should page or trim the evidence rather than
+      refuse; the code view's refusal should say which paging argument to pass and how many pages there are.
+- [ ] `enable_tools("firmware")` still errors: the alias list in 1.11.0 answers where the tools live, but the agent
+      reads the error as a failure. Consider succeeding with the groups that hold them enabled.
+
 ## Haiku suite v4 pass for 1.10.0 (2026-11-21)
 
 rampage only, 1 rep, label haiku-v4-1.10.0: 17/20 strict, 18/20 lenient, $0.31, 19 tool errors (41 at 1.9.0).

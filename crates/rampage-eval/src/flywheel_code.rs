@@ -2387,8 +2387,10 @@ mod tests {
         assert!(family("libid").is_ok() && family("toolid").is_err());
     }
 
-    /// The private registry holds the index and exactly the locked archives, and builds offline.
+    /// The private registry holds the index and exactly the locked archives, and builds offline. The harness is
+    /// macOS-only (`cp -c` clones).
     #[test]
+    #[cfg(target_os = "macos")]
     fn a_private_registry_copies_only_the_locked_archives() {
         let root = canonical(&std::env::temp_dir()).join(format!("rampage-code-registry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
