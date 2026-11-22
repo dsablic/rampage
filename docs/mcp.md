@@ -272,7 +272,8 @@ pages never select writes. Complete JSON stays within 60000 bytes; an oversized 
 Builtin signatures are cached per architecture; `list_packs` reads count indexes without decoding every bundle.
 Firmware (a Cortex-M Raw project, or a static Thumb ELF executable) also gets the
 [embedded firmware set](signature-corpus.md#embedded-firmware-set) (newlib, libgcc, compiler-rt, FreeRTOS, STM32F4
-HAL), source `rampage-builtin embedded`. A Cortex-M Raw project's `raw` selector is accepted, with applied names
+HAL), source `rampage-builtin embedded`, and its operand tier, source `rampage-builtin embedded operands` (a coarser
+match: equal to a library body up to structure offsets and stack slots). A Cortex-M Raw project's `raw` selector is accepted, with applied names
 memory-only like its other annotations.
 The [offline corpus pipeline](signature-corpus.md) measures generated databases separately; its failed or unrun
 profiles are not default recognition coverage.

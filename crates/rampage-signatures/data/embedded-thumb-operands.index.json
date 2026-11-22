@@ -3,11 +3,11 @@
   "arch": "arm",
   "scheme": 4,
   "asset": "embedded-thumb-operands.json.gz",
-  "gzip_sha256": "79eaae239360885756f800a3a1f2d4809dda0b2498dc21f29f49d96c58518824",
-  "compressed_bytes": 1255745,
-  "json_bytes": 2348197,
-  "signatures": 21053,
-  "callee_keys": 4291,
+  "gzip_sha256": "8c0b32f0be5eba49c039c5098f9aa8822b9158d0b3761378c1e6be68a911f7d8",
+  "compressed_bytes": 1253780,
+  "json_bytes": 2345098,
+  "signatures": 21054,
+  "callee_keys": 4287,
   "recognition": "same_build",
   "profiles": [
     {

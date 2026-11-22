@@ -112,8 +112,9 @@ cargo build --release -p rampage-eval --example embedded_call_graph --example em
 target/release/examples/embedded_call_graph \
   --output crates/rampage-signatures/data/embedded-callgraph.json.gz WORK/refs/*.elf WORK/refs-hooks/*.elf
 python3 -I tools/embedded-signatures/build.py fetch --dev          # dev toolchains, 13.3, negative sources
-python3 -I tools/embedded-signatures/build.py negatives            # 30 negative references (WORK/negatives)
-target/release/examples/embedded_operands build --negatives WORK/negatives --output WORK/operands.json \
+python3 -I tools/embedded-signatures/build.py negatives            # 18 tombstone negatives (WORK/negatives)
+python3 -I tools/embedded-signatures/build.py negatives --gate     # 12 held-out negatives (WORK/negatives-gate)
+target/release/examples/embedded_operands build --tombstones WORK/negatives --output WORK/operands.json \
   --gzip WORK/operands.json.gz WORK/refs/*.elf WORK/refs-hooks/*.elf
 python3 -I tools/embedded-signatures/build.py profiles --operands > WORK/profiles-operands.json
 target/debug/examples/signature_bundle_index --database WORK/operands.json.gz \
@@ -143,18 +144,21 @@ names the fixtures happen to take from the library unchanged: 10 on M4F (the wea
 training sequence holding it there propagation named the hook after the library function that held that position
 in another configuration (`prvInsertBlockIntoFreeList`, on dev).
 
-**Operand tier.** `data/embedded-thumb-operands.json.gz` (1.26 MB gzip, 2.35 MB JSON; 21,053 masked entries and
-4,291 callee keys, `embedded-thumb-operands.index.json`) hashes the same references, and the hooks kernels, under
+**Operand tier.** `data/embedded-thumb-operands.json.gz` (1.25 MB gzip, 2.35 MB JSON; 21,054 masked entries and
+4,287 callee keys, `embedded-thumb-operands.index.json`) hashes the same references, and the hooks kernels, under
 hash scheme 4 (`THUMB_OPERAND_SCHEME`): scheme 3 with the offset of every Thumb load and store (`LDR`/`STR` of any
 size `[Rn, #imm]`, `[SP, #imm]`, `LDRD`/`STRD`, `VLDR`/`VSTR`, with `Rn` not the PC) and the stack adjustments
-(`ADD Rd, SP, #imm`, `ADD`/`SUB SP, SP, #imm`) masked, bit by bit. Opcode bits, registers, the add/subtract bit, data
+(`ADD Rd, SP, #imm` and `ADD`/`SUB SP, SP, #imm` in their 16-bit forms, and `ADD.W`/`SUB.W`/`ADDW`/`SUBW SP, SP,
+#imm`) masked, bit by bit. Opcode bits, registers, the add/subtract bit, data
 immediates, shift amounts and PC-relative loads stay. Identification consults it after the scheme-3 set, for the same
-firmware, with the same source (`rampage-builtin embedded`): it names a library function whose structure offsets or
+firmware, with its own source (`rampage-builtin embedded operands`, a coarser match): it names a library function whose structure offsets or
 stack slots follow the kernel configuration or the compiler release while its code does not. Scheme 4 coarsens
 scheme 3, so a body the scheme-3 set answers is never consulted here, and a body with no masked field (which could
 only repeat the scheme-3 answer) is left out. Masked hashes two names share are tombstones, and so is every hash a
-negative reference holds: `build.py negatives` builds the flywheel corpus's zlib, LZ4, cJSON, inih and tinyexpr
-for Thumb (no embedded signature covers them), and their names never ship. `crates/rampage-eval/examples/
+tombstone negative holds: `build.py negatives` builds the flywheel corpus's LZ4, cJSON and tinyexpr for Thumb with
+GCC 13.2 at -Os and -O2 (no embedded signature covers them), and their names never ship. The negative gate is held
+out from them: `build.py negatives --gate` builds zlib and inih, which the tombstones never saw, with another
+release (GCC 12.2) at other levels (-O1, -O3). `crates/rampage-eval/examples/
 embedded_operands.rs` builds the tier and runs its gate.
 
 Masking data immediates as well (`MOVS`/`CMP`/`ADDS` constants and Thumb-2 modified immediates) named 74 more dev
@@ -179,8 +183,10 @@ has not seen:
 
 The 11 dev images hold 3,562 library functions. The gate is the host arms' (see the [flywheel](flywheel.md#the-gate)):
 training, each GCC release left out in turn, may gain no false positive and lose F1 on no reference; dev must gain,
-with at most one more false positive per 100 names gained and F1 lost on no image; the 30 negative references may
-get no name they did not have.
+with at most one more false positive per 100 names gained and F1 lost on no image; the 12 held-out negatives may
+get no name they did not have. Dev's baseline is main's identification (the scheme-3 set and the call graph
+before the hooks kernels, `--baseline-call-graph`); its candidate must equal what `identify_functions` returns
+with the tier and the new graph compiled in.
 
 | Gate (operand tier and the hooks call graph together) | Correct before | Correct after | False before | False after |
 | --- | ---: | ---: | ---: | ---: |
@@ -188,12 +194,12 @@ get no name they did not have.
 | Training, GCC 13.3 left out | 25,097 | 25,139 | 26 | 26 |
 | Training, GCC 15.2 left out | 13,271 | 13,288 | 20 | 20 |
 | Dev (11 images, 3,562 library functions) | 1,835 (51.5%) | 2,007 (56.3%) | 1 | 0 |
-| Negatives (30 references) | — | — | 21 | 21 |
+| Held-out negatives (zlib and inih, GCC 12.2 -O1/-O3; 12 references) | — | — | 6 | 6 |
 
 The training rows score the signatures alone over the extents discovery finds in each symbolized reference (a
-stripped whole-archive link reaches few of its functions). The 21 false names on negatives are the shipped
-databases' own (`__getopt_r` and others on unresolved-symbol stubs, `xEventGroupSetBitsFromISR` on an inih
-function) and unchanged. The hooks call graph alone, without the tier, gains two dev names and removes the one
+stripped whole-archive link reaches few of its functions), and each fold must hold
+on its own. The 6 false names on the held-out negatives are the shipped databases' own
+(`xEventGroupSetBitsFromISR` on one inih function in each build; zlib gets none) and unchanged. The hooks call graph alone, without the tier, gains two dev names and removes the one
 false name, but loses `xTaskIncrementTick.part.0` on one image (its caller's sequence now has a hook-bearing
 rival), which fails the per-image rule on its own; it ships with the tier, under which that image gains 24 names
 and still loses that one.
@@ -214,7 +220,8 @@ fixture's own objects), so any name on the fixture's own code counts as spurious
 | `embedded-libs-m0` (Raw, vector table) | 227 | 73 | 105 | 0 | 100% | 46.3% (was 45.4%) |
 
 The operand tier and the hooks call graph were measured on these fixtures once, after both were chosen and
-gated on dev (final read 1 of this split). The tier names `xQueueGenericReset`, `xQueueGenericCreate`, the
+gated on dev (final read 1 of this split; rebuilding the tier with the split negatives and wide stack
+adjustments later changed no fixture count). Of the signature names, 10 (M4F) and 2 (M0) carry the tier's source. The tier names `xQueueGenericReset`, `xQueueGenericCreate`, the
 ARMv7-M port's three exception handlers and `pvPortMalloc` on M4F, `vRestoreContextOfFirstTask` and
 `SVC_Handler` on M0, and takes over four names the call graph gave before; the call graph change alone changes
 neither fixture. The gain is far below dev's: the fixtures' misses are mostly code GCC 14.3 laid out differently
@@ -237,7 +244,10 @@ recognised far better: newlib and libgcc archive code is byte-identical within a
 Limits: one HAL family (STM32F4), GCC-built newlib and FreeRTOS only (no IAR, Keil/armcc, picolibc or vendor
 SDKs), little-endian Thumb only, and FreeRTOS signatures match only configurations whose code agrees with a
 trained one up to structure offsets and stack slots (the operand tier); a configuration that changes a function's
-length or instructions is not reached. A firmware's own copy of a library function with identical code is named after the library.
+length or instructions is not reached. A firmware's own copy of a library function with identical code is named after the library, and through the
+operand tier so is its own code that is identical up to load/store offsets and stack slots (a list insertion
+shaped like `vListInsert` over a structure with other field offsets, say); such names carry the source
+`rampage-builtin embedded operands`.
 
 ## Recognition policy
 

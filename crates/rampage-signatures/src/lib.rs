@@ -110,9 +110,9 @@ pub const CURRENT_SCHEME: u32 = 2;
 pub const LITERAL_POOL_SCHEME: u32 = 3;
 
 /// Hash scheme 4: scheme 3 with the offsets of Thumb loads and stores (structure offsets and stack slots) and the
-/// stack adjustments (`ADD Rd, SP, #imm`, `ADD`/`SUB SP, SP, #imm`) masked as well. Only those immediate bits are
-/// masked, never opcode or register bits, so a load still differs from a store; data immediates are kept. Every
-/// other architecture hashes exactly as under scheme 3. The embedded set's operand tier
+/// stack adjustments (`ADD Rd, SP, #imm`, and `ADD`/`SUB SP, SP, #imm` in 16- and 32-bit forms) masked as well.
+/// Only those immediate bits are masked, never opcode or register bits, so a load still differs from a store; data
+/// immediates are kept. Every other architecture hashes exactly as under scheme 3. The embedded set's operand tier
 /// (`data/embedded-thumb-operands.json.gz`) uses it, below the scheme-3 set.
 pub const THUMB_OPERAND_SCHEME: u32 = 4;
 
@@ -750,7 +750,8 @@ fn thumb16_operand_mask(hw: u16) -> u16 {
 /// The bits scheme 4 keeps of a 32-bit Thumb instruction (first and second halfword): every bit except the offset
 /// of `LDR`/`STR` (any size, signed or not) `[Rn, #imm12]` and `[Rn, #+/-imm8]` (offset, pre- and post-indexed),
 /// `LDRD`/`STRD [Rn, #+/-imm8 * 4]` and `VLDR`/`VSTR [Rn, #+/-imm8 * 4]`, with `Rn` not the PC. The add/subtract
-/// bit, the indexing kind, opcode and register bits stay, and so does every data-processing immediate.
+/// bit, the indexing kind, opcode and register bits stay. Of data processing, only the frame-size immediate of
+/// `ADD.W`/`SUB.W`/`ADDW`/`SUBW SP, SP, #imm` is masked; every other data-processing immediate stays.
 fn thumb32_operand_mask(hw1: u16, hw2: u16) -> (u16, u16) {
     // LDR/STR (immediate) T2/T3: 1111 100S 1 size L Rn | Rt imm12.
     let imm12 = hw1 & 0xfe80 == 0xf880;
@@ -760,6 +761,13 @@ fn thumb32_operand_mask(hw1: u16, hw2: u16) -> (u16, u16) {
     let dual = hw1 & 0xfe40 == 0xe840 && hw1 & 0x0120 != 0;
     // VLDR/VSTR: 1110 1101 UD0L Rn | Vd 101 sz imm8.
     let vector = hw1 & 0xff20 == 0xed00 && hw2 & 0x0e00 == 0x0a00;
+    // ADD.W/SUB.W SP, SP, #const (T3: 11110 i 0 1000/1101 S 1101 | 0 imm3 1101 imm8) and ADDW/SUBW SP, SP, #imm12
+    // (T4: 11110 i 10 0000/1010 1101 | 0 imm3 1101 imm8): a frame size, as the 16-bit ADD/SUB SP.
+    let sp_adjust =
+        hw2 & 0x8f00 == 0x0d00 && (matches!(hw1 & 0xfbef, 0xf10d | 0xf1ad) || matches!(hw1 & 0xfbff, 0xf20d | 0xf2ad));
+    if sp_adjust {
+        return (!0x0400, !0x70ff);
+    }
     let field = match () {
         _ if hw1 & 0x000f == 0x000f => 0,
         _ if imm12 => 0x0fff,
@@ -2403,6 +2411,25 @@ mod tests {
         assert_eq!(thumb32_operand_mask(0xf240, 0x1034), (0xffff, 0xffff)); // movw r0, #0x134
         assert_eq!(thumb32_operand_mask(0xf101, 0x0010), (0xffff, 0xffff)); // add.w r0, r1, #16
         assert_eq!(thumb32_operand_mask(0xf000, 0xf800), (0xffff, 0xffff)); // bl: scheme 3 masks it
+    }
+
+    #[test]
+    fn scheme_4_masks_wide_stack_adjustments_and_leaves_register_lists_and_exclusives() {
+        assert_eq!(thumb32_operand_mask(0xf1ad, 0x0d08), (!0x0400, !0x70ff)); // sub.w sp, sp, #8
+        assert_eq!(thumb32_operand_mask(0xf10d, 0x0d10), (!0x0400, !0x70ff)); // add.w sp, sp, #16
+        assert_eq!(thumb32_operand_mask(0xf20d, 0x0d04), (!0x0400, !0x70ff)); // addw sp, sp, #4
+        assert_eq!(thumb32_operand_mask(0xf2ad, 0x0d04), (!0x0400, !0x70ff)); // subw sp, sp, #4
+        assert_eq!(thumb32_operand_mask(0xf10d, 0x0008), (0xffff, 0xffff)); // add.w r0, sp, #8: a constant
+        assert_eq!(thumb32_operand_mask(0xf1a1, 0x0d08), (0xffff, 0xffff)); // sub.w sp, r1, #8: not SP-relative
+        assert_eq!(thumb32_operand_mask(0xed2d, 0x8b02), (0xffff, 0xffff)); // vpush {d8}: W set
+        assert_eq!(thumb32_operand_mask(0xecbd, 0x8b02), (0xffff, 0xffff)); // vpop {d8}
+        assert_eq!(thumb32_operand_mask(0xec90, 0x0a02), (0xffff, 0xffff)); // vldmia r0, {s0, s1}
+        assert_eq!(thumb32_operand_mask(0xe890, 0x0006), (0xffff, 0xffff)); // ldm.w r0, {r1, r2}
+        assert_eq!(thumb32_operand_mask(0xe92d, 0x4ff0), (0xffff, 0xffff)); // stmdb sp!, {r4-r11, lr}
+        assert_eq!(thumb32_operand_mask(0xe860, 0x2302), (0xffff, !0x00ff)); // strd r2, r3, [r0], #-8
+        assert_eq!(thumb32_operand_mask(0xf851, 0x0e04), (0xffff, !0x00ff)); // ldrt r0, [r1, #4]
+        assert_eq!(thumb32_operand_mask(0xe840, 0x3201), (0xffff, 0xffff)); // strex r2, r3, [r0, #4]
+        assert_eq!(thumb16_operand_mask(0xa002), 0xffff); // adr r0, #8
     }
 
     fn token_kinds(bytes: &[u8], address: u64) -> Vec<(&'static str, usize, usize)> {

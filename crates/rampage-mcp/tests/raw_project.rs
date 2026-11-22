@@ -414,7 +414,8 @@ async fn identify_embedded_raw_image(fixture: &str, profile: &str, names: &[&str
         let address = found["address"].as_str().unwrap();
         assert_eq!(found["name"], truth[address], "{address}: every name is the library function there");
         let source = found["source"].as_str().unwrap();
-        assert!(source == "rampage-builtin embedded" || source == "rampage-builtin call graph", "{address}: {source}");
+        let known = ["rampage-builtin embedded", "rampage-builtin embedded operands", "rampage-builtin call graph"];
+        assert!(known.contains(&source), "{address}: {source}");
     }
     for name in names {
         assert!(matches.iter().any(|found| found["name"] == *name), "{name}: {text}");
@@ -423,7 +424,10 @@ async fn identify_embedded_raw_image(fixture: &str, profile: &str, names: &[&str
     assert!(!failed && text.contains(names[0]), "{text}");
     client.cancel().await.unwrap();
     let count = |source: &str| matches.iter().filter(|found| found["source"] == source).count();
-    (count("rampage-builtin embedded"), count("rampage-builtin call graph"))
+    (
+        count("rampage-builtin embedded") + count("rampage-builtin embedded operands"),
+        count("rampage-builtin call graph"),
+    )
 }
 
 /// The bundled embedded firmware set names library functions of a headerless Cortex-M4F image (FreeRTOS, the

@@ -6,13 +6,14 @@
 //! ```sh
 //! cargo build --release -p rampage-eval --example embedded_operands
 //! E=target/release/examples/embedded_operands
-//! # The shipped database: every training reference, with the negatives as tombstones.
-//! $E build --output WORK/operands.json --gzip WORK/operands.json.gz --negatives WORK/negatives \
+//! # The shipped database: every training reference, with the tombstone negatives.
+//! $E build --output WORK/operands.json --gzip WORK/operands.json.gz --tombstones WORK/negatives \
 //!   WORK/refs/*.elf WORK/refs-hooks/*.elf
 //! # Training gate: each training toolchain left out in turn (no false positive may be added).
-//! $E loo --negatives WORK/negatives WORK/refs/*.elf WORK/refs-hooks/*.elf
+//! $E loo --tombstones WORK/negatives WORK/refs/*.elf WORK/refs-hooks/*.elf
 //! # Dev gate: the product's identification with and without the tier (WORK/dev from `build.py dev`).
-//! $E eval --candidate WORK/operands.json.gz [--call-graph CANDIDATE.json.gz] --negatives WORK/negatives \
+//! # After installing the tier and the call graph, against main's call graph as the baseline:
+//! $E eval --candidate WORK/operands.json.gz --baseline-call-graph MAIN.json.gz --negatives WORK/negatives-gate \
 //!   WORK/dev/*/*.stripped.elf
 //! ```
 //!
@@ -22,16 +23,19 @@
 //!   dropped; a body with no field scheme 4 masks is left out, since it would only repeat the scheme-3 set's
 //!   answer. Scheme 4 ([`THUMB_OPERAND_SCHEME`]) masks Thumb load/store offsets and stack adjustments bit by bit,
 //!   so it coarsens scheme 3: two bodies scheme 3 cannot tell apart, scheme 4 cannot either.
-//! - **Negatives are tombstones.** The negative references (Thumb builds of libraries no embedded signature covers)
+//! - **Tombstone negatives.** The tombstone negatives (Thumb builds of libraries no embedded signature covers)
 //!   are added under their own names and those names then removed, so a training body whose scheme-4 hash a
 //!   negative function shares never answers, and no negative name ships.
 //! - **The product's order.** Identification consults the bundled ARM corpus, the scheme-3 set, then the tier, and
-//!   then propagates names with the embedded call graph, as `identify_functions` does on firmware. `eval` checks
-//!   that its baseline equals `identify_functions` on every target before it reports.
+//!   then propagates names with the embedded call graph, as `identify_functions` does on firmware. `eval`
+//!   requires its candidate state to equal `identify_functions` on every target (so run it with the candidate tier
+//!   and call graph installed and compiled in); its baseline is the scheme-3 set with `--baseline-call-graph`
+//!   (default: the compiled-in graph).
 //! - **The gate** (as the host arms are gated, docs/flywheel.md): training, each toolchain left out (scored over
 //!   the extents discovery finds in each symbolized reference, since a stripped whole-archive link reaches few of
 //!   its functions), may gain no false positive and lose F1 on no reference; dev must gain, with at most one more false positive per 100 names
-//!   gained, F1 lost on no binary; negatives get no name they did not have.
+//!   gained, F1 lost on no binary; the held-out negatives (`build.py negatives --gate`: other libraries than
+//!   the tombstones, another GCC release, other options) get no name they did not have.
 //!
 //! `eval` lists every changed function: run it on dev targets only. The held-out 14.3 fixtures are the final split.
 
@@ -63,9 +67,9 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         gzip: Option<PathBuf>,
-        /// A directory of negative references (`*.elf`; tombstones only).
+        /// A directory of tombstone negatives (`*.elf`, `build.py negatives`).
         #[arg(long)]
-        negatives: Option<PathBuf>,
+        tombstones: Option<PathBuf>,
         /// The hash scheme (4; 3 rebuilds the scheme-3 set, to check the pipeline reproduces it).
         #[arg(long, default_value_t = THUMB_OPERAND_SCHEME)]
         scheme: u32,
@@ -74,8 +78,9 @@ enum Command {
     },
     /// Training gate: each training toolchain left out in turn.
     Loo {
+        /// A directory of tombstone negatives.
         #[arg(long)]
-        negatives: Option<PathBuf>,
+        tombstones: Option<PathBuf>,
         #[arg(long)]
         out: Option<PathBuf>,
         references: Vec<PathBuf>,
@@ -102,9 +107,13 @@ enum Command {
         /// A candidate scheme-3 set (gzip) in place of the bundled one.
         #[arg(long)]
         scheme3: Option<PathBuf>,
-        /// A candidate embedded call graph (gzip) in place of the bundled one.
+        /// A candidate embedded call graph (gzip) in place of the compiled-in one.
         #[arg(long)]
         call_graph: Option<PathBuf>,
+        /// The baseline's embedded call graph (gzip; default: the compiled-in one).
+        #[arg(long)]
+        baseline_call_graph: Option<PathBuf>,
+        /// A directory of held-out negatives (`build.py negatives --gate`), never the tombstones.
         #[arg(long)]
         negatives: Option<PathBuf>,
         #[arg(long)]
@@ -330,6 +339,7 @@ fn loo(references: &[PathBuf], negative: &[PathBuf]) -> Result<serde_json::Value
     let mut report = Vec::new();
     let (mut before_total, mut after_total) = (Counts::default(), Counts::default());
     let mut regressions = Vec::new();
+    let mut fold_failures: Vec<String> = Vec::new();
     for fold in folds {
         let training: Vec<&Reference> = references.iter().filter(|r| r.toolchain != fold).collect();
         let held: Vec<&Reference> = references.iter().filter(|r| r.toolchain == fold).collect();
@@ -365,14 +375,18 @@ fn loo(references: &[PathBuf], negative: &[PathBuf]) -> Result<serde_json::Value
             before_fold.fp(),
             after_fold.fp()
         );
+        if after_fold.fp() > before_fold.fp() {
+            fold_failures.push(fold.to_owned());
+        }
         report.push(json!({"left_out": fold, "before": before_fold, "after": after_fold,
             "scheme4_entries": scheme4.len(), "new_false_names": fold_wrong}));
         before_total.add(before_fold);
         after_total.add(after_fold);
     }
-    let passed = after_total.fp() <= before_total.fp() && regressions.is_empty();
+    // Each fold on its own may add no false positive (training gets no allowance).
+    let passed = fold_failures.is_empty() && regressions.is_empty();
     Ok(json!({"passed": passed, "before": before_total, "after": after_total, "folds": report,
-        "slice_regressions": regressions}))
+        "folds_adding_false_positives": fold_failures, "slice_regressions": regressions}))
 }
 
 /// One target identified as the product does: the given databases, then the embedded call graph.
@@ -401,6 +415,11 @@ fn product_names(
     Ok(names)
 }
 
+fn load_call_graph(path: &Path) -> Result<CallGraph, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    CallGraph::from_gzip(&bytes).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 fn load_gzip(path: &Path) -> Result<SignatureDb, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
     SignatureDb::from_gzip(&bytes).map_err(|error| format!("{}: {error}", path.display()))
@@ -410,17 +429,14 @@ fn eval(
     candidate: Option<&Path>,
     scheme3: Option<&Path>,
     call_graph: Option<&Path>,
+    baseline_call_graph: Option<&Path>,
     targets: &[PathBuf],
     negative: &[PathBuf],
 ) -> Result<serde_json::Value, String> {
     let tier = candidate.map(load_gzip).transpose()?;
     let replacement = scheme3.map(load_gzip).transpose()?;
-    let graph = call_graph
-        .map(|path| {
-            let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-            CallGraph::from_gzip(&bytes).map_err(|error| format!("{}: {error}", path.display()))
-        })
-        .transpose()?;
+    let graph = call_graph.map(load_call_graph).transpose()?;
+    let baseline_graph = baseline_call_graph.map(load_call_graph).transpose()?;
     let corpus = rampage_signatures::bundled_ref(rampage_arch::Arch::Arm);
     let mut rows = Vec::new();
     let (mut before_total, mut after_total) = (Counts::default(), Counts::default());
@@ -448,7 +464,7 @@ fn eval(
         let base: Vec<&SignatureDb> = corpus.into_iter().chain([embedded]).collect();
         let with: Vec<&SignatureDb> =
             corpus.into_iter().chain([replacement.as_ref().unwrap_or(embedded)]).chain(tier.as_ref()).collect();
-        let before_names = product_names(&project, &binary, &base, None)?;
+        let before_names = product_names(&project, &binary, &base, baseline_graph.as_ref())?;
         let after_names = product_names(&project, &binary, &with, graph.as_ref())?;
         let shipped: BTreeMap<u64, String> = project
             .identify_functions(None, true, false)
@@ -458,7 +474,8 @@ fn eval(
             .map(|matched| (matched.address, matched.name))
             .collect();
         let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        if shipped != before_names && shipped != after_names {
+        // The candidate state must be what the product computes: the tier and graph measured are the ones shipped.
+        if shipped != after_names {
             mismatched_baselines.push(name.clone());
         }
         let (before, after) = if is_negative {
@@ -507,7 +524,7 @@ fn eval(
         && mismatched_baselines.is_empty();
     Ok(json!({"passed": passed, "gained": gained, "allowance": allowance, "false_before": before_total.fp(),
         "false_after": after_total.fp(), "before": before_total,
-        "after": after_total, "regressions": regressions, "baseline_mismatches": mismatched_baselines,
+        "after": after_total, "regressions": regressions, "product_mismatches": mismatched_baselines,
         "tier_entries": tier.as_ref().map(SignatureDb::len), "binaries": rows}))
 }
 
@@ -536,8 +553,8 @@ fn write_report(out: Option<&PathBuf>, report: &serde_json::Value) -> Result<(),
 
 fn run(arguments: Arguments) -> Result<(), String> {
     match arguments.command {
-        Command::Build { output, gzip, negatives, scheme, references } => {
-            let negative = elf_files(negatives.as_ref())?;
+        Command::Build { output, gzip, tombstones, scheme, references } => {
+            let negative = elf_files(tombstones.as_ref())?;
             let database = build(&references, &negative, scheme)?;
             std::fs::write(&output, database.to_json()).map_err(|error| format!("{}: {error}", output.display()))?;
             if let Some(path) = &gzip {
@@ -545,7 +562,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
                 std::fs::write(path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
             }
             eprintln!(
-                "{} references, {} negatives: {} signatures, {} callee keys (scheme {scheme})",
+                "{} references, {} tombstone negatives: {} signatures, {} callee keys (scheme {scheme})",
                 references.len(),
                 negative.len(),
                 database.len(),
@@ -608,14 +625,15 @@ fn run(arguments: Arguments) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Loo { negatives, out, references } => {
-            let report = loo(&references, &elf_files(negatives.as_ref())?)?;
+        Command::Loo { tombstones, out, references } => {
+            let report = loo(&references, &elf_files(tombstones.as_ref())?)?;
             eprintln!("training gate passed: {}", report["passed"]);
             write_report(out.as_ref(), &report)
         }
-        Command::Eval { candidate, scheme3, call_graph, negatives, out, targets } => {
+        Command::Eval { candidate, scheme3, call_graph, baseline_call_graph, negatives, out, targets } => {
             let negatives = elf_files(negatives.as_ref())?;
-            let report = eval(candidate.as_deref(), scheme3.as_deref(), call_graph.as_deref(), &targets, &negatives)?;
+            let (tier, graph, baseline) = (candidate.as_deref(), call_graph.as_deref(), baseline_call_graph.as_deref());
+            let report = eval(tier, scheme3.as_deref(), graph, baseline, &targets, &negatives)?;
             eprintln!(
                 "dev gate passed: {} (gained {}, false positives {} -> {})",
                 report["passed"], report["gained"], report["false_before"], report["false_after"]

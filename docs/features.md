@@ -361,7 +361,7 @@ Supported signature architectures are x86, x86-64, AArch64, A32/Thumb, MIPS/MIPS
 Identification applies the reviewed default corpus for x86-64, AArch64, i386 and A32/Thumb without setup.
 Firmware (a Cortex-M Raw project, or a statically linked Thumb ELF executable with no interpreter or dynamic
 section) also gets the [embedded firmware set](signature-corpus.md#embedded-firmware-set), source
-`rampage-builtin embedded`: newlib and newlib-nano, libgcc, compiler-rt builtins, the FreeRTOS kernel and the
+`rampage-builtin embedded` (and `rampage-builtin embedded operands` for its coarser operand tier): newlib and newlib-nano, libgcc, compiler-rt builtins, the FreeRTOS kernel and the
 STM32F4 HAL/LL, from several GCC releases, cores and optimisation levels. It hashes literal pools as data, masking address-like words, and leaves short
 accessors unnamed. `identify_functions` takes a Cortex-M Raw project's `raw` selector, so a headerless flash image
 gets the same names as its ELF. An embedded call graph built from the same references then names the callees of

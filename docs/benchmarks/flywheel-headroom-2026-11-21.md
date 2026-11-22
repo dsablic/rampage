@@ -186,7 +186,7 @@ Cortex-M0 at -O1, scored against their library truth (`tests/fixtures/data/eval-
   operand-wildcard arm for Thumb, a generator, is the natural tool for those. Subtracting the ≥ 90% cases leaves
   about 96 functions (83 if the 75–90% cases go too), on two binaries.
   *Shipped after this measurement (2026-11-22):* the embedded set's operand tier (hash scheme 4: Thumb load/store
-  offsets and stack adjustments masked bit by bit, `data/embedded-thumb-operands.json.gz`, 1.26 MB) and a call graph
+  offsets and stack adjustments masked bit by bit, `data/embedded-thumb-operands.json.gz`, 1.25 MB) and a call graph
   that also trains on kernels with every application hook on. Gated on a new dev split (11 images from GCC 11.3,
   12.2, 13.2 and a training toolchain with other options, an owned program and kernel configuration; 3,562 library
   functions): 1,835 → 2,007 correct, false names 1 → 0, none added in training (each GCC release left out) or on

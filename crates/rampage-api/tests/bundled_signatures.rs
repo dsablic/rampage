@@ -38,9 +38,14 @@ fn bundled_database_names_musl_functions_aarch64() {
 
 /// The held-out GCC 14.3 firmware fixtures (`tools/embedded-signatures/build.py fixture`, never used to build the
 /// embedded set, its operand tier or its call graph): the embedded signatures and their operand tier name
-/// `signatures` library functions and the embedded call graph `call_graph` more, and every name is the library
-/// function the truth holds there.
-fn assert_embedded_firmware_names(core: &str, signatures: usize, call_graph: usize, propagated: &[&str]) {
+/// `signatures` and `operands` library functions and the embedded call graph `call_graph` more, and every name is
+/// the library function the truth holds there.
+fn assert_embedded_firmware_names(
+    core: &str,
+    (signatures, operands): (usize, usize),
+    call_graph: usize,
+    propagated: &[&str],
+) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     let project = Session::default().open(&root.join(format!("firmware/embedded-libs-{core}.elf")), None).unwrap();
     let truth = std::fs::read_to_string(root.join(format!("data/eval-truth-embedded-{core}.json"))).unwrap();
@@ -52,8 +57,9 @@ fn assert_embedded_firmware_names(core: &str, signatures: usize, call_graph: usi
     }
     let count = |source: &str| result.matches.iter().filter(|found| found.source == source).count();
     assert_eq!(count(rampage_api::EMBEDDED_SIGNATURES), signatures, "{core}");
+    assert_eq!(count(rampage_api::EMBEDDED_OPERAND_SIGNATURES), operands, "{core}");
     assert_eq!(count(rampage_api::CALL_GRAPH), call_graph, "{core}");
-    assert_eq!(result.matched, signatures + call_graph, "{core}");
+    assert_eq!(result.matched, signatures + operands + call_graph, "{core}");
     for name in propagated {
         let found = result.matches.iter().find(|found| found.name == *name);
         assert_eq!(found.map(|found| found.source.as_str()), Some(rampage_api::CALL_GRAPH), "{core} {name}");
@@ -62,10 +68,10 @@ fn assert_embedded_firmware_names(core: &str, signatures: usize, call_graph: usi
 
 #[test]
 fn embedded_call_graph_names_more_library_code_in_held_out_firmware_m4f() {
-    assert_embedded_firmware_names("m4f", 91, 10, &["vTaskSuspendAll", "xTaskIncrementTick"]);
+    assert_embedded_firmware_names("m4f", (81, 10), 10, &["vTaskSuspendAll", "xTaskIncrementTick"]);
 }
 
 #[test]
 fn embedded_call_graph_names_more_library_code_in_held_out_firmware_m0() {
-    assert_embedded_firmware_names("m0", 73, 32, &["memset", "memmove"]);
+    assert_embedded_firmware_names("m0", (71, 2), 32, &["memset", "memmove"]);
 }

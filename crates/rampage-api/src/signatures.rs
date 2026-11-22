@@ -22,9 +22,13 @@ pub const USER_SIGNATURES: &str = "user database";
 pub const CALL_GRAPH: &str = "rampage-builtin call graph";
 
 /// The [`SignatureMatch::source`] of a name the bundled embedded firmware set gave (newlib, libgcc, compiler-rt,
-/// FreeRTOS, STM32F4 HAL) or its operand tier (`rampage_signatures::bundled_embedded_operands_for`), consulted for
-/// firmware-like Thumb targets only (`rampage_signatures::firmware_like`).
+/// FreeRTOS, STM32F4 HAL), consulted for firmware-like Thumb targets only (`rampage_signatures::firmware_like`).
 pub const EMBEDDED_SIGNATURES: &str = "rampage-builtin embedded";
+
+/// The [`SignatureMatch::source`] of a name the embedded set's operand tier gave
+/// (`rampage_signatures::bundled_embedded_operands_for`): a coarser match than [`EMBEDDED_SIGNATURES`], equal to a
+/// library body up to load/store offsets and stack adjustments, consulted only where the embedded set has no answer.
+pub const EMBEDDED_OPERAND_SIGNATURES: &str = "rampage-builtin embedded operands";
 
 #[derive(Debug, Serialize)]
 pub struct SignatureMatch {
@@ -52,6 +56,10 @@ pub(crate) fn signature_origin(source: &str) -> String {
     match source {
         BUILTIN_PACK => "the bundled signature corpus".to_owned(),
         EMBEDDED_SIGNATURES => "the bundled embedded firmware signatures".to_owned(),
+        EMBEDDED_OPERAND_SIGNATURES => {
+            "the bundled embedded firmware signatures' operand tier (equal up to structure offsets and stack slots)"
+                .to_owned()
+        }
         CALL_GRAPH => "the bundled call graph (from an already-named caller)".to_owned(),
         USER_SIGNATURES => "the user-supplied database".to_owned(),
         pack => format!("data pack `{pack}`"),
@@ -236,7 +244,7 @@ impl Project {
             .map(|database| (BUILTIN_PACK, database))
             .into_iter()
             .chain(embedded.map(|database| (EMBEDDED_SIGNATURES, database)))
-            .chain(operands.map(|database| (EMBEDDED_SIGNATURES, database)));
+            .chain(operands.map(|database| (EMBEDDED_OPERAND_SIGNATURES, database)));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
         self.apply_layered_signatures_with_preflight(
             &databases,

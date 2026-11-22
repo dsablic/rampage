@@ -16,8 +16,11 @@ Subcommands:
   dev          build the dev split (WORK/dev): the owned dev-app firmware with toolchains, options and a kernel
                configuration training does not use, each with a stripped twin and libid truth (`fetch --dev`
                first). Iterate on dev; the 14.3 fixtures are the final split
-  negatives    build the negative split (WORK/negatives): Thumb references of libraries no embedded signature
-               covers (the flywheel corpus's zlib, LZ4, cJSON, inih, tinyexpr), where any name is a false one
+  negatives    build the negative references: Thumb builds of libraries no embedded signature covers (the
+               flywheel corpus's LZ4, cJSON and tinyexpr; GCC 13.2, -Os and -O2) that the operand tier takes as
+               tombstones (WORK/negatives); with --gate, the held-out negative gate instead (zlib and inih, which
+               the tombstones never saw, built by GCC 12.2 at -O1 and -O3; WORK/negatives-gate), where any name
+               is a false one
 
 The whole regeneration (see docs/signature-corpus.md#embedded-firmware-set):
 
@@ -592,9 +595,18 @@ def negative_sources():
     return found
 
 
-def negatives(work, release, out):
-    """Thumb references of the negative libraries (no embedded signature covers them) for three cores at -Os and
-    -O2, linked like the library references (stubs for the C library they call). Any name on them is false."""
+# The negative libraries: the operand tier's tombstones, and the held-out gate (other libraries, another GCC
+# release and other options): name -> (toolchain release, optimisation levels, libraries).
+NEGATIVE_SETS = {
+    "tombstones": ("13.2.rel1", ["Os", "O2"], ["lz4", "cjson", "tinyexpr"]),
+    "gate": ("12.2.rel1", ["O1", "O3"], ["zlib", "inih"]),
+}
+
+
+def negatives(work, which, out):
+    """Thumb references of one negative set (no embedded signature covers its libraries) for three cores, linked
+    like the library references (stubs for the C library they call). Any name on them is false."""
+    release, optimisations, libraries = NEGATIVE_SETS[which]
     out.mkdir(parents=True, exist_ok=True)
     toolchain = Toolchain(work, release)
 
@@ -606,9 +618,11 @@ def negatives(work, release, out):
     tasks = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
         for name, (_, _, (include, sources)) in negative_sources().items():
+            if name.split("-")[1] not in libraries:
+                continue
             root = work / "src" / name
             for core in ["m0", "m3", "m4f"]:
-                for optimisation in ["Os", "O2"]:
+                for optimisation in optimisations:
                     flags = [*CORES[core], f"-{optimisation}", "-ffunction-sections", "-g0", "-w"]
                     flags += [f"-I{root / path}" for path in include]
                     output = out / f"{name}-gcc{toolchain.version}-{core}-{optimisation}.elf"
@@ -710,6 +724,7 @@ def main():
     parser.add_argument("command", choices=["fetch", "refs", "compiler-rt", "fixture", "profiles", "dev", "negatives"])
     parser.add_argument("--dev", action="store_true", help="fetch: the dev split's toolchains and negative sources")
     parser.add_argument("--operands", action="store_true", help="profiles: the operand tier's index profiles")
+    parser.add_argument("--gate", action="store_true", help="negatives: the held-out negative gate")
     parser.add_argument("--cell", action="append", help="dev: build only these cells (default: all)")
     parser.add_argument("--config", action="append", choices=["full", "small", "hooks"],
                         help="refs: only the FreeRTOS kernels in these configurations (hooks: the operand tier's and "
@@ -729,7 +744,9 @@ def main():
             parser.error("dev needs --eval PATH-TO-rampage-eval")
         dev(work, arguments.eval.resolve(), arguments.cell or list(DEV_CELLS))
     elif arguments.command == "negatives":
-        negatives(work, (arguments.toolchain or ["13.2.rel1"])[0], arguments.output or work / "negatives")
+        which = "gate" if arguments.gate else "tombstones"
+        default = work / ("negatives-gate" if arguments.gate else "negatives")
+        negatives(work, which, arguments.output or default)
     elif arguments.command == "refs":
         default = work / ("refs-hooks" if arguments.config == ["hooks"] else "refs")
         refs(work, arguments.toolchain or TRAINING, arguments.output or default, arguments.config)
