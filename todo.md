@@ -484,7 +484,9 @@ acceptance run.
    ([headroom](docs/benchmarks/flywheel-headroom-2026-11-21.md)): library identification picked (20,497 reachable
    misses no miner takes); parameter types second (pointers recovered as 8-byte integers: 1,350 of 1,771 misses);
    call graph on firmware shipped 2026-11-21: M4F 51→60%, M0 31→45% recall, no wrong names (`qsort` stays
-   unnamed: only application code calls it).
+   unnamed: only application code calls it). Step 3 harness merged 2026-11-22 (`flywheel-code-run`, two
+   security reviews fixed). **Paused by the maintainer before the first paid run** ($5 cap, Sonnet; needs
+   `ANTHROPIC_API_KEY`; Claude Code has not yet run inside the sandbox).
 4. **Signature recall on firmware** (the arms and call graph gated on the embedded set).
 5. **Object files and static archives** (roadmap 4.3).
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
