@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.11.0 (2026-11-22)
 
 - `identify_functions` on Cortex-M firmware consults a new operand tier after the embedded set
   (`data/embedded-thumb-operands.json.gz`, 1.25 MB): the same training references hashed under scheme 4, which also
