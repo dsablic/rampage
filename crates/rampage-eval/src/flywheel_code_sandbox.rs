@@ -215,6 +215,7 @@ pub struct Tools {
     pub id: PathBuf,
     /// The C compiler, archiver and SDK for the candidate's builds.
     pub clang: Option<PathBuf>,
+    pub clangxx: Option<PathBuf>,
     pub ar: Option<PathBuf>,
     pub sdk: Option<PathBuf>,
     pub rustup_home: PathBuf,
@@ -250,6 +251,7 @@ impl Tools {
             cp: PathBuf::from("/bin/cp"),
             id: PathBuf::from("/usr/bin/id"),
             clang: xcrun(&["--find", "clang"]),
+            clangxx: xcrun(&["--find", "clang++"]),
             ar: xcrun(&["--find", "ar"]),
             sdk: xcrun(&["--show-sdk-path"]),
             rustup_home: std::env::var_os("RUSTUP_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".rustup")),
@@ -277,7 +279,8 @@ impl Tools {
     /// Every pinned program, for checking none lies where a session could have written.
     pub fn programs(&self) -> Vec<&Path> {
         let mut programs = vec![self.git.as_path(), &self.cargo, &self.ps, &self.tar, &self.cp, &self.id];
-        programs.extend([&self.nextest, &self.clang, &self.ar].into_iter().flatten().map(PathBuf::as_path));
+        programs
+            .extend([&self.nextest, &self.clang, &self.clangxx, &self.ar].into_iter().flatten().map(PathBuf::as_path));
         programs
     }
 
@@ -325,6 +328,9 @@ impl Tools {
             environment.push(("CC".to_owned(), clang.clone()));
             let triple = format!("{}-apple-darwin", std::env::consts::ARCH).to_uppercase().replace('-', "_");
             environment.push((format!("CARGO_TARGET_{triple}_LINKER"), clang.clone()));
+        }
+        if let Some(clangxx) = &self.clangxx {
+            environment.push(("CXX".to_owned(), clangxx.clone()));
         }
         if let Some(ar) = &self.ar {
             environment.push(("AR".to_owned(), ar.clone()));
