@@ -242,6 +242,21 @@ seeded into discovery, so `decompile`, `lock_mechanisms` and `integrity_checks` 
 the routine with a Thumb `bl`, inside a `push {..., lr}` routine, is seeded too (and its callers, three rounds deep),
 so `xrefs` to the routine finds the check that uses it.
 
+## Who reads a structure field
+
+Firmware keeps its state in structures in RAM and reaches a field through a base register: `ldr r1, =0x20001234`
+(a literal-pool load) or a MOVW/MOVT pair, then `ldrb r0, [r1, #11]`. `xrefs` `to` the field's address (0x2000123f
+here) lists every load and store that reaches it so, with `access` (`read` or `write`) and `base`: `site` (the
+instruction that set the base), `address`, `offset` and `width` in bytes. A row without `base` is a direct
+reference. `search` with `references` carries the same `base` on its hits.
+
+The base is followed through the function: along each straight-line run, and across branches and loops when every
+path into the access sets the same base (a structure pointer loaded once into a callee-saved register and read in
+a loop counts). A register written in between, a base set on only some paths, and stack-pointer-relative slots
+give no reference. RAM, peripherals and the private peripheral bus (0x10000000 to 0xe0100000) need not be mapped:
+a field there is listed when its base lies there too. The rows show the structure's layout from the code: `xrefs`
+`from` a function lists each field it touches with its offset from the base.
+
 ## Where to start reading
 
 Once discovery has run (a Cortex-M request with `pointer_tables` unset runs it at open), `binary_info` lists

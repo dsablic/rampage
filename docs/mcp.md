@@ -693,6 +693,14 @@ out. The feature guide linked for each tool is the full reference.
   Thumb code at the even address when it is known Thumb (an M-profile image, a Thumb range, or a mode discovery
   learned there), and say so in `note` (`notes` for `xrefs`; on the first row of a `disassemble` listing). An odd
   address not known to be Thumb is used as given, with a `note` saying so.
+- `xrefs` rows for a load or store whose address is a base register plus an immediate offset (a structure field:
+  `ldr r1, =0x20001234` then `ldrb r0, [r1, #11]`, or a MOVW/MOVT base) carry `base` (`site`, the instruction that
+  set the base; `address`; `offset`; `width` in bytes) and `access` (`read` or `write`); direct references have no
+  `base`. ARM and Thumb bases are followed across a function's branches when every path sets the same one; MIPS and
+  RISC-V bases (a completed `lui`/`addiu` pair, a GOT load) within a straight-line run. A redefined register, a base
+  set on some paths only, and the stack pointer give none. In a Raw Cortex-M project a field in unmapped RAM or
+  peripheral space (0x10000000 to 0xe0100000) is listed when its base lies there too. `search` `references` hits
+  carry the same `base`. See [Raw code](raw-code.md#who-reads-a-structure-field).
 - `xrefs` `to` that finds nothing adds `notes`: the start of the string the address lies inside, when that start is
   referenced and NUL-terminated; on M-profile images and the Thumb ranges of other little-endian ARM images, up to
   eight Thumb `bl` encodings outside every discovered function that target it (code discovery did not reach, to

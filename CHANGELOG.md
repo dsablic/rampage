@@ -4,6 +4,17 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- `xrefs` and `search` `references` find loads and stores that reach a structure field through a base register plus
+  an immediate offset (`ldr r1, =0x20001234` then `ldrb r0, [r1, #11]`, a MOVW/MOVT base, a Thumb `adds` on the
+  base), with evidence on each row: `base` (the instruction that set the base, the base address, the offset and the
+  access width) and `access` (`read` or `write`). On ARM and Thumb the base is followed across a function's
+  branches and loops when every path into the access sets the same base; MIPS and RISC-V bases (a completed
+  address pair or a GOT load) within a straight-line run. In a Raw Cortex-M project a field in unmapped RAM or
+  peripheral space is listed too. The CLI's `function xrefs` prints the evidence. New fixture
+  `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` is 11.
+
 ## 1.11.0 (2026-11-22)
 
 - `identify_functions` on Cortex-M firmware consults a new operand tier after the embedded set

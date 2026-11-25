@@ -74,7 +74,7 @@ rampage binary analyze module.dylib --all-architectures --workflow triage-report
 | `function decompile FILE --at ADDRESS [--isolated]` | `decompile` | Embedded Ghidra C and recovery diagnostics |
 | `function summarize FILE --at ADDRESS` | `summarize` | Structural CFG/reference summary, not recovered source |
 | `function pseudocode FILE --at ADDRESS [--structured]` | `pseudocode` | Partial ARM64 SSA with explicit unknowns |
-| `function xrefs FILE --to ADDRESS` or `--from ADDRESS` | `xrefs` | Code/data references; exactly one direction |
+| `function xrefs FILE --to ADDRESS` or `--from ADDRESS` | `xrefs` | Code/data references; exactly one direction. A field reached through a base register shows `[read 1B at base 0x20000100+0xb, base from ADDRESS]` |
 | `function identify FILE [--db DB] [--apply]` | `identify` | Native/PAT matches; optional separate fuzzy candidates |
 | `function build-signatures FILE [--output DB]` | `signatures` | Named-function JSON; separate fuzzy mode with `--fuzzy-request` |
 | `function compare FILE --reference JSON` | `compare` | Versioned, image-matched function-start comparison |

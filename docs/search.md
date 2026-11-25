@@ -42,7 +42,7 @@ The native request contains a tagged `mode` object:
 | `text` | `pattern`, `encoding`, `regex` | ASCII or Unicode UTF-16LE/BE text; optional bounded regex |
 | `immediate` | `immediate` | Structured signed/unsigned operand value with optional semantic width |
 | `instruction` | `mnemonic`, `operands` | Whole-field case-insensitive ASCII globs |
-| `references` | `target` | Retained references to the exact target VA |
+| `references` | `target` | Retained references to the exact target VA; a hit reached through a base register plus an offset (a structure field) carries `base` |
 | `functions_referencing` | `reference` | Distinct native functions with matching retained evidence |
 
 Example byte request:
