@@ -276,7 +276,11 @@ encoded bytes), so vector_table, pointer_tables and seeds read decoded bytes. Ov
 calls and seeds cross regions; binary_info lists every region with its SHA-256 and source (file range, decode \
 receipt, slice, scatter_load copy, records). format ihex|srec reads Intel HEX or S-records instead (omit offset/length/base_address): each contiguous run is a code region, a regions entry \
 without offset matching a run exactly states its kind, and the start-address record becomes the entry, reported \
-with its verdict.
+with its verdict. \
+writable (top level for the primary region, or on a code region) says the program stores into that code: the \
+decompiler maps it rwx so globals in it are never folded (literal pools still are). Unset, a Cortex-M primary region \
+is writable when mapped in SRAM (0x20000000-0x3fffffff) or decoded with code storing into it; binary_info reports \
+writable and writable_reason per region.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \

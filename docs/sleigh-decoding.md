@@ -92,7 +92,7 @@ Discovery, listing and code search use one Sleigh decoder factory. Valid instruc
 serialize `flow: "unknown"` with a `decode_gate`; they stop successor discovery and are never reported as
 fall-through, return or noreturn. A helper-gated Hexagon entry stays a valid function with an unresolved exit;
 SuperH's delay-slot gate inside a body stops successors there. Cached analysis and decompiler engines are bound to
-a `rampage-raw-interpretation-v6` identity covering bytes, profile, byte order, every region (kind, mapping,
+a `rampage-raw-interpretation-v7` identity covering bytes, profile, byte order, every region (kind, whether it is written, mapping,
 where its bytes lie and its stated source, including a decode receipt or a slice of another region), entry, seeds, the requested vector-table
 address, whether pointer tables were scanned, and a record file's format, record count and start address; edited
 loader fields or a failed specification recheck refuse the cache instead of serving it stale.

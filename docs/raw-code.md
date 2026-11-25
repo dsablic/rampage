@@ -160,6 +160,25 @@ tool needs one, such as a scanner that reads files. See
 [a compressed image as the code region](mcp.md#a-compressed-image-as-the-code-region) and
 [decoding](decoding.md).
 
+## Code that runs from RAM
+
+A compressed application cannot run from flash: a bootloader decodes it into RAM and jumps there, and its globals
+sit in the same bytes as its code. Mapped read-only, as flash is, that image misleads the decompiler: every store to
+a global carries `WARNING: Read-only address (ram,0x…) is written`, and a read of a global the program changes can
+be folded into the value the image held (`return 3;` for a mode set at run time). On Cortex-M a primary region the
+program writes is therefore writable for the decompiler:
+
+- mapped in SRAM (`base_address` 0x20000000 to 0x3fffffff), it is writable by its address;
+- decoded (`decode`) anywhere else, it is writable once discovery finds code storing into at least two of its words;
+- `"writable": true` or `false` on the selector says so yourself, for any profile, such as for a plain dump of an
+  image that runs from RAM at a non-SRAM address. A further `code` region takes `"writable": true` the same way.
+
+Its literal pools and the strings they point at still fold, so calls, strings and constants read as before; only
+its globals stop folding. Check
+the verdict in `binary_info`: `raw.regions[0].writable` and `writable_reason` (`ram_address`, `stores` or
+`stated`). An image that runs from flash stays read-only, so its constants keep folding. See
+[writable code regions](mcp.md#writable-code-regions).
+
 ## Map further regions
 
 A Cortex-M project takes up to 15 `regions` beside the primary one, each `code`, `data` or `ram`, so a second

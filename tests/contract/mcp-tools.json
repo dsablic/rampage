@@ -74,6 +74,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -152,6 +156,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -422,6 +430,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         },
@@ -584,6 +596,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -679,6 +695,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -1440,6 +1460,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         },
@@ -1756,6 +1780,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -2099,6 +2127,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -2219,6 +2251,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -2377,6 +2413,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -2551,6 +2591,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -2633,6 +2677,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -2832,6 +2880,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         },
@@ -2922,6 +2974,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -3082,6 +3138,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -3302,6 +3362,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         },
@@ -3384,6 +3448,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -3627,6 +3695,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         },
@@ -3726,6 +3798,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -3913,6 +3989,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -4033,6 +4113,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -4123,6 +4207,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -4247,6 +4335,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -4456,6 +4548,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         },
@@ -4604,6 +4700,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -4956,6 +5056,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -5043,6 +5147,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -5125,6 +5233,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -5247,6 +5359,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -5329,6 +5445,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -5582,6 +5702,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -5661,6 +5785,10 @@
             "vector_table": {
               "type": "boolean|integer|null|string",
               "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
+              "required": false
             }
           }
         }
@@ -5735,6 +5863,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }
@@ -5888,6 +6020,10 @@
             },
             "vector_table": {
               "type": "boolean|integer|null|string",
+              "required": false
+            },
+            "writable": {
+              "type": "boolean|null",
               "required": false
             }
           }

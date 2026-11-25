@@ -2067,6 +2067,7 @@ mod tests {
             records: None,
             esp: None,
             scatter_load: Some(true),
+            writable: None,
         };
         crate::Binary::from_raw_image(image)
     }
@@ -2249,6 +2250,7 @@ mod tests {
                 size: 0x100,
                 bytes: None,
                 source: crate::RawRegionSource::Unbacked,
+                writable: None,
             })
             .collect();
         let binary = admit(program(&calls, false, &halt, 0x200), full).unwrap();

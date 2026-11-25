@@ -3,8 +3,9 @@ use rampage_loaders::{Binary, Format, RawRegionKind};
 
 use crate::ApiError;
 
-/// Exactly the admitted Raw regions, each with its kind's permissions: code `r-x`, constant data `r--`, RAM `rw-`
-/// (zero-filled when it has no bytes). Nothing else, in no other space, is mapped.
+/// Exactly the admitted Raw regions, each with its kind's permissions: code `r-x` (`rwx` when the program writes
+/// it, [`rampage_loaders::RawRegionInfo::writable`]), constant data `r--`, RAM `rw-` (zero-filled when it has no
+/// bytes). Nothing else, in no other space, is mapped.
 fn raw_regions(binary: &Binary) -> Result<Vec<MemoryRegion<'_>>, ApiError> {
     let identity = binary.raw_interpretation_identity().map_err(|error| ApiError::Invalid(error.to_string()))?;
     let raw = binary
@@ -26,14 +27,13 @@ fn raw_regions(binary: &Binary) -> Result<Vec<MemoryRegion<'_>>, ApiError> {
             let bytes = bytes
                 .get(region.data_range())
                 .ok_or_else(|| ApiError::Invalid("Raw region bytes disagree with the admitted mapping".into()))?;
-            let kind = region.kind;
             Ok(MemoryRegion {
                 base: region.base_address,
                 bytes,
                 size: region.length,
                 readable: true,
-                writable: kind == RawRegionKind::Ram,
-                executable: kind == RawRegionKind::Code,
+                writable: region.writable,
+                executable: region.kind == RawRegionKind::Code,
             })
         })
         .collect()

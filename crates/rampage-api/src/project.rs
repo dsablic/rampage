@@ -179,9 +179,9 @@ pub struct Project {
     pub(crate) decompile_counts: crate::analysis_cache::DerivedCounters,
     /// Loads and stores at constant addresses, scanned once on the first peripheral query.
     pub(crate) mmio_accesses: OnceLock<Result<Arc<crate::peripherals::AccessIndex>, String>>,
-    /// Cortex-M Raw only: flash words code reads or writes through a formed address, scanned once per project for
-    /// the decompiler (`decompile::symbols`).
-    pub(crate) flash_data_accesses: OnceLock<Vec<(u64, u64)>>,
+    /// Cortex-M firmware only: flash words code reads or writes through a formed address, and the literal pools of
+    /// and stores into Raw code regions, scanned once per project for the decompiler (`decompile::symbols`).
+    pub(crate) code_data_accesses: OnceLock<crate::decompile::CodeDataAccesses>,
 }
 
 /// A fresh analysis to store: the store, its key, and why an existing entry was rejected, if one was.
@@ -451,7 +451,7 @@ impl Project {
             analysis_store_pending: std::sync::Mutex::new(None),
             decompile_counts: Default::default(),
             mmio_accesses: OnceLock::new(),
-            flash_data_accesses: OnceLock::new(),
+            code_data_accesses: OnceLock::new(),
         }
     }
 
@@ -964,7 +964,7 @@ impl Project {
                 base_address: raw.base(),
                 length: raw.length(),
                 seed_count: raw.seeds().len(),
-                regions: raw.regions(),
+                regions: self.reported_raw_regions(),
                 records: raw.records(),
                 esp: raw.esp(),
                 vector_table: raw.vector_table(),
@@ -1030,6 +1030,27 @@ impl Project {
             crate::workflows::add_starting_point(self, &mut points, seed.address, reason.to_owned());
         }
         points
+    }
+
+    /// What the code reads and writes in its own mappings, scanned once (discovery runs first when it has not).
+    pub(crate) fn code_data_accesses(&self) -> &crate::decompile::CodeDataAccesses {
+        self.code_data_accesses.get_or_init(|| crate::decompile::code_data_accesses(self))
+    }
+
+    /// The admitted Raw regions as binary_info reports them: a decoded Cortex-M primary region that code stores into
+    /// is marked writable (`stores`) once discovery has run; binary_info never starts discovery for it.
+    fn reported_raw_regions(&self) -> std::borrow::Cow<'_, [rampage_loaders::RawRegionInfo]> {
+        let Some(raw) = self.binary.raw_code_image() else { return std::borrow::Cow::Borrowed(&[]) };
+        let regions = raw.regions();
+        if crate::decompile::stores_candidate(&self.binary).is_none()
+            || !self.analysis.get().is_some_and(Result::is_ok)
+            || self.code_data_accesses().stores_writable.is_none()
+        {
+            return std::borrow::Cow::Borrowed(regions);
+        }
+        let mut regions = regions.to_vec();
+        regions[0] = regions[0].marked_writable(rampage_loaders::RawWritableReason::Stores);
+        std::borrow::Cow::Owned(regions)
     }
 
     /// For a Cortex-M Raw project mapped from a byte range (not records, which state their addresses), its base

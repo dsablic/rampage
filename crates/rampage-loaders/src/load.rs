@@ -282,6 +282,7 @@ impl Binary {
             records: None,
             esp: None,
             scatter_load: None,
+            writable: None,
         })
     }
 

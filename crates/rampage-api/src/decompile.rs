@@ -41,6 +41,7 @@ pub(crate) use go_abi::GoPrototypes;
 pub(crate) use isolated::query_types as isolated_type_query;
 pub(crate) use symbols::posix_context;
 pub(crate) use symbols::stub_targets as import_stub_targets;
+pub(crate) use symbols::{CodeDataAccesses, code_data_accesses, stores_candidate};
 pub(crate) use types::declaration_tokens as type_tokens;
 pub(crate) use types::validate_local_type;
 

@@ -95,6 +95,14 @@ pub struct RawProjectRequest {
     #[serde(default, deserialize_with = "regions")]
     #[schemars(length(max = 15))]
     pub regions: Vec<RawRegionRequest>,
+    /// Whether the program writes the primary code region: `true` maps it rwx for the decompiler, so reads of the
+    /// globals inside it are never folded to the bytes the image holds (its literal pools still read as constants);
+    /// `false` keeps it r-x. Unset decides on ARM:LE:32:Cortex: writable when base_address lies in SRAM
+    /// (0x20000000-0x3fffffff), or when the region is decoded and discovered code stores into it; read-only
+    /// otherwise. binary_info reports the verdict as `writable` and `writable_reason` on regions[0]. Not with
+    /// `format: esp`, whose segments map by the chip's memory map.
+    #[serde(default)]
+    pub writable: Option<bool>,
 }
 
 /// How a Raw request's file states its bytes.
@@ -164,6 +172,12 @@ pub struct RawRegionRequest {
     /// receipt (source range and hash, codec, parameters, output hash) with the region.
     #[serde(default)]
     pub decode: Option<RawRegionDecode>,
+    /// `code` only: `true` states that the program also stores into the region (code and its globals together in
+    /// RAM), so the decompiler maps it rwx and never folds reads of its globals; its literal pools still read as
+    /// constants. Default: the kind's (`ram` writable, `code` and `data` not). `true` on `data` and `false` on
+    /// `ram` are refused: use the other kind.
+    #[serde(default)]
+    pub writable: Option<bool>,
 }
 
 /// The bytes a region copies from an earlier region.
@@ -680,6 +694,7 @@ impl RawProjectRequest {
                     size: length,
                     bytes: None,
                     source: RawRegionSource::Slice { region: source, offset: from.offset.0, length },
+                    writable: region.writable,
                 });
                 continue;
             }
@@ -698,6 +713,7 @@ impl RawProjectRequest {
                     size: region.length.0,
                     bytes: None,
                     source: RawRegionSource::Unbacked,
+                    writable: region.writable,
                 });
                 continue;
             };
@@ -720,7 +736,14 @@ impl RawProjectRequest {
                 Some(decode) => decoded_range(path, offset.0, length, decode, mapped)
                     .map_err(|error| refuse(format!("decode: {error}")))?,
             };
-            regions.push(RawRegion { kind, base, size: bytes.len() as u64, bytes: Some(bytes), source });
+            regions.push(RawRegion {
+                kind,
+                base,
+                size: bytes.len() as u64,
+                bytes: Some(bytes),
+                source,
+                writable: region.writable,
+            });
         }
         Ok(regions)
     }
@@ -800,7 +823,16 @@ impl RawProjectRequest {
         };
         let regions = self.read_regions(path, profile, max - bytes.len())?;
         let scatter_load = self.scatter_load_mode(profile)?;
-        Ok(RawImage { bytes, options, source: Some(source), regions, records: None, esp: None, scatter_load })
+        Ok(RawImage {
+            bytes,
+            options,
+            source: Some(source),
+            regions,
+            records: None,
+            esp: None,
+            scatter_load,
+            writable: self.writable,
+        })
     }
 
     /// The ESP app image at `offset` (default 0) of the file: each segment the chip's memory map places becomes a
@@ -818,6 +850,12 @@ impl RawProjectRequest {
             return Err(invalid(
                 "Raw format esp takes every address from the app image's segment headers: give only offset (the \
                  image's file offset, default 0), and omit length, base_address and decode",
+            ));
+        }
+        if self.writable.is_some() {
+            return Err(invalid(
+                "Raw format esp maps each segment by the chip's memory map (DRAM writable, IRAM and flash not): omit \
+                 writable",
             ));
         }
         let offset = self.offset.map_or(0, |offset| offset.0);
@@ -854,6 +892,7 @@ impl RawProjectRequest {
                 size: segment.length,
                 bytes: Some(bytes),
                 source,
+                writable: None,
             });
         }
         if image.chip == rampage_loaders::esp::EspChip::Esp8266 && offset == 0 {
@@ -882,6 +921,7 @@ impl RawProjectRequest {
                     size: (end - from) as u64,
                     bytes: Some(file[from..end].to_vec()),
                     source: RawRegionSource::FileRange { offset: from as u64, length: (end - from) as u64 },
+                    writable: None,
                 });
             }
         }
@@ -903,6 +943,7 @@ impl RawProjectRequest {
                         size: start - at,
                         bytes: None,
                         source: RawRegionSource::Unbacked,
+                        writable: None,
                     });
                 }
                 at = at.max(end);
@@ -942,6 +983,7 @@ impl RawProjectRequest {
             records: None,
             esp: Some(image),
             scatter_load: None,
+            writable: None,
         })
     }
 
@@ -980,6 +1022,7 @@ impl RawProjectRequest {
                 size: bytes.len() as u64,
                 bytes: Some(bytes),
                 source: RawRegionSource::Records { format },
+                writable: None,
             })
             .collect();
         if !regions.is_empty() && !profile.native_decoder() {
@@ -1004,7 +1047,10 @@ impl RawProjectRequest {
                     && run.size == region.length.0
             });
             match run {
-                Some(run) => run.kind = region_kind(region.kind),
+                Some(run) => {
+                    run.kind = region_kind(region.kind);
+                    run.writable = region.writable;
+                }
                 None => requested.regions.push(region.clone()),
             }
         }
@@ -1040,6 +1086,7 @@ impl RawProjectRequest {
             records: Some(facts),
             esp: None,
             scatter_load,
+            writable: self.writable,
         })
     }
 }

@@ -253,7 +253,7 @@ fn every_region_input_changes_the_interpretation_identity() {
     let identity = |value: Value| {
         let binary = rampage_api::open_raw_binary(&path, &request(value)).unwrap();
         let identity = binary.raw_interpretation_identity().unwrap().unwrap();
-        assert_eq!(identity.schema, "rampage-raw-interpretation-v6");
+        assert_eq!(identity.schema, "rampage-raw-interpretation-v7");
         identity.sha256
     };
     let base = identity(copied());

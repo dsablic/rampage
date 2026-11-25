@@ -280,8 +280,12 @@ optional `vector_table` (`true` for one at `base_address`, or its address), `poi
 functions from tables of Thumb code pointers, `false` never scans, unset scans when discovery finds under one
 function per 16 KiB), `scatter_load` (`false` reports the startup copies without mapping them) and `regions`
 (further code, data or RAM regions of the same file, from a file range, decoded in memory, or copied `from`
-another region). `format` `ihex` or `srec` reads Intel HEX or S-records, whose records state every address (omit
-`offset`, `length` and `base_address`). Unknown fields are rejected. The mapping is an analyst assertion; see
+another region). `writable` states whether the program writes the primary code region (a region's own `writable`
+does so for a `code` region): `true` maps it `rwx` for the decompiler, so reads of its globals are never folded into
+the bytes the image holds; unset, a Cortex-M primary region is writable when mapped in SRAM or when it is decoded
+and the code stores into it ([writable code regions](mcp.md#writable-code-regions)). `format` `ihex` or `srec`
+reads Intel HEX or S-records, whose records state every address (omit `offset`, `length` and `base_address`).
+Unknown fields are rejected. The mapping is an analyst assertion; see
 [Raw code](raw-code.md) for the workflow and [Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for
 profiles and limits.
 

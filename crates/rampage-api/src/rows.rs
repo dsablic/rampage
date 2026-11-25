@@ -298,7 +298,7 @@ pub struct RawSummary<'a> {
     pub seed_count: usize,
     /// Every mapped region, the primary code region first: kind, mapping, SHA-256 of its bytes and where they came
     /// from (a file range, a decoder provider's receipt, record data, or nothing for unbacked RAM).
-    pub regions: &'a [rampage_loaders::RawRegionInfo],
+    pub regions: std::borrow::Cow<'a, [rampage_loaders::RawRegionInfo]>,
     /// Intel HEX or S-record input: the format, data records read and the verdict on the start-address record.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub records: Option<&'a rampage_loaders::RawRecordsEvidence>,

@@ -27,6 +27,14 @@ see the [stability policy](docs/stability.md) for what the version promises.
   tool has no CLI command, or the nearest routes by edit distance (a prefix such as `function decomp` counts as close).
   `rampage help <tool>` shows the route's help. The mapping is one table, listed in the
   [CLI reference](docs/cli-reference.md#mcp-tool-names).
+- Raw projects: a code region the program writes is writable for the decompiler, so a Cortex-M application that runs
+  from RAM no longer gets `Read-only address is written` on its global stores, and reads of its globals are no
+  longer folded into the values the image holds; its literal pools, and the strings they point at, still fold. A Cortex-M primary region is writable
+  when mapped in SRAM (0x20000000 to 0x3fffffff), or when it is decoded and discovered code stores into it. The `raw`
+  selector states it with `writable` (on the selector for the primary region, on a `regions` entry for a `code`
+  region); `true` on `data` and `false` on `ram` are refused. `binary_info` reports `writable` and `writable_reason`
+  on each region. Flash mappings, other profiles and native images decompile as before. The Raw interpretation
+  identity is now `rampage-raw-interpretation-v7`, so analyses cached for Raw projects are recomputed once.
 
 ## 1.11.0 (2026-11-22)
 

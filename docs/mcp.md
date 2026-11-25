@@ -941,7 +941,8 @@ so a bootloader's second stage is analysed at the address it runs from:
 Each region has a `kind`: `code` (r-x; seeds may lie here, and on Cortex-M its literal pools fold as constants, but
 words the code reads through an address it forms do not),
 `data` (r--, constant bytes) or `ram` (rw-; its bytes, if any, are initial values the program may change, so the
-decompiler never folds loads from it). `offset`/`length` select its bytes in the same file; a `ram` region without
+decompiler never folds loads from it). `"writable": true` on a `code` region says the program also stores into it
+(see [writable code regions](#writable-code-regions)). `offset`/`length` select its bytes in the same file; a `ram` region without
 `offset` has no bytes (zero-filled or uninitialised RAM, memory-mapped I/O) and `length` is its size. `decode`
 maps the in-memory output of the decoder provider over the range instead: it takes `decode_file_range`'s `codec`,
 `lzss`, `expected_output_size` (the region's size), `initial_write_offset`, `dictionary_fill` and `timeout_ms`;
@@ -957,7 +958,8 @@ data references, calls and the decompiler's memory image span every region, so a
 pool into the RAM stage, and back, resolves.
 
 `binary_info` lists `raw.regions`, the primary region first (`raw.code`, then `raw.<kind>.<n>`), each with `kind`,
-`base_address`, `length`, `sha256` of the mapped bytes (absent when unbacked) and `source`: `file_range`
+`base_address`, `length`, `sha256` of the mapped bytes (absent when unbacked), `writable` (with `writable_reason`
+when stated or decided by a Cortex-M rule; see [writable code regions](#writable-code-regions)) and `source`: `file_range`
 (`offset`, `length`), `decoded` (`offset`, `length` and the provider's `receipt`: codec, parameters, source-range
 SHA-256, output SHA-256, consumption and limits, without the path and preview), `slice` (`region`, `offset`,
 `length`), `records` (`format`) or `unbacked`. Each region is also a segment and section with its permissions.
@@ -1079,6 +1081,40 @@ with any `regions` sharing that cap. `decode` takes the same fields as a region'
 `decode_file_range` (when the decode succeeds) and each reproduced `probe_compression` candidate return this selector
 without `profile` and `base_address` as `open_as_raw`, with a one-line `next`: add the profile and load address and
 pass it as `raw` with the same path. A decoded size above 4 MiB has no selector.
+
+### Writable code regions
+
+A code region is `r-x` unless the program writes it. Code that runs from the memory it was loaded or decoded into
+keeps its globals in the same bytes, and on a read-only mapping the decompiler reports every store to one as
+`WARNING: Read-only address (ram,0x…) is written` and may fold a read of one into the value the image holds (`return
+3` for a mode the program changes). So a code region can be writable: the decompiler maps it `rwx`, its globals stay
+reads and stores, and only the literal-pool words its discovered code loads PC-relative, and the strings (up to 255
+printable bytes and a NUL) those words point at, are made read-only again when no address the code forms reaches
+them, so pools still fold into the constants, addresses and calls they hold and text reads as string literals.
+
+`writable` on the selector states it for the primary region, and on a `regions` entry for that region: `true` on a
+`code` region, or the kind's own default. `true` on `data` and `false` on `ram` are refused (use the other kind), as
+is `writable` with `"format": "esp"`, whose segments map by the chip's memory map. With ihex/srec input, a `regions`
+entry that states a run's kind may state its `writable` too. Unset, a Cortex-M primary region is writable when:
+
+- its `base_address` lies in the architectural SRAM region, 0x20000000 to 0x3fffffff (`writable_reason`
+  `ram_address`); or
+- it holds decoded bytes (`decode`) and discovered code stores into at least two of its words through addresses
+  loaded from its literal pools (`stores`): a compressed image is decoded into the memory it runs from, wherever
+  the device maps that RAM. This verdict needs discovery, which a Cortex-M Raw project runs at open unless
+  `pointer_tables` is set, and `binary_info` shows it once discovery has run.
+
+Anything else stays read-only, as flash is, and other profiles and native images are unchanged. `binary_info` reports
+`writable` on every `raw.regions` entry and, when stated or decided by a rule, `writable_reason` (`stated`,
+`ram_address` or `stores`). Segment and section permissions stay the kind's, so native analysis (references, string
+and constant search, discovery) keeps reading literal pools as constants.
+
+```json
+{
+  "path": "tests/fixtures/firmware/raw-cortex-m-ramapp-lo.bin",
+  "raw": { "profile": "cortex-m0", "base_address": "0x1000000", "entry": "0x1000044", "writable": true }
+}
+```
 
 ### Load-address candidates and `base_check`
 

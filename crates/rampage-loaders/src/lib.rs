@@ -36,9 +36,10 @@ pub use linkage::{
 pub use load::{Binary, Embedded, ImageAt, InventorySourceContext, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 pub use raw::{
-    MAX_RAW_BYTES, MAX_RAW_NATIVE_BYTES, MAX_RAW_REGIONS, MAX_RAW_SEEDS, RawCodeImage, RawCodeOptions, RawCodeSpace,
-    RawImage, RawInterpretationIdentity, RawProfile, RawRecordFacts, RawRecordsEvidence, RawRegion, RawRegionInfo,
-    RawRegionKind, RawRegionSource, RawStartAddress, RawStartRefusedReason, RawStartStatus,
+    CORTEX_M_SRAM, MAX_RAW_BYTES, MAX_RAW_NATIVE_BYTES, MAX_RAW_REGIONS, MAX_RAW_SEEDS, RawCodeImage, RawCodeOptions,
+    RawCodeSpace, RawImage, RawInterpretationIdentity, RawProfile, RawRecordFacts, RawRecordsEvidence, RawRegion,
+    RawRegionInfo, RawRegionKind, RawRegionSource, RawStartAddress, RawStartRefusedReason, RawStartStatus,
+    RawWritableReason,
 };
 pub mod buildinfo;
 mod checked_snapshot;
