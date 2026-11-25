@@ -1585,6 +1585,7 @@ mod tests {
                 to_name: Some(name(index as usize)),
                 objc: None,
                 access: None,
+                base: None,
             })
             .collect();
         let mut summary: Value = native_function_summary();

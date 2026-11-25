@@ -803,3 +803,45 @@ fn invalid_thumb_instructions_advance_the_remaining_it_slots() {
     assert_eq!(decoder.decode(&bytes("7047"), AT + 4).flow, Flow::Next);
     assert_eq!(decoder.format(&bytes("7047"), AT + 4), "bxeq lr");
 }
+
+/// Each instruction's base-relative access: the base register's origin when its address is a known base plus an
+/// immediate offset.
+fn base_accesses(target: Target, hex: &str, lengths: &[usize]) -> Vec<Option<rampage_arch::BaseAccess>> {
+    let mut decoder = decoder(&target).unwrap();
+    let code = bytes(hex);
+    let mut offset = 0;
+    let mut results = Vec::new();
+    for &len in lengths {
+        decoder.decode(&code[offset..], AT + offset as u64);
+        results.push(decoder.base_access());
+        offset += len;
+    }
+    results
+}
+
+#[test]
+fn loads_and_stores_through_a_pool_base_name_the_base_and_its_origin() {
+    use rampage_arch::BaseAccess;
+    // ldr r1, [pc, #4] (0x20000100); ldrb r0, [r1, #11]; strb r0, [r1, #4]; nop; .word 0x20000100
+    let code = "0149c87a087100bf00010020";
+    let base = |write| Some(BaseAccess { site: AT, base: 0x2000_0100, write, width: 1 });
+    assert_eq!(base_accesses(thumb(), code, &[2, 2, 2]), [None, base(false), base(true)]);
+    assert_eq!(accesses(thumb(), code, &[2, 2, 2])[1..], [(Some(0x2000_010b), true), (Some(0x2000_0104), true)]);
+    // ldr r1, [pc, #4]; adds r1, #8; ldrh r0, [r1, #2]: the base moves with the add, its origin stays the load.
+    let results = base_accesses(thumb(), "014908314888000000010020", &[2, 2, 2]);
+    assert_eq!(results[2], Some(BaseAccess { site: AT, base: 0x2000_0108, write: false, width: 2 }));
+    // movw r1, #0x100; movt r1, #0x2000; ldr r0, [r1, #8]: the MOVT completes the base.
+    let results = base_accesses(thumb(), "40f20011c2f20001886800bf", &[4, 4, 2]);
+    assert_eq!(results[2], Some(BaseAccess { site: AT + 4, base: 0x2000_0100, write: false, width: 4 }));
+    // movs r1, #64; ldrb r0, [r1, #11]: a small constant is no base; ldr r0, [sp, #4] is a stack slot.
+    assert_eq!(base_accesses(thumb(), "4021c87a0198", &[2, 2, 2]), [None, None, None]);
+    // ldr r1, [pc, #4]; ldr r1, [r2]; ldrb r0, [r1, #11]: the base is overwritten first.
+    assert_eq!(base_accesses(thumb(), "01491168c87a00bf00010020", &[2, 2, 2])[2], None);
+    // MIPS: lui $2, 0x41; addiu $2, $2, 0x10; lw $3, 8($2): the completed pair is a base; lui alone is half of one.
+    let results = base_accesses(big_endian(Arch::Mips), "3c020041244200108c430008", &[4, 4, 4]);
+    assert_eq!(results[2], Some(BaseAccess { site: AT + 4, base: 0x41_0010, write: false, width: 4 }));
+    assert_eq!(base_accesses(big_endian(Arch::Mips), "3c0200418c430008", &[4, 4])[1], None);
+    // RISC-V: auipc a0, 1; addi a0, a0, 16; ld a1, 8(a0).
+    let results = base_accesses(Target::new(Arch::Riscv64), "171500001305050183358500", &[4, 4, 4]);
+    assert_eq!(results[2], Some(BaseAccess { site: AT + 4, base: 0x2010, write: false, width: 8 }));
+}

@@ -2,7 +2,7 @@
 
 use crate::flow::Kind;
 use crate::mrs::read_u32;
-use crate::{Disassembler, Flow, Got, Insn, Target};
+use crate::{BaseAccess, Disassembler, Flow, Got, Insn, Target};
 use std::collections::BTreeMap;
 
 use super::operands::{canonical_rotation, label_target};
@@ -167,16 +167,19 @@ pub fn flow(decoded: &Decoded, address: u64) -> (Flow, bool) {
 
 /// Register values known within a straight-line run: addresses built from literal pools, MOVW/MOVT pairs and
 /// PC-relative additions, and the GOT entries loaded through them.
-#[derive(Default)]
-struct Registers {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Registers {
     values: [Option<Value>; 16],
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Value {
     value: u64,
     /// Formed from PC (or loaded from the GOT): certainly an address. Other constants only may be.
     address: bool,
+    /// The instruction that set a whole address: a literal-pool load, MOVT completing a MOVW, a PC-relative
+    /// formation or a GOT load. `None` for small immediates and halves, which are not taken as a base's origin.
+    site: Option<u64>,
 }
 
 /// What tracking learned from one instruction.
@@ -189,6 +192,17 @@ struct Found {
 }
 
 impl Registers {
+    /// What holds on both of two paths that join: the values they agree on.
+    pub(crate) fn meet(&self, other: &Self) -> Self {
+        let mut values = self.values;
+        for (value, other) in values.iter_mut().zip(other.values) {
+            if *value != other {
+                *value = None;
+            }
+        }
+        Registers { values }
+    }
+
     fn get(&self, register: u64) -> Option<Value> {
         self.values[register as usize & 15]
     }
@@ -210,11 +224,18 @@ pub struct Aarch32Disassembler {
     modes: BTreeMap<u64, bool>,
     switches: BTreeMap<u64, bool>,
     sequential_mode: Option<(u64, bool)>,
+    /// The base-relative access the instruction last decoded made, if any.
+    base_access: Option<BaseAccess>,
+    /// The registers known after the instruction last decoded, on the paths it continues on, before a transfer
+    /// that does not fall through forgets them for the next instruction.
+    exit_registers: Registers,
 }
 
 impl Aarch32Disassembler {
     pub fn new(target: &Target) -> Self {
         Self {
+            base_access: None,
+            exit_registers: Registers::default(),
             target: target.clone(),
             it: None,
             decoded_in: None,
@@ -329,7 +350,7 @@ impl Aarch32Disassembler {
             read_u32(bytes, offset, self.target.data_big_endian).map(u64::from)
         };
         let read = |registers: &Registers, register: u64| -> Option<Value> {
-            if register == PC { Some(Value { value: pc, address: true }) } else { registers.get(register) }
+            if register == PC { Some(Value { value: pc, address: true, site: None }) } else { registers.get(register) }
         };
 
         // The register written, and its new value when known.
@@ -344,7 +365,8 @@ impl Aarch32Disassembler {
                 if name.starts_with("LDR_l") {
                     let value = literal(slot);
                     found.immediate = value;
-                    written = r("Rt").map(|rt| (rt, value.map(|value| Value { value, address: false })));
+                    let site = Some(address);
+                    written = r("Rt").map(|rt| (rt, value.map(|value| Value { value, address: false, site })));
                 }
             }
         } else if name.starts_with("ADR") {
@@ -356,11 +378,11 @@ impl Aarch32Disassembler {
                 if !partial {
                     found.data_ref = Some(target);
                 }
-                written = rd.map(|rd| (rd, Some(Value { value: target, address: true })));
+                written = rd.map(|rd| (rd, Some(Value { value: target, address: true, site: Some(address) })));
             }
         } else if matches!(mnemonic, "MOVW") || name.starts_with("MOV_i_A2") || name.starts_with("MOV_i_T3") {
             let value = wide_immediate(decoded);
-            written = rd.map(|rd| (rd, Some(Value { value, address: false })));
+            written = rd.map(|rd| (rd, Some(Value { value, address: false, site: None })));
         } else if matches!(name, "MOV_i_T1" | "MOV_i_T2" | "MOVS_i_T2" | "MOV_i_A1" | "MOVS_i_A1") {
             // `movs r1, #64`, `mov.w r1, #0xc80`: a constant a later load or store may use as its address.
             let value = match decoded.set {
@@ -370,22 +392,34 @@ impl Aarch32Disassembler {
                     f("i").unwrap_or(0) << 11 | f("imm3").unwrap_or(0) << 8 | f("imm8").unwrap_or(0),
                 )),
             };
-            written = rd.map(|rd| (rd, value.map(|value| Value { value, address: false })));
+            written = rd.map(|rd| (rd, value.map(|value| Value { value, address: false, site: None })));
         } else if mnemonic == "MOVT" {
             let high = wide_immediate(decoded);
             if let Some(rd) = rd {
                 let low = self.registers.get(rd).map(|value| value.value & 0xffff);
-                let value = low.map(|low| Value { value: high << 16 | low, address: false });
+                let value = low.map(|low| Value { value: high << 16 | low, address: false, site: Some(address) });
                 found.immediate = value.map(|value| value.value);
                 written = Some((rd, value));
             }
-        } else if matches!(mnemonic, "ADD" | "SUB") && name.contains("_i_") && f("Rn").is_some() {
-            // Add or subtract an immediate to a known base; linker-made PLT entries build addresses so.
-            let rn = f("Rn").unwrap_or(0);
-            let imm = if decoded.set == Set::A32 { f("imm12").map(a32_expand_imm) } else { None };
+        } else if let Some(add) = immediate_add(decoded) {
+            // Add or subtract an immediate to a known base; linker-made PLT entries build addresses so, and Thumb
+            // code steps from a literal-pool base to a structure inside it (`adds r3, #0x40`).
+            let rn = f("Rn").or_else(|| f("Rdn")).unwrap_or(0);
+            let thumb_imm = |expand: bool| {
+                let imm = f("i")? << 11 | f("imm3")? << 8 | f("imm8")?;
+                Some(if expand { t32_expand_imm(imm) } else { imm })
+            };
+            let imm = match decoded.set {
+                Set::A32 => f("imm12").map(a32_expand_imm),
+                Set::T16 => f("imm3").or_else(|| f("imm8")),
+                Set::T32 => thumb_imm(!name.ends_with("_T4")),
+            };
             let value = read(&self.registers, rn).zip(imm).map(|(base, imm)| {
-                let value = if mnemonic == "ADD" { base.value.wrapping_add(imm) } else { base.value.wrapping_sub(imm) };
-                Value { value, ..base }
+                let value = if add { base.value.wrapping_add(imm) } else { base.value.wrapping_sub(imm) };
+                // An offset from PC is formed here; from another base, it keeps that base's origin. A Thumb sum
+                // is only taken as a base for loads and stores, never reported as an address formed.
+                let site = if rn == PC { Some(address) } else { base.site };
+                Value { value, site, address: base.address && decoded.set == Set::A32 }
             });
             written = rd.map(|rd| (rd, value));
         } else if mnemonic == "ADD" && (name.starts_with("ADD_r") || name.starts_with("ADD_SP_r")) {
@@ -395,7 +429,7 @@ impl Aarch32Disassembler {
                 (PC, other) | (other, PC) if other != PC && unshifted(decoded) && !conditional => self
                     .registers
                     .get(other)
-                    .map(|offset| Value { value: pc.wrapping_add(offset.value), address: true }),
+                    .map(|offset| Value { value: pc.wrapping_add(offset.value), address: true, site: Some(address) }),
                 _ => None,
             };
             if let Some(value) = value {
@@ -435,10 +469,20 @@ impl Aarch32Disassembler {
                     };
                     found.data_ref = Some(at & 0xffff_ffff);
                     found.accesses = true;
+                    // Stack slots are not fields of a structure at a known address.
+                    if let Some(site) = base.site.filter(|_| !matches!(rn, Some(SP | PC))) {
+                        self.base_access = Some(BaseAccess {
+                            site,
+                            base: base.value,
+                            write: mnemonic.starts_with("STR"),
+                            width: access_width(mnemonic),
+                        });
+                    }
                     if mnemonic == "LDR" {
                         let entry =
                             self.target.got.as_ref().and_then(|got: &Got| got.entry(at, 4)).filter(|&entry| entry != 0);
-                        written = r("Rt").map(|rt| (rt, entry.map(|value| Value { value, address: true })));
+                        written = r("Rt")
+                            .map(|rt| (rt, entry.map(|value| Value { value, address: true, site: Some(address) })));
                     }
                 }
             }
@@ -530,6 +574,37 @@ impl Aarch32Disassembler {
     }
 }
 
+/// For an add or subtract of an immediate to a register (not SP), whether it adds. A32 keeps to ADD and SUB, whose
+/// sums build PLT addresses; Thumb takes every immediate form, flag-setting ones included.
+fn immediate_add(decoded: &Decoded) -> Option<bool> {
+    let name = decoded.encoding.name;
+    if decoded.set == Set::A32 {
+        let mnemonic = decoded.mnemonic();
+        return (matches!(mnemonic, "ADD" | "SUB") && name.contains("_i_") && decoded.field("Rn").is_some())
+            .then_some(mnemonic == "ADD");
+    }
+    if decoded.field("Rn").is_none() && decoded.field("Rdn").is_none() {
+        return None;
+    }
+    match name.split_once("_i_T")?.0 {
+        "ADD" | "ADDS" => Some(true),
+        "SUB" | "SUBS" => Some(false),
+        _ => None,
+    }
+}
+
+/// The bytes a load or store (`LDRB`, `STRH`, `LDRSB`, `LDRD`, `LDREX`, ...) accesses.
+fn access_width(mnemonic: &str) -> u8 {
+    let rest = mnemonic.strip_prefix("LDR").or_else(|| mnemonic.strip_prefix("STR")).unwrap_or("");
+    let rest = rest.strip_prefix("EX").unwrap_or(rest);
+    match rest.trim_start_matches('S').as_bytes().first() {
+        Some(b'B') => 1,
+        Some(b'H') => 2,
+        Some(b'D') => 8,
+        _ => 4,
+    }
+}
+
 /// Whether an A32 ADD's modified immediate uses a rotation an assembler would not choose; only linker-made PLT
 /// entries do (`add ip, ip, #16, #20`), and their sums are halfway addresses.
 fn is_non_canonical(decoded: &Decoded) -> bool {
@@ -547,6 +622,7 @@ impl Disassembler for Aarch32Disassembler {
     /// window still learns the constant an `ldr rN, [pc, #imm]` loads.
     fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
         self.switches.clear();
+        self.base_access = None;
         let invalid = Insn {
             address,
             len: self.unit(address),
@@ -566,6 +642,7 @@ impl Disassembler for Aarch32Disassembler {
             self.it = advanced.in_block().then_some((next, advanced));
             self.sequential_mode = Some((next, thumb));
             self.registers = Registers::default();
+            self.exit_registers = Registers::default();
             return invalid;
         };
         let next = address.wrapping_add(u64::from(decoded.size()));
@@ -614,6 +691,7 @@ impl Disassembler for Aarch32Disassembler {
         self.sequential_mode =
             matches!(flow, Flow::Next | Flow::Call(_) | Flow::IndirectCall | Flow::ConditionalJump(_))
                 .then_some((next, thumb));
+        self.exit_registers = self.registers.clone();
         if self.sequential_mode.is_none() {
             // Nothing falls through to the next instruction, which is reached (if at all) from elsewhere with other
             // register values: a `movs r4, #0; b ...` must not make the next block's `str r5, [r4]` store to 0.
@@ -643,10 +721,27 @@ impl Disassembler for Aarch32Disassembler {
             .unwrap_or_else(|| "(bad)".to_owned())
     }
 
+    fn base_access(&self) -> Option<BaseAccess> {
+        self.base_access
+    }
+
+    fn facts(&self) -> Option<crate::RegisterFacts> {
+        Some(crate::RegisterFacts::aarch32(self.exit_registers.clone()))
+    }
+
+    fn taken_facts(&self) -> Option<crate::RegisterFacts> {
+        self.facts()
+    }
+
+    fn assume(&mut self, facts: &crate::RegisterFacts) {
+        self.registers = facts.aarch32_registers().cloned().unwrap_or_default();
+    }
+
     fn reset(&mut self) {
         self.it = None;
         self.decoded_in = None;
         self.registers = Registers::default();
+        self.exit_registers = Registers::default();
         self.sequential_mode = None;
     }
 

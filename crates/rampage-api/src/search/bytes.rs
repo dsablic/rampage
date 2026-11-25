@@ -303,6 +303,7 @@ impl Scan<'_> {
             target: None,
             code: None,
             reference_kinds: vec![],
+            base: None,
         });
         true
     }

@@ -491,6 +491,10 @@ impl Disassembler for CapstoneDisassembler {
         mips_operands(&self.engine, self.target.arch, insn, &detail)
     }
 
+    fn base_access(&self) -> Option<crate::BaseAccess> {
+        self.tracker.base_access()
+    }
+
     fn reset(&mut self) {
         self.tracker.reset();
     }

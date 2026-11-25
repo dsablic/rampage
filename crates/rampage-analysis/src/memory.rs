@@ -23,6 +23,11 @@ pub trait Memory: Sync {
     fn code_pointer_mode(&self, _address: u64) -> Option<bool> {
         None
     }
+    /// Whether `address`, though not mapped, lies where the processor keeps data (RAM, memory-mapped I/O), so a
+    /// load or store through a base register holding an address there is a reference to it.
+    fn holds_unmapped_data(&self, _address: u64) -> bool {
+        false
+    }
     fn read_pointer(&self, _address: u64, _size: u8) -> Option<u64> {
         None
     }
@@ -31,6 +36,10 @@ pub trait Memory: Sync {
         None
     }
 }
+
+/// The Cortex-M address ranges that hold data rather than code: SRAM (from 0x10000000, where several parts keep
+/// tightly coupled RAM), peripherals, external RAM and devices, and the private peripheral bus (SCB, NVIC, SysTick).
+const CORTEX_M_DATA: std::ops::Range<u64> = 0x1000_0000..0xe010_0000;
 
 /// Images whose code starts below this are treated as based at zero.
 const MIN_IMAGE_BASE_FOR_IMMEDIATES: u64 = 0x10000;
@@ -52,6 +61,11 @@ impl Memory for Binary {
 
     fn code_from(&self, address: u64) -> Option<&[u8]> {
         Binary::code_from(self, address)
+    }
+
+    /// A Raw Cortex-M image maps only the bytes it was given: its RAM and peripherals lie outside every region.
+    fn holds_unmapped_data(&self, address: u64) -> bool {
+        self.format == rampage_loaders::Format::Raw && self.m_profile() && CORTEX_M_DATA.contains(&address)
     }
 
     fn is_mapped(&self, address: u64) -> bool {

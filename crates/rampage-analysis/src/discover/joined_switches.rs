@@ -52,7 +52,8 @@ where
     if pending.is_empty() {
         return Ok(Assumed::new());
     }
-    if new_decoder()?.facts().is_none() {
+    // AArch32 facts carry structure bases (see `field_flow`), not switch bounds.
+    if new_decoder()?.facts().is_none_or(|facts| facts.carries_bases()) {
         return Ok(Assumed::new());
     }
     let mut entries: HashMap<u64, Vec<u64>> = HashMap::new();
@@ -81,12 +82,12 @@ where
 }
 
 /// How the last instruction of a block leaves it.
-struct Exit {
-    address: u64,
-    flow: Flow,
-    end: u64,
-    fall_through: Option<RegisterFacts>,
-    taken: Option<RegisterFacts>,
+pub(super) struct Exit {
+    pub(super) address: u64,
+    pub(super) flow: Flow,
+    pub(super) end: u64,
+    pub(super) fall_through: Option<RegisterFacts>,
+    pub(super) taken: Option<RegisterFacts>,
 }
 
 /// The tables of `jumps` in `result`'s function that hold with facts carried across its blocks. `entries` lists,
@@ -197,7 +198,10 @@ fn function_tables(
 
 /// The blocks a block's last instruction can continue at inside `function`, with the facts on each edge. Edges to
 /// addresses that start no block of the function lead elsewhere and are dropped by the caller.
-fn successors<'a>(function: &super::DiscoveredFunction, exit: &'a Exit) -> Vec<(u64, Option<&'a RegisterFacts>)> {
+pub(super) fn successors<'a>(
+    function: &super::DiscoveredFunction,
+    exit: &'a Exit,
+) -> Vec<(u64, Option<&'a RegisterFacts>)> {
     let fall_through = exit.fall_through.as_ref();
     match exit.flow {
         Flow::ConditionalJump(target) => vec![(target, exit.taken.as_ref()), (exit.end, fall_through)],

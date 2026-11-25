@@ -12,7 +12,7 @@
 use capstone::arch::{self, ArchOperand};
 use capstone::{Capstone, InsnDetail, RegId};
 
-use crate::{Arch, Got, TargetWidth};
+use crate::{Arch, BaseAccess, Got, TargetWidth};
 
 /// An operand, reduced to what tracking needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +29,9 @@ pub(crate) enum Operand {
 struct Value {
     value: u64,
     address: bool,
+    /// The instruction that finished forming the value as a whole address (`addiu` after `lui`, a GOT load), from
+    /// which a load or store through it reaches a field. `None` for halves, constants and the global pointer.
+    site: Option<u64>,
 }
 
 /// What tracking learned from one instruction.
@@ -66,6 +69,10 @@ pub(crate) struct Tracker {
     at_entry: Option<u64>,
     /// Registers loaded from a GOT entry that the dynamic linker fills (an import's), with the entry's address.
     slots: Vec<(u16, u64)>,
+    /// The base-relative access the instruction last stepped made, if any.
+    base_access: Option<BaseAccess>,
+    /// The address of the instruction last stepped.
+    stepped: u64,
     /// MIPS: stack slots (base register and displacement) the function saved its global pointer to, as
     /// unoptimised code does before each call and reloads after it.
     gp_slots: Vec<(u16, i64)>,
@@ -148,6 +155,8 @@ impl Tracker {
             sticky: Vec::new(),
             at_entry: None,
             slots: Vec::new(),
+            base_access: None,
+            stepped: 0,
             gp_slots: Vec::new(),
             run_killed: Vec::new(),
         }
@@ -178,6 +187,12 @@ impl Tracker {
         self.at_entry = self.entry_register.map(|_| entry);
     }
 
+    /// The base-relative access the instruction last stepped made: through a register holding a whole address
+    /// formed earlier in the run, never the global pointer or a stack register.
+    pub(crate) fn base_access(&self) -> Option<BaseAccess> {
+        self.base_access
+    }
+
     /// The value a register is known to hold, and whether it is certainly an address.
     pub(crate) fn value(&self, register: u16) -> Option<(u64, bool)> {
         self.get(register).map(|value| (value.value, value.address))
@@ -187,10 +202,10 @@ impl Tracker {
     /// decoded itself, such as a MIPS16e PC-relative one), after [`Tracker::step`] has forgotten its old value.
     /// A register found to hold the global pointer keeps it for the rest of the function, as in [`Tracker::step`].
     pub(crate) fn assign(&mut self, register: u16, value: u64, address: bool) {
-        let value = Value { value, address };
+        let value = Value { value, address, site: address.then_some(self.stepped) };
         self.set(register, value);
         if let Some(wrapped) = self.wrap(value.value) {
-            let value = Value { value: wrapped, address };
+            let value = Value { value: wrapped, address, site: None };
             if self.is_global_pointer(value) {
                 self.sticky.push((register, value));
             }
@@ -224,7 +239,7 @@ impl Tracker {
         if let Some((gp, value)) = self.global_pointer
             && gp == register
         {
-            return Some(Value { value, address: true });
+            return Some(Value { value, address: true, site: None });
         }
         self.known.iter().find(|(known, _)| *known == register).map(|&(_, value)| value)
     }
@@ -268,18 +283,24 @@ impl Tracker {
             && let Some(register) = self.entry_register
             && let Some(value) = self.wrap(address)
         {
-            let entry = Value { value, address: true };
+            let entry = Value { value, address: true, site: None };
             self.set(register, entry);
             self.sticky.push((register, entry));
         }
         let mut found = Found::default();
+        self.stepped = address;
+        self.base_access = None;
         // A load or store through a known base: its address.
+        let mut access = None;
         for operand in operands {
             if let Operand::Memory { base, index: 0, disp } = *operand
                 && let Some(base) = self.get(base)
             {
                 found.data_ref = self.wrap(base.value.wrapping_add(disp as u64));
                 found.accesses = found.data_ref.is_some();
+                access = base.site.zip(memory_access(self.arch, mnemonic)).map(|(site, (write, width))| {
+                    (found.data_ref, BaseAccess { site, base: base.value, write, width })
+                });
             }
         }
         let slot_load = self.filled_at_run_time(mnemonic, operands, found.data_ref);
@@ -296,6 +317,17 @@ impl Tracker {
             self.run_killed.extend(moved.collect::<Vec<_>>());
         }
         self.slots.extend(slot_load);
+        // A whole address formed here is a base whose loads and stores reach fields. A copy keeps its origin, and a
+        // load (from the GOT) says itself whether it loaded a whole address or a page.
+        let formed = !matches!(mnemonic, "move" | "mv" | "c.mv" | "mr") && !LOADS.contains(&mnemonic);
+        let result = result.map(|(register, mut value)| {
+            if !self.complete(mnemonic) || self.is_global_pointer(value) {
+                value.site = None;
+            } else if formed {
+                value.site = Some(address);
+            }
+            (register, value)
+        });
         if let Some((register, value)) = result {
             self.set(register, value);
             if self.is_global_pointer(value) {
@@ -311,6 +343,12 @@ impl Tracker {
                     found.immediate = value_found;
                 }
             }
+        }
+        if let Some((at, access)) = access
+            && found.accesses
+            && found.data_ref == at
+        {
+            self.base_access = Some(access);
         }
         // A call changes registers; with a delay slot, only after the slot's instruction.
         match self.forget_after.take() {
@@ -356,7 +394,7 @@ impl Tracker {
         match mnemonic {
             "lw" | "ld" if self.gp_slots.contains(&(base, disp)) && !self.run_killed.contains(&(base, disp)) => {
                 let (_, global) = self.global_pointer?;
-                Some((register, Value { value: self.wrap(global)?, address: true }))
+                Some((register, Value { value: self.wrap(global)?, address: true, site: None }))
             }
             _ => None,
         }
@@ -384,7 +422,7 @@ impl Tracker {
     /// The register the instruction sets to a known value, and that value.
     fn result(&self, mnemonic: &str, operands: &[Operand], address: u64, found: &mut Found) -> Option<(u16, Value)> {
         use Operand::{Immediate as I, Memory as M, Register as R};
-        let constant = |value: u64| Value { value, address: false };
+        let constant = |value: u64| Value { value, address: false, site: None };
         let offset = |base: Value, delta: i64| Value { value: base.value.wrapping_add(delta as u64), ..base };
         let or = |register, value| {
             let base = self.get(register)?;
@@ -408,7 +446,9 @@ impl Tracker {
                 found.data_ref = Some(entry);
                 found.accesses = false;
             }
-            return Some((destination?, Value { value: entry, address: true }));
+            let page = got.is_local(slot, width) && entry % 0x1_0000 == 0;
+            let site = (!page).then_some(address);
+            return Some((destination?, Value { value: entry, address: true, site }));
         }
         match (self.arch, mnemonic, operands) {
             (Arch::Mips | Arch::Mips64, "lui", &[R(rt), I(value)]) => {
@@ -424,12 +464,13 @@ impl Tracker {
                 let (left, right) = (self.get(rs)?, self.get(rt)?);
                 let sum = left.value.wrapping_add(right.value);
                 let value = if mnemonic == "addu" { self.extend32(sum)? } else { sum };
-                Some((rd, Value { value, address: left.address || right.address }))
+                Some((rd, Value { value, address: left.address || right.address, site: None }))
             }
 
-            (Arch::Riscv32 | Arch::Riscv64, "auipc", &[R(rd), I(value)]) => {
-                Some((rd, Value { value: address.wrapping_add(self.extend32((value as u64) << 12)?), address: true }))
-            }
+            (Arch::Riscv32 | Arch::Riscv64, "auipc", &[R(rd), I(value)]) => Some((
+                rd,
+                Value { value: address.wrapping_add(self.extend32((value as u64) << 12)?), address: true, site: None },
+            )),
             (Arch::Riscv32 | Arch::Riscv64, "lui" | "c.lui", &[R(rd), I(value)]) => {
                 Some((rd, constant(self.extend32((value as u64) << 12)?)))
             }
@@ -485,7 +526,9 @@ impl Tracker {
             (Arch::Sparc | Arch::Sparc64, "or", &[R(rs), I(value), R(rd)]) => Some((rd, or(rs, value)?)),
             (Arch::Sparc | Arch::Sparc64, "add", &[R(rs), I(value), R(rd)]) => Some((rd, offset(self.get(rs)?, value))),
 
-            (Arch::S390x, "larl", &[R(rd), I(value)]) => Some((rd, Value { value: value as u64, address: true })),
+            (Arch::S390x, "larl", &[R(rd), I(value)]) => {
+                Some((rd, Value { value: value as u64, address: true, site: None }))
+            }
             (
                 Arch::S390x,
                 "lgrl" | "lrl" | "lgfrl" | "llgfrl" | "lhrl" | "lghrl" | "stgrl" | "strl",
@@ -503,6 +546,33 @@ impl Tracker {
             (Arch::S390x, "aghi" | "agfi", &[R(rd), I(value)]) => Some((rd, offset(self.get(rd)?, value))),
             _ => None,
         }
+    }
+}
+
+/// Whether a MIPS or RISC-V load or store writes, and the bytes it accesses; `None` for other instructions and
+/// architectures.
+fn memory_access(arch: Arch, mnemonic: &str) -> Option<(bool, u8)> {
+    let mnemonic = mnemonic.strip_prefix("c.").unwrap_or(mnemonic);
+    match arch {
+        Arch::Mips | Arch::Mips64 => match mnemonic {
+            "lb" | "lbu" => Some((false, 1)),
+            "lh" | "lhu" => Some((false, 2)),
+            "lw" | "lwu" | "lwl" | "lwr" | "ll" | "lwc1" => Some((false, 4)),
+            "ld" | "ldl" | "ldr" | "lld" | "ldc1" => Some((false, 8)),
+            _ => mips_store_size(mnemonic).map(|size| (true, size as u8)),
+        },
+        Arch::Riscv32 | Arch::Riscv64 => match mnemonic {
+            "lb" | "lbu" => Some((false, 1)),
+            "lh" | "lhu" => Some((false, 2)),
+            "lw" | "lwu" | "flw" => Some((false, 4)),
+            "ld" | "fld" => Some((false, 8)),
+            "sb" => Some((true, 1)),
+            "sh" => Some((true, 2)),
+            "sw" | "fsw" => Some((true, 4)),
+            "sd" | "fsd" => Some((true, 8)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -614,7 +684,7 @@ mod width_tests {
         let mut tracker = Tracker {
             arch: Arch::Mips,
             register_width: None,
-            known: vec![(1, Value { value: 0x1234, address: true })],
+            known: vec![(1, Value { value: 0x1234, address: true, site: None })],
             global_pointer: Some((2, 0x2000)),
             got: None,
             forget_after: Some(1),
@@ -624,6 +694,8 @@ mod width_tests {
             sticky: Vec::new(),
             at_entry: None,
             slots: Vec::new(),
+            base_access: None,
+            stepped: 0,
             gp_slots: Vec::new(),
             run_killed: Vec::new(),
         };
@@ -650,6 +722,8 @@ mod width_tests {
             sticky: Vec::new(),
             at_entry: None,
             slots: Vec::new(),
+            base_access: None,
+            stepped: 0,
             gp_slots: Vec::new(),
             run_killed: Vec::new(),
         };

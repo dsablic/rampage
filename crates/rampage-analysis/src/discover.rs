@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use joined_switches::Assumed;
-use rampage_arch::{DecodeGate, Disassembler, Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
+use rampage_arch::{BaseAccess, DecodeGate, Disassembler, Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
 use rampage_loaders::Binary;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::memory::Memory;
 
 mod exits;
+mod field_flow;
 mod joined_switches;
 
 use exits::{Exits, never_returning};
@@ -101,12 +102,42 @@ pub struct Xref {
     pub kind: XrefKind,
 }
 
+/// A load or store whose address is a base register's known value plus an immediate offset: how code reaches a
+/// field of a structure at a fixed address (`ldr r1, =0x20001234` then `ldrb r0, [r1, #11]`). Each has a data
+/// [`Xref`] from `from` to `to`; this is its evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct FieldRef {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub to: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub from: u64,
+    /// The instruction that put the base in the register: a literal-pool load, MOVT, `adr`, a completed address
+    /// pair or a GOT load.
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub base_site: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub base: u64,
+    pub write: bool,
+    /// Bytes accessed.
+    pub width: u8,
+}
+
+impl FieldRef {
+    /// How far past the base the access is; negative below it.
+    pub fn offset(&self) -> i64 {
+        self.to.wrapping_sub(self.base) as i64
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Program {
     /// Sorted by address.
     pub functions: Vec<DiscoveredFunction>,
     /// Sorted by target, then source.
     pub xrefs: Vec<Xref>,
+    /// Evidence for the data xrefs made through a base register plus an offset, sorted by target, then source.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub field_refs: Vec<FieldRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub code_modes: Vec<(u64, bool)>,
     #[serde(skip)]
@@ -203,6 +234,12 @@ impl Program {
         Some(if listed { NoreturnEvidence::Listed } else { NoreturnEvidence::Inferred })
     }
 
+    /// The base-plus-offset evidence for the data reference from `from` to `to`, if it was made so.
+    pub fn field_ref(&self, from: u64, to: u64) -> Option<&FieldRef> {
+        let index = self.field_refs.binary_search_by_key(&(to, from), |field| (field.to, field.from)).ok()?;
+        Some(&self.field_refs[index])
+    }
+
     pub fn xrefs_to(&self, address: u64) -> &[Xref] {
         let start = self.xrefs.partition_point(|xref| xref.to < address);
         let end = self.xrefs.partition_point(|xref| xref.to <= address);
@@ -287,6 +324,7 @@ where
         if inferred.is_subset(&noreturn) {
             program.inferred_noreturn = noreturn.difference(&facts.noreturn).copied().collect();
             program.noreturn = noreturn.into_iter().collect();
+            field_flow::add(memory, &new_decoder, &mut program)?;
             return Ok(program);
         }
         noreturn.extend(inferred);
@@ -491,24 +529,36 @@ where
 
     let mut functions = Vec::with_capacity(results.len());
     let (mut xrefs, mut resolved_flows, mut noreturn_calls) = (Vec::new(), Vec::new(), Vec::new());
-    let mut decode_gates = Vec::new();
+    let (mut decode_gates, mut field_refs) = (Vec::new(), Vec::new());
     for result in results.into_values() {
         decode_gates.extend(result.decode_gates);
         xrefs.extend(result.xrefs);
+        field_refs.extend(result.field_refs);
         resolved_flows.extend(result.resolved_flows);
         noreturn_calls.extend(result.noreturn_calls);
         functions.push(result.function);
     }
     xrefs.sort_unstable();
     xrefs.dedup();
+    // Code shared by two functions is decoded in each; its accesses are the same.
+    field_refs.sort_unstable();
+    field_refs.dedup_by_key(|field| (field.to, field.from));
     resolved_flows.sort_by_key(|flow| (flow.function, flow.address));
     noreturn_calls.sort_unstable();
     noreturn_calls.dedup();
     let code_modes = code_modes.into_iter().collect();
     decode_gates.sort_by_key(|gate| (gate.function, gate.gate.address));
     decode_gates.dedup_by_key(|gate| (gate.function, gate.gate.address));
-    let program =
-        Program { functions, xrefs, code_modes, resolved_flows, noreturn_calls, decode_gates, ..Program::default() };
+    let program = Program {
+        functions,
+        xrefs,
+        field_refs,
+        code_modes,
+        resolved_flows,
+        noreturn_calls,
+        decode_gates,
+        ..Program::default()
+    };
     Ok((program, noreturn))
 }
 
@@ -602,6 +652,7 @@ struct Explored {
     instruction_modes: Vec<(u64, bool)>,
     function: DiscoveredFunction,
     xrefs: Vec<Xref>,
+    field_refs: Vec<FieldRef>,
     new_seeds: Vec<u64>,
     /// Targets of unconditional jumps to code outside this function's known starts; one reached from two
     /// functions is a shared tail and becomes a function of its own. Code shared through conditional branches
@@ -673,6 +724,7 @@ fn explore(
     let mut blocks: BTreeMap<u64, u64> = BTreeMap::new();
     let mut instructions: BTreeSet<u64> = BTreeSet::new();
     let mut xrefs = Vec::new();
+    let mut field_refs = Vec::new();
     let mut new_seeds = Vec::new();
     let mut code_refs = CodeRefs::default();
     let mut jump_bases = Vec::new();
@@ -747,6 +799,7 @@ fn explore(
                 }
                 break;
             }
+            let base_access = decoder.base_access();
             let resolved = decoder.resolved_flow();
             if let Some(flow) = resolved {
                 resolved_flows.push(ResolvedFlow { function: start, address, flow });
@@ -792,6 +845,12 @@ fn explore(
                     if let Some(mode) = decoder.instruction_mode() {
                         instruction_modes.push((next, mode));
                     }
+                    if let Some(field) = field_ref(memory, &slot, decoder.base_access()) {
+                        if !memory.is_mapped(field.to) {
+                            xrefs.push(Xref { to: field.to, from: field.from, kind: XrefKind::Data });
+                        }
+                        field_refs.push(field);
+                    }
                     record_refs(&slot, &mut xrefs, &mut code_refs);
                     next = next.saturating_add(u64::from(slot.len));
                 }
@@ -799,6 +858,12 @@ fn explore(
                     address = next;
                     break;
                 }
+            }
+            if let Some(field) = field_ref(memory, &insn, base_access) {
+                if !memory.is_mapped(field.to) {
+                    xrefs.push(Xref { to: field.to, from: field.from, kind: XrefKind::Data });
+                }
+                field_refs.push(field);
             }
             record_refs(&insn, &mut xrefs, &mut code_refs);
             let stops = never_returns(&insn, resolved);
@@ -919,6 +984,7 @@ fn explore(
         decode_gates,
         function,
         xrefs,
+        field_refs,
         new_seeds,
         jump_targets,
         jumps,
@@ -930,6 +996,26 @@ fn explore(
         exits,
         unresolved_jumps,
     }
+}
+
+/// The field reference a load or store makes through a base register, when its target is mapped, or lies where a
+/// Raw firmware image keeps RAM and peripherals and so does its base.
+fn field_ref(memory: &impl Memory, insn: &rampage_arch::Insn, access: Option<BaseAccess>) -> Option<FieldRef> {
+    let access = access?;
+    let to = insn.data_ref.filter(|_| insn.accesses)?;
+    let mapped = memory.is_mapped(to);
+    let in_data = |address| memory.holds_unmapped_data(address);
+    if !mapped && !(in_data(to) && (in_data(access.base) || memory.is_mapped(access.base))) {
+        return None;
+    }
+    Some(FieldRef {
+        to,
+        from: insn.address,
+        base_site: access.site,
+        base: access.base,
+        write: access.write,
+        width: access.width,
+    })
 }
 
 impl Explored {

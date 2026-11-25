@@ -263,6 +263,10 @@ impl Disassembler for MipsDisassembler {
         if self.is_mips16(address) { None } else { self.inner.operands(bytes, address) }
     }
 
+    fn base_access(&self) -> Option<crate::BaseAccess> {
+        self.inner.base_access()
+    }
+
     fn reset(&mut self) {
         self.inner.reset();
         self.decoded_in = None;

@@ -222,6 +222,10 @@ pub struct SearchHit {
     pub target: Option<u64>,
     pub code: Option<SearchCodeEvidence>,
     pub reference_kinds: Vec<rampage_analysis::discover::XrefKind>,
+    /// For a reference row whose site reads or writes `target` through a base register plus an offset (a structure
+    /// field): where the base came from, as on `xrefs` rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<crate::BaseEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -554,6 +558,7 @@ fn search_native(
             },
             target: hit.evidence.target,
             reference_kinds: vec![],
+            base: None,
             code: Some(SearchCodeEvidence {
                 site: hit.site,
                 native_function: hit.function,
@@ -617,6 +622,7 @@ fn search_references(
                 break;
             }
             kinds.sort_unstable();
+            let base = analysis.program.field_ref(address, target).map(crate::BaseEvidence::of);
             let (image_offset, file_offset) = hit_offsets(&spans, &report.source, address);
             report.hits.push(SearchHit {
                 address,
@@ -628,6 +634,7 @@ fn search_references(
                 target: Some(target),
                 code: None,
                 reference_kinds: kinds,
+                base,
             });
         }
     }

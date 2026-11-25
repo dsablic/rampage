@@ -1351,7 +1351,20 @@ pub fn xrefs(out: &mut impl Write, path: &Path, target: XrefTarget, options: &Op
         let kind = row.kind.as_str();
         let from_function = row.from_function.as_deref().unwrap_or("?");
         let to_name = row.to_name.as_deref().map(|name| format!(" {name}")).unwrap_or_default();
-        writeln!(out, "{:#018x} {kind} {:#018x}{to_name}  (in {from_function})", row.from, row.to)?;
+        // A load or store through a base register: read or write, its width, and where the base came from.
+        let base = row
+            .base
+            .map(|base| {
+                let access = row.access.unwrap_or("read");
+                let offset = if base.offset < 0 {
+                    format!("-{:#x}", base.offset.unsigned_abs())
+                } else {
+                    format!("+{:#x}", base.offset)
+                };
+                format!("  [{access} {}B at base {:#x}{offset}, base from {:#x}]", base.width, base.address, base.site)
+            })
+            .unwrap_or_default();
+        writeln!(out, "{:#018x} {kind} {:#018x}{to_name}  (in {from_function}){base}", row.from, row.to)?;
     }
     Ok(())
 }

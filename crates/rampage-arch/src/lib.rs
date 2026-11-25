@@ -428,6 +428,23 @@ impl JumpTable {
     }
 }
 
+/// How a load or store reached its address through a base register that an earlier instruction of the same
+/// straight-line run set to a known address: a literal-pool load (`ldr r1, =0x20001234`), a MOVW/MOVT pair, an
+/// `adr`, or a completed address pair (MIPS `lui`/`addiu`). The access is at `base` plus an immediate offset, which
+/// is how code reaches a field of a structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BaseAccess {
+    /// The instruction that put `base` in the register.
+    #[serde(serialize_with = "crate::hex::address")]
+    pub site: u64,
+    #[serde(serialize_with = "crate::hex::address")]
+    pub base: u64,
+    /// A store rather than a load.
+    pub write: bool,
+    /// Bytes accessed.
+    pub width: u8,
+}
+
 /// What a decoder's run has proven about registers at one point (known addresses, bounded indices, copies,
 /// loaded table entries), for carrying across joins.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,11 +455,29 @@ enum Facts {
     X86(Box<x86::switch::Registers>),
     A64(Box<a64::flow::Addresses>),
     Xtensa(Box<xtensa::Registers>),
+    Aarch32(Box<aarch32::Aarch32Registers>),
 }
 
 impl RegisterFacts {
     fn xtensa(registers: xtensa::Registers) -> Self {
         RegisterFacts(Facts::Xtensa(Box::new(registers)))
+    }
+
+    fn aarch32(registers: aarch32::Aarch32Registers) -> Self {
+        RegisterFacts(Facts::Aarch32(Box::new(registers)))
+    }
+
+    fn aarch32_registers(&self) -> Option<&aarch32::Aarch32Registers> {
+        match &self.0 {
+            Facts::Aarch32(registers) => Some(registers),
+            _ => None,
+        }
+    }
+
+    /// Whether these facts carry the register bases that loads and stores reach structure fields through
+    /// ([`Disassembler::base_access`]), so following them across joins can find more.
+    pub fn carries_bases(&self) -> bool {
+        matches!(self.0, Facts::Aarch32(_))
     }
 
     fn xtensa_registers(&self) -> Option<xtensa::Registers> {
@@ -458,6 +493,7 @@ impl RegisterFacts {
             (Facts::X86(a), Facts::X86(b)) => RegisterFacts(Facts::X86(Box::new(a.meet(b)))),
             (Facts::A64(a), Facts::A64(b)) => RegisterFacts(Facts::A64(Box::new(a.meet(b)))),
             (Facts::Xtensa(a), Facts::Xtensa(b)) => RegisterFacts(Facts::Xtensa(Box::new(xtensa::meet(a, b)))),
+            (Facts::Aarch32(a), Facts::Aarch32(b)) => RegisterFacts(Facts::Aarch32(Box::new(a.meet(b)))),
             // Facts from different decoders share nothing.
             _ => RegisterFacts(Facts::X86(Box::default())),
         }
@@ -545,6 +581,11 @@ pub trait Disassembler {
         None
     }
     fn resolved_flow(&self) -> Option<Flow> {
+        None
+    }
+    /// For the load or store just decoded, the base register's origin when its address (the instruction's
+    /// `data_ref`) is a known base plus an immediate offset. Never for a stack- or PC-relative access.
+    fn base_access(&self) -> Option<BaseAccess> {
         None
     }
     /// For the register-indirect jump just decoded, the code address its register was formed from: the target

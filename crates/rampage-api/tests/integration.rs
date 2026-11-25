@@ -52,6 +52,7 @@ mod dotnet;
 mod embedded;
 mod endpoints;
 mod ergonomics;
+mod field_refs;
 mod findings;
 mod firmware_diff;
 mod firmware_integrity;

@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 /// Bump whenever discovery, the loaders it reads, or anything else changes a [`Program`] for the same input
 /// bytes. `analysis_cache_golden` (tests/integration) records each fixture's analysis digest under this
 /// version and fails when the output changes but the version did not.
-pub const ANALYSIS_VERSION: u32 = 10;
+pub const ANALYSIS_VERSION: u32 = 11;
 /// The store's table layout and payload encoding; part of the file name, so other layouts never share a file.
 /// Version 2 added stored decompilations: a version 1 build's eviction does not count them, so it never writes a
 /// version 2 file (another schema is foreign).

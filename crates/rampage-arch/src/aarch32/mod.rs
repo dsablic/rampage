@@ -24,6 +24,7 @@ use crate::mrs::{self, Encoding, State, Syntax, Tables, mnemonic};
 
 pub use crate::mrs::LabelStyle;
 pub use flow::Aarch32Disassembler;
+pub(crate) use flow::Registers as Aarch32Registers;
 
 /// Which table an instruction comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

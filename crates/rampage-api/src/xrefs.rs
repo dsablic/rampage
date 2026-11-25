@@ -27,9 +27,36 @@ pub struct XrefRow {
     /// selector, receiver class and how certain the edge is. Absent on every other reference.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objc: Option<ObjcEdge>,
-    /// `read` or `write`, for a load or store at a constant address in an imported peripheral.
+    /// `read` or `write`, for a load or store at a constant address in an imported peripheral, or through a base
+    /// register (see `base`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<&'static str>,
+    /// For a load or store whose address is a base register plus an offset (a structure field reached from a
+    /// literal-pool or MOVW/MOVT base): where the base came from. Absent on direct references.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<BaseEvidence>,
+}
+
+/// How a load or store reached its target through a base register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BaseEvidence {
+    /// The instruction that put the base in the register: a literal-pool load, MOVT, `adr`, a completed address
+    /// pair or a GOT load.
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub site: u64,
+    /// The base address.
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    /// The target's distance from the base; negative below it.
+    pub offset: i64,
+    /// Bytes the instruction reads or writes.
+    pub width: u8,
+}
+
+impl BaseEvidence {
+    pub(crate) fn of(field: &rampage_analysis::discover::FieldRef) -> Self {
+        BaseEvidence { site: field.base_site, address: field.base, offset: field.offset(), width: field.width }
+    }
 }
 
 /// How an Objective-C send reaches the implementation an xref row points at.
@@ -134,6 +161,10 @@ impl Project {
         let page = Page::of(selected, offset, limit);
         let mut rows = Vec::with_capacity(page.items.len());
         for (xref, send) in &page.items {
+            let field = analysis
+                .program
+                .field_ref(xref.from, xref.to)
+                .filter(|_| xref.kind == XrefKind::Data && send.is_none());
             rows.push(XrefRow {
                 from: xref.from,
                 to: xref.to,
@@ -141,13 +172,14 @@ impl Project {
                 from_function: analysis.function_containing(xref.from).map(|function| self.function_name(function)),
                 to_name: self.name_at(xref.to),
                 objc: send.map(ObjcEdge::of),
-                access: if writes.contains(&(xref.from, xref.to)) {
+                access: if writes.contains(&(xref.from, xref.to)) || field.is_some_and(|field| field.write) {
                     Some("write")
-                } else if reads.contains(&(xref.from, xref.to)) {
+                } else if reads.contains(&(xref.from, xref.to)) || field.is_some() {
                     Some("read")
                 } else {
                     None
                 },
+                base: field.map(BaseEvidence::of),
             });
         }
         Ok(Page { total: page.total, offset: page.offset, items: rows })

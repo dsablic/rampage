@@ -6,7 +6,7 @@
 //! (sorted functions, xrefs, gates and noreturn lists) are revalidated.
 
 use rampage_analysis::discover::{
-    Block, DiscoveredFunction, InstructionGate, Program, ResolvedFlow, Switch, Xref, XrefKind,
+    Block, DiscoveredFunction, FieldRef, InstructionGate, Program, ResolvedFlow, Switch, Xref, XrefKind,
 };
 use rampage_arch::{DecodeGate, DecodeGateReason, Flow};
 
@@ -88,6 +88,16 @@ pub(crate) fn encode(key: &str, program: &Program) -> Vec<u8> {
     out.uint(u64::from(record.rounds));
     out.uint(record.work);
     out.0.push(u8::from(record.truncated));
+    out.uint(program.field_refs.len() as u64);
+    let mut previous = 0u64;
+    for field in &program.field_refs {
+        out.delta(previous, field.to);
+        previous = field.to;
+        out.delta(field.to, field.from);
+        out.delta(field.from, field.base_site);
+        out.delta(field.to, field.base);
+        out.0.push(u8::from(field.write) | field.width << 1);
+    }
     out.0
 }
 
@@ -220,6 +230,26 @@ pub(crate) fn decode(key: &str, bytes: &[u8]) -> Result<Program, Malformed> {
         1 => true,
         _ => return Err(Malformed("record truncation flag")),
     };
+    let count = input.count()?;
+    program.field_refs.reserve(count.min(MAX_RESERVE));
+    let mut previous = 0u64;
+    for _ in 0..count {
+        let to = input.delta(previous)?;
+        previous = to;
+        let from = input.delta(to)?;
+        let base_site = input.delta(from)?;
+        let base = input.delta(to)?;
+        let flags = input.byte()?;
+        let (write, width) = (flags & 1 == 1, flags >> 1);
+        if !matches!(width, 1 | 2 | 4 | 8) {
+            return Err(Malformed("field reference width"));
+        }
+        let field = FieldRef { to, from, base_site, base, write, width };
+        if program.field_refs.last().is_some_and(|last: &FieldRef| (last.to, last.from) >= (to, from)) {
+            return Err(Malformed("field references out of order"));
+        }
+        program.field_refs.push(field);
+    }
     if input.at != bytes.len() {
         return Err(Malformed("trailing bytes"));
     }
@@ -428,6 +458,17 @@ mod tests {
                 Xref { to: 0x1000, from: 0x0500, kind: XrefKind::Call },
                 Xref { to: 0x1000, from: 0x0600, kind: XrefKind::Jump },
             ],
+            field_refs: vec![
+                FieldRef {
+                    to: 0x2000_000b,
+                    from: 0x1004,
+                    base_site: 0x1000,
+                    base: 0x2000_0000,
+                    write: false,
+                    width: 1,
+                },
+                FieldRef { to: 0x2000_000b, from: 0x1010, base_site: 0x100c, base: 0x2000_0000, write: true, width: 8 },
+            ],
             code_modes: vec![(0x1000, true), (0x0800, false)],
             resolved_flows: vec![
                 ResolvedFlow { function: 0x1000, address: 0x1008, flow: Flow::Jump(0x900) },
@@ -496,6 +537,12 @@ mod tests {
         let mut program = sample();
         program.xrefs.swap(1, 2);
         assert_eq!(decode("k", &encode("k", &program)), Err(Malformed("xrefs out of order")));
+        let mut program = sample();
+        program.field_refs.swap(0, 1);
+        assert_eq!(decode("k", &encode("k", &program)), Err(Malformed("field references out of order")));
+        let mut program = sample();
+        program.field_refs[0].width = 3;
+        assert_eq!(decode("k", &encode("k", &program)), Err(Malformed("field reference width")));
     }
 
     #[test]

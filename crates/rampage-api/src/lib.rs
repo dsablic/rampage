@@ -321,7 +321,7 @@ pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportInput, ReportLimits, ReportTarget, Section,
     WorkflowReport,
 };
-pub use xrefs::{ObjcEdge, XrefQuery, XrefRow};
+pub use xrefs::{BaseEvidence, ObjcEdge, XrefQuery, XrefRow};
 
 /// How many instructions a disassembly shows unless asked for another count.
 pub const DEFAULT_INSTRUCTIONS: usize = 40;
