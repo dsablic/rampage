@@ -4,6 +4,12 @@ The primary CLI uses noun/verb routes. Flat spellings are accepted as hidden com
 commands; routing does not change analysis behavior, output, annotations or MCP tool names. Use
 `rampage --help`, `rampage <noun> --help` or `rampage <noun> <verb> --help` for the parser's full option list.
 
+MCP tool names work as hidden aliases where one CLI command does the same thing: `rampage binary_info FILE` runs
+`binary inspect`, `rampage list_functions FILE` runs `function list`, and so on, as listed under
+[MCP tool names](#mcp-tool-names). Only the exact tool name is an alias; a dashed `binary-info` is refused with
+the route named. An unknown subcommand is refused with the command meant: the CLI route of an MCP tool name, or
+the nearest routes for a typo.
+
 In the catalog, routes and compatibility spellings follow `rampage`. `FILE` is the image to open, `DIR` a
 directory, and `ADDRESS` an address or supported name. Brackets describe optional arguments, not literal input.
 
@@ -33,7 +39,7 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary inspect-data FILE --at ADDRESS [--size N]` | `inspect-data` | Bounded image bytes and pointer candidates ([data inspection](data-inspection.md)) |
 | `binary inspect-sleigh FILE [OPTIONS]` | `inspect-sleigh` | Raw byte windows through the bundled Sleigh IDs ([Sleigh decoding](sleigh-decoding.md)) |
 | `binary inspect-raw FILE --request JSON` | `inspect-raw` | An explicitly mapped raw-code window ([raw code](raw-code.md#raw-code-windows)) |
-| `binary decode FILE --codec C --offset N --length N --expected-output-size N` | `decode-file` | Transient decoded bytes of a file range ([decoding](decoding.md)) |
+| `binary decode FILE --codec C --offset N --length N --expected-output-size N [--output PATH]` | `decode-file` | Decoded bytes of a file range, transient or written to a new file with `--output` ([decoding](decoding.md)) |
 | `binary layout FILE [--offset N --length N --block-size N]` | — | Fill/occupied regions, block entropy, string clusters, hashes and hints of any file ([file layout](file-layout.md)) |
 | `binary probe-compression FILE --offset N --length N [--expected-output-size N]` | — | Ranked LZSS/LZ4-block decoder parameters for a compressed range ([decoding](decoding.md#probing-an-unknown-variant)) |
 | `binary assemble FILE --at ADDRESS --source TEXT` | `assemble` | Read-only assembly proposal; nothing applied ([assembly](assembly.md)) |
@@ -301,3 +307,76 @@ each CLI run would discard edits and could only ever list nothing.
 Native addresses accept `0x` hex, decimal, symbols/exports/import stubs or `sub_<hex>`, except explicit runtime
 comparison slots/ranges and branch windows. JSON addresses are `"0x…"` strings: common consumers lose integer
 precision above 2^53. Managed `--at` is an IL offset, not a native address.
+
+## MCP tool names
+
+Each MCP tool below is a hidden alias for its CLI route, at the top level (`rampage binary_info FILE`) or within the
+route's group (`rampage binary binary_info FILE`). A route that needs flags to do what the tool does is not an
+alias; an unknown-subcommand error names it with its flags instead. MCP tools not listed have no CLI command, and
+the error says so. The table is generated from `MCP_ROUTES` in `crates/rampage-cli/src/names.rs`, and a test checks
+that every entry names a real route.
+
+| MCP tool | CLI route |
+| --- | --- |
+| `binary_info` | `binary inspect` |
+| `triage` | `binary triage` |
+| `inspect_sleigh` | `binary inspect-sleigh` |
+| `patch_bytes` | `binary patch-bytes` |
+| `revert_patch` | `binary revert-patch` |
+| `list_patches` | `binary list-patches` |
+| `export_patched` | `binary export-patched` |
+| `assemble` | `binary assemble` |
+| `search` | `binary search` |
+| `inspect_data` | `binary inspect-data` |
+| `inspect_raw_code` | `binary inspect-raw` |
+| `decode_file_range` | `binary decode` |
+| `write_decoded_range` | `binary decode --output <PATH>` (not an alias) |
+| `file_layout` | `binary layout` |
+| `probe_compression` | `binary probe-compression` |
+| `pe_resources` | `binary pe-resources` |
+| `pe_load_config` | `binary pe-load-config` |
+| `detect_tools` | `binary detect` |
+| `capabilities` | `binary capabilities` |
+| `build_info` | `binary build-info` |
+| `analysis_diagnostics` | `binary audit` |
+| `carve` | `binary carve` |
+| `archive_inventory` | `binary archive-inventory` |
+| `pyinstaller_archive` | `binary pyinstaller-archive` |
+| `wasm_module` | `binary wasm-module` |
+| `list_imports` | `binary list-imports` |
+| `list_exports` | `binary list-exports` |
+| `yara_scan` | `binary scan-yara` |
+| `capa_detect` | `binary scan-capa` |
+| `list_functions` | `function list` |
+| `disassemble` | `function disassemble` |
+| `decompile` | `function decompile` |
+| `function_summary` | `function summarize` |
+| `function_graph` | `function graph` |
+| `batch` | `function batch` |
+| `xrefs` | `function xrefs` |
+| `identify_functions` | `function identify` |
+| `build_signatures` | `function build-signatures` |
+| `inspect_jump_table` | `function inspect-table` |
+| `evaluate_function` | `function evaluate` |
+| `list_strings` | `string list` |
+| `language_metadata` | `language inspect` |
+| `objc_sends` | `language objc-sends` |
+| `dotnet_metadata` | `managed inspect` |
+| `dotnet_il` | `managed disassemble` |
+| `list_annotations` | `annotation list` |
+| `rename` | `annotation rename` |
+| `set_comment` | `annotation comment` |
+| `annotate_batch` | `annotation apply-batch` |
+| `check_names` | `annotation check-names` |
+| `record_finding` | `annotation record-finding` |
+| `list_findings` | `annotation list-findings` |
+| `transfer_annotations` | `annotation transfer` |
+| `import_debug_signatures` | `type import-debug` |
+| `import_debug_layouts` | `type import-debug-layouts` |
+| `import_pdb_names` | `type import-pdb-names` |
+| `observe_pointer` | `runtime pointer observe` |
+| `compare_pointer_observations` | `runtime pointer compare` |
+| `observe_indirect_branch` | `runtime branch inspect` |
+| `compare_runtime_bytes` | `runtime bytes compare` |
+| `query_debugger` | `runtime debugger query` |
+| `list_packs` | `pack list` |

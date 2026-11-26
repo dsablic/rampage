@@ -229,7 +229,7 @@ matches the literal-pool loads and MOVW/MOVT pairs that hold it (`loaded_constan
 `integrity_checks` recomputes the checks; see [firmware patching](firmware-patching.md).
 
 If another tool needs the decoded bytes as a file, `write_decoded_range` writes them to a new file at an absolute
-`output_path`.
+`output_path` (from the CLI, `binary decode` with the same arguments and `--output PATH`).
 
 ## 7. Look for lock mechanisms
 

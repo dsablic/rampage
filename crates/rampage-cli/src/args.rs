@@ -911,6 +911,10 @@ pub(crate) struct DecodeFileArgs {
     /// Preview bytes, at most 1024; zero returns hashes and metadata only
     #[arg(long, default_value_t = 256)]
     pub(crate) preview_size: usize,
+    /// Also write the whole decoded output to this new file (as MCP write_decoded_range does): never replaces a
+    /// file, writes through a symlink or sets an executable mode; its directory must exist and have no symlink in it
+    #[arg(long, value_name = "PATH")]
+    pub(crate) output: Option<PathBuf>,
 }
 
 impl DecodeFileArgs {

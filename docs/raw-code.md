@@ -155,7 +155,8 @@ decoded bytes.
 
 You rarely write `decode` by hand. `decode_file_range` and each reproduced `probe_compression` candidate return
 `open_as_raw`, the selector without `profile` and `base_address`: add those two and pass it as `raw`.
-`write_decoded_range` writes the decoded bytes to a new file when another tool needs one. See
+`write_decoded_range` (CLI: `binary decode --output PATH`) writes the decoded bytes to a new file when another
+tool needs one, such as a scanner that reads files. See
 [a compressed image as the code region](mcp.md#a-compressed-image-as-the-code-region) and
 [decoding](decoding.md).
 

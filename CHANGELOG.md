@@ -14,6 +14,15 @@ see the [stability policy](docs/stability.md) for what the version promises.
   address pair or a GOT load) within a straight-line run. In a Raw Cortex-M project a field in unmapped RAM or
   peripheral space is listed too. The CLI's `function xrefs` prints the evidence. New fixture
   `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` is 12.
+- `binary decode --output PATH` writes the whole decoded output to a new file, through the same API function and with
+  the same refusals as MCP `write_decoded_range`: a new file only (never over an existing file or symlink), a
+  directory named by its canonical path, mode 0644, and the decode's size caps. A relative path is taken from the
+  working directory; `--json` adds `written` (`path`, `bytes`) to the receipt.
+- MCP tool names work at the CLI as hidden aliases where one CLI command does the same thing (`rampage binary_info
+  FILE` runs `binary inspect`; also within a group). An unknown subcommand is refused with the
+  command meant: the CLI route of an MCP tool name (with flags, as for `write_decoded_range`), a note that an MCP
+  tool has no CLI command, or the nearest routes by edit distance. The mapping is one table, listed in the
+  [CLI reference](docs/cli-reference.md#mcp-tool-names).
 
 ## 1.11.0 (2026-11-22)
 

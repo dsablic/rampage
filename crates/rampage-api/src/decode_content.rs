@@ -191,8 +191,8 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
             "Expansion budgeting uses the entire selected input range, including any trailing bytes.",
             "Decoded offsets are not source-file offsets or load addresses. \
              No executable format or architecture is inferred.",
-            "This decode writes no file (write_decoded_range writes its output to a new one on request). No \
-             extraction, recursion, native loading, annotations or execution.",
+            "decode_file_range writes no file; write_decoded_range (CLI: binary decode --output) writes the whole \
+             output to a new file on request. No extraction, recursion, native loading, annotations or execution.",
             "Decode deadline is cooperative; regular-file reads and hash computation are not forcibly interrupted.",
             "Descriptor/path metadata is revalidated; source reads are not atomic with concurrent file modification.",
         ],
@@ -203,6 +203,30 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
         return Err(invalid("decode receipt exceeds the JSON byte budget"));
     }
     Ok(DecodedContent { receipt, bytes: decoded.bytes })
+}
+
+/// A decode written to a new file: the decoded content (receipt and bytes) and the canonical path written.
+#[derive(Debug)]
+pub struct WrittenDecode {
+    pub decoded: DecodedContent,
+    pub path: PathBuf,
+}
+
+/// Decodes as [`decode_file_range`] does and writes the whole output to a new file at the absolute `output` (called
+/// `what` in refusals). The path is checked before decoding, so a refused path costs no decode: its directory must
+/// exist and be named by its canonical path (no symlink or `..` in it), and nothing of that name may exist. The file
+/// is created exclusively, never through a symlink, with mode 0644 (never executable); an existing file is never
+/// replaced.
+pub fn write_decoded_range(
+    path: &Path,
+    request: &DecodeFileRequest,
+    output: &Path,
+    what: &str,
+) -> Result<WrittenDecode, ApiError> {
+    let target = crate::output_file::check_new_output(what, output).map_err(ApiError::Invalid)?;
+    let decoded = decode_file_range(path, request)?;
+    crate::output_file::write_new(&target, decoded.bytes()).map_err(ApiError::Invalid)?;
+    Ok(WrittenDecode { decoded, path: target.path() })
 }
 
 #[cfg(all(test, unix))]

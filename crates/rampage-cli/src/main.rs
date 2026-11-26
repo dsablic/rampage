@@ -2,6 +2,7 @@ mod analyze;
 mod args;
 mod commands;
 mod hierarchy;
+mod names;
 mod report;
 mod report_plugin;
 
@@ -305,13 +306,36 @@ enum Command {
     ExportCfg(FileArgs),
 }
 
+/// Every MCP tool name the server can list, for telling a CLI user which ones have no CLI command.
+fn mcp_tool_names() -> Vec<String> {
+    let tools = rampage_api::tools::tools().into_iter().map(|tool| tool.name);
+    let files = rampage_api::tools::file_tools().into_iter().map(|tool| tool.name);
+    let debug = rampage_api::tools::debug_tools().into_iter().map(|tool| tool.name);
+    let improve = rampage_api::flywheel::improve_tools().into_iter().map(|tool| tool.name);
+    tools.chain(files).chain(debug).chain(improve).chain([rampage_mcp::ENABLE_TOOLS]).map(str::to_owned).collect()
+}
+
 fn parse_arch(text: &str) -> Result<Arch, String> {
     text.parse()
 }
 
 fn main() -> ExitCode {
     let mut parser = hierarchy::with_pack_arguments(Cli::command());
-    let matches = parser.get_matches_mut();
+    parser.build();
+    let args = names::rewrite(&parser, std::env::args_os().collect());
+    let matches = match parser.try_get_matches_from_mut(&args) {
+        Ok(matches) => matches,
+        Err(error) if error.kind() == clap::error::ErrorKind::InvalidSubcommand => {
+            match names::unknown_subcommand(&parser, &args, &mcp_tool_names()) {
+                Some(message) => {
+                    eprintln!("error: {message}");
+                    return ExitCode::from(2);
+                }
+                None => error.exit(),
+            }
+        }
+        Err(error) => error.exit(),
+    };
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     cli.packs = hierarchy::pack_paths(&matches);
     let action = cli.command.into_action();
@@ -572,9 +596,9 @@ fn main() -> ExitCode {
         Command::InspectRaw(args::InspectRawArgs { file, request }) => {
             commands::inspect_raw(&mut out, &file, &request, &options)
         }
-        Command::DecodeFile(args) => {
-            args.request().and_then(|request| commands::decode_range(&mut out, &args.file, &request, &options))
-        }
+        Command::DecodeFile(args) => args.request().and_then(|request| {
+            commands::decode_range(&mut out, &args.file, &request, args.output.as_deref(), &options)
+        }),
         Command::Correlate(CorrelateArgs { file, original, module, at }) => {
             commands::correlate(&mut out, &file, &original, &module, &at, &options)
         }

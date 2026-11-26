@@ -343,12 +343,25 @@ pub fn decode_range(
     out: &mut impl Write,
     path: &Path,
     request: &rampage_api::DecodeFileRequest,
+    output: Option<&Path>,
     options: &Options,
 ) -> Result<()> {
-    let decoded = rampage_api::decode_file_range(path, request)?;
+    let (decoded, written) = match output {
+        Some(output) => {
+            // A relative path is taken from the working directory; the API checks it as MCP checks output_path.
+            let output = std::path::absolute(output)?;
+            let written = rampage_api::write_decoded_range(path, request, &output, "--output")?;
+            (written.decoded, Some(written.path))
+        }
+        None => (rampage_api::decode_file_range(path, request)?, None),
+    };
     let report = &decoded.receipt;
     if options.json {
-        return write_json(out, report);
+        let mut value = serde_json::to_value(report)?;
+        if let Some(written) = &written {
+            value["written"] = serde_json::json!({ "path": written, "bytes": decoded.bytes().len() });
+        }
+        return write_json(out, &value);
     }
     writeln!(
         out,
@@ -366,6 +379,9 @@ pub fn decode_range(
     writeln!(out, "{}", report.preview.ascii)?;
     for note in &report.limitations {
         writeln!(out, "note: {note}")?;
+    }
+    if let Some(written) = written {
+        writeln!(out, "wrote {} decoded bytes to {}", decoded.bytes().len(), written.display())?;
     }
     Ok(())
 }

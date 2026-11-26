@@ -752,16 +752,14 @@ pub fn file_tools() -> Vec<FileTool> {
                 }
                 let args: WriteDecodedArgs = arguments(input)?;
                 let request = args.source().request()?;
-                // The output path is checked before decoding, so a refused path costs no decode.
-                let target = crate::output_file::check_new_output("output_path", &args.output_path)?;
-                let decoded = crate::decode_file_range(&args.path, &request).map_err(|error| error_chain(&error))?;
-                crate::output_file::write_new(&target, decoded.bytes())?;
-                let bytes = decoded.bytes().len();
-                let mut value = serde_json::to_value(decoded.receipt).map_err(|error| error.to_string())?;
+                let written = crate::write_decoded_range(&args.path, &request, &args.output_path, "output_path")
+                    .map_err(|error| error_chain(&error))?;
+                let bytes = written.decoded.bytes().len();
+                let mut value = serde_json::to_value(written.decoded.receipt).map_err(|error| error.to_string())?;
                 if let Some(object) = value.as_object_mut() {
                     object.remove("preview");
                 }
-                value["written"] = serde_json::json!({ "path": target.path(), "bytes": bytes });
+                value["written"] = serde_json::json!({ "path": written.path, "bytes": bytes });
                 Ok(value)
             },
         },

@@ -2,8 +2,8 @@
 
 `binary decode` and MCP `decode_file_range` decode a selected regular-file range without requiring an
 executable header. The API returns an owned `DecodedContent` buffer and a separate bounded `DecodeReceipt`.
-CLI/MCP return the receipt and a requested preview; the full content stays transient. MCP `write_decoded_range`
-(group `carve`) writes it to a new file instead.
+CLI/MCP return the receipt and a requested preview; the full content stays transient. `binary decode --output`
+and MCP `write_decoded_range` (group `carve`) write it to a new file instead.
 
 When the variant is unknown, `binary probe-compression` and MCP `probe_compression` sweep the built-in families
 over the range and return ranked parameter sets that `decode_file_range` accepts unchanged
@@ -52,7 +52,10 @@ rampage --json binary decode sample.lzss --codec lzss-4k \
 
 The output preview is `ABC`. To inspect another decoded window, set `--preview-offset` and `--preview-size`.
 Offsets and lengths accept hexadecimal or decimal. A zero preview size requests hashes and metadata only.
-There is deliberately no output-file argument, automatic extraction, native loading or execution.
+`--output PATH` also writes the whole decoded output to a new file, for tools that need one, with the refusals of
+MCP `write_decoded_range` ([below](#mcp)); a relative path is taken from the working directory. The receipt then
+has `written` (`path`, `bytes`), and the text output ends with the path. There is no automatic extraction,
+native loading or execution.
 
 | Argument | Meaning |
 | --- | --- |
@@ -65,6 +68,7 @@ There is deliberately no output-file argument, automatic extraction, native load
 | `--timeout-ms` | Cooperative decode-phase timeout, default 3000, at most 10000 |
 | `--preview-offset` | Decoded byte offset, default zero |
 | `--preview-size` | 0 through 1024 bytes, default 256 |
+| `--output` | A new file to write the whole decoded output to; never replaces a file or follows a symlink |
 
 Native-image `--arch`, `--image-offset` and `--image-length` selectors do not apply and are rejected.
 
@@ -75,7 +79,8 @@ and `expected_output_size`, with `lzss` and underscore spellings for the optiona
 offsets and lengths may be nonnegative JSON integers or hexadecimal/decimal strings. Unknown selectors and missing
 codec selection refuse before source access.
 
-`decode_file_range` writes no file. `write_decoded_range` (group `carve`, beside `fs_extract`) takes the same decode
+`decode_file_range` writes no file. `write_decoded_range` (group `carve`, beside `fs_extract`; CLI
+`binary decode --output`) takes the same decode
 arguments without a preview, plus `output_path`, and writes the whole decoded output to that new file for tools
 that need one; the result is the receipt with `written` (`path`, `bytes`). The path must be absolute, its directory
 must exist and be named by its canonical path (a directory reached through a symlink or `..` is refused, naming

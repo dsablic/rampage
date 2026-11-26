@@ -122,6 +122,89 @@ fn decode_returns_json_and_text_without_extracting_or_loading_the_result() {
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
 }
 
+/// `binary decode --output` writes the whole decoded output to a new file only, with the refusals of MCP
+/// write_decoded_range: never over an existing file, never through a symlink, never executable.
+#[cfg(unix)]
+#[test]
+fn decode_output_writes_a_new_file_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = FixtureDirectory::new("decode-output");
+    let root = directory.0.canonicalize().unwrap();
+    let file = root.join("input.bin");
+    std::fs::write(&file, [7, b'A', b'B', b'C']).unwrap();
+    let decode = |output: &str| {
+        Command::cargo_bin("rampage")
+            .unwrap()
+            .current_dir(&root)
+            .env_remove("RAMPAGE_PACKS")
+            .env("NO_COLOR", "1")
+            .args(["--json", "binary", "decode", file.to_str().unwrap(), "--codec", "lzss-4k", "--offset", "0"])
+            .args(["--length", "4", "--expected-output-size", "3", "--output", output])
+            .output()
+            .unwrap()
+    };
+    let refused = |result: Output| {
+        assert!(!result.status.success());
+        String::from_utf8_lossy(&result.stderr).into_owned()
+    };
+    let output = root.join("decoded.bin");
+    let result = decode(output.to_str().unwrap());
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let receipt: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(receipt["written"]["bytes"], 3);
+    assert_eq!(receipt["written"]["path"], output.to_str().unwrap());
+    assert_eq!(std::fs::read(&output).unwrap(), b"ABC");
+    assert_eq!(std::fs::metadata(&output).unwrap().permissions().mode() & 0o111, 0, "never executable");
+
+    // A relative path is taken from the working directory.
+    assert!(decode("relative.bin").status.success());
+    assert_eq!(std::fs::read(root.join("relative.bin")).unwrap(), b"ABC");
+
+    // An existing file is never replaced, whatever its kind.
+    std::fs::write(&output, b"keep").unwrap();
+    assert!(refused(decode(output.to_str().unwrap())).contains("exists"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep");
+    std::os::unix::fs::symlink(root.join("elsewhere.bin"), root.join("link.bin")).unwrap();
+    assert!(refused(decode(root.join("link.bin").to_str().unwrap())).contains("exists"));
+    assert!(!root.join("elsewhere.bin").exists());
+    std::fs::create_dir(root.join("real")).unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+    let text = refused(decode(root.join("alias/decoded.bin").to_str().unwrap()));
+    assert!(text.contains("symlink") && text.contains("/real"), "{text}");
+    assert!(!root.join("real/decoded.bin").exists());
+    assert!(refused(decode(root.join("missing/decoded.bin").to_str().unwrap())).contains("does not exist"));
+
+    // Text output says where the bytes went.
+    let text = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["binary", "decode", file.to_str().unwrap(), "--codec", "lzss-4k", "--offset", "0", "--length", "4"])
+        .args(["--expected-output-size", "3", "--output", root.join("text.bin").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    assert!(String::from_utf8_lossy(&text.stdout).contains("wrote 3 decoded bytes to"));
+}
+
+/// MCP tool names typed at the CLI run their CLI command; unknown subcommands name the one meant.
+#[test]
+fn mcp_tool_names_alias_their_cli_commands() {
+    let path = fixture("hello-x64.elf");
+    let alias = run(&["--json", "binary_info", &path]);
+    assert!(alias.status.success(), "{}", String::from_utf8_lossy(&alias.stderr));
+    assert_eq!(alias.stdout, run(&["--json", "binary", "inspect", &path]).stdout);
+    let grouped = run(&["--json", "function", "list_functions", &path]);
+    assert!(grouped.status.success(), "{}", String::from_utf8_lossy(&grouped.stderr));
+    assert!(!run(&["binary", "info", "--help"]).status.success());
+
+    let typo = run(&["binary", "inspct", &path]);
+    assert_eq!(typo.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&typo.stderr).contains("did you mean `rampage binary inspect`"));
+    let misplaced = run(&["function", "binary_info", &path]);
+    assert!(String::from_utf8_lossy(&misplaced.stderr).contains("the CLI command is `rampage binary inspect`"));
+    let writer = run(&["write_decoded_range"]);
+    assert!(String::from_utf8_lossy(&writer.stderr).contains("`rampage binary decode --output <PATH>`"));
+}
+
 #[test]
 fn native_data_inspection_has_canonical_json_text_and_range_errors() {
     let path = fixture("hello-x64.elf");

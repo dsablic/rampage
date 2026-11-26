@@ -171,7 +171,7 @@ pub use debugger_capture::{
 pub use decode_content::{
     ContentCodec, DecodeFileRequest, DecodePreview, DecodeReceipt, DecodedContent, LzssFlagOrder, LzssOffsetMode,
     LzssParameters, LzssReferenceLayout, MAX_DECODE_INPUT_BYTES, MAX_DECODE_OUTPUT_BYTES, MAX_DECODE_PREVIEW_BYTES,
-    decode_file_range, default_initial_write_offset,
+    WrittenDecode, decode_file_range, default_initial_write_offset, write_decoded_range,
 };
 pub use decoder::DecoderInitializationError;
 pub use decompile::{

@@ -1467,6 +1467,11 @@
           "repeated": false,
           "required": true
         },
+        "--output": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
         "--pack": {
           "type": "value",
           "repeated": true,
@@ -3371,6 +3376,11 @@
           "type": "value",
           "repeated": false,
           "required": true
+        },
+        "--output": {
+          "type": "value",
+          "repeated": false,
+          "required": false
         },
         "--pack": {
           "type": "value",

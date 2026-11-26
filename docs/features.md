@@ -40,7 +40,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   only; no code detection, function discovery or execution.
 - [Native data inspection](data-inspection.md) links bounded stored words to metadata candidates, while
   [explicit decoding](decoding.md) provides LZSS (classic 4K and every explicit variant) and LZ4-block providers,
-  transient previews (`write_decoded_range` writes a new file) and a bounded probe that ranks parameter sets for an
+  transient previews (`write_decoded_range` and CLI `binary decode --output` write a new file) and a bounded probe that ranks parameter sets for an
   unknown variant. Limits: pointer links are suppressed on loader warnings; decoding is not authentication or a load mapping.
 - [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: fifteen
   Sleigh families, natively decoded MIPS32 and Xtensa (ESP app images by their headers), and the *experimental*
