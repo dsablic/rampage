@@ -506,7 +506,8 @@ fixture for each item. Start with 0.1 and 0.2.
 - [x] (2026-11-26, `binary decode --output`) 0.3 **Decoded bytes to a file from the CLI.** `write_decoded_range` is MCP-only and CLI `binary decode`
       writes nothing, so CLI agents (and the hand analysis) re-implemented the LZSS decoder to get a file to
       scan. Add `--output` (new file only, same refusals as the MCP tool).
-- [ ] 0.4 **A peripheral map without an SVD.** Identifying which code configures which peripheral (here, serial
+- [x] (2026-11-26, `peripheral_map` in group `types`, CLI `binary peripheral-map`; open: bases passed in arguments,
+      blocks over 1 KiB without a shared base split into windows, MCP cancel flag for ordinary tools) 0.4 **A peripheral map without an SVD.** Identifying which code configures which peripheral (here, serial
       audio) meant histogramming address-like words, and data tables swamped the signal. Build the map from
       load/store instructions only: the bases and offsets each function touches, by function and by block.
 - [ ] 0.5 **Vector tables:**
