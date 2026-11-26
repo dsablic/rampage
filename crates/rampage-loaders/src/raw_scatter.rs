@@ -256,7 +256,8 @@ pub struct ScatterLoad {
     /// stores into the copies; this is how far it got.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after_jump: Option<AfterJump>,
-    /// The vector table at the last VTOR value, when that lies in a mapped region; its accepted handlers are seeds.
+    /// The vector table at the last VTOR value, read from the mapped region holding it or else from what the program
+    /// stored there (`vector_table_bytes`); its accepted handlers are seeds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table: Option<crate::raw_vectors::VectorTable>,
     /// Where the bytes of `vector_table` came from.
@@ -288,13 +289,11 @@ pub(crate) struct Follow {
     /// Per listed copy: whether the follow ended cleanly and the write was not interrupted or overwritten.
     pub complete: Vec<bool>,
     pub overwritten: Vec<bool>,
-    /// The bytes at the last VTOR value as the follow's memory held them when it stopped (the program's stores
-    /// over the mapped bytes), up to the first byte it does not know and at most a whole vector table.
+    /// The bytes at the last VTOR value as the follow's memory held them when that value was written (the
+    /// program's stores over the mapped bytes), up to the first byte it does not know and at most a whole vector
+    /// table.
     pub vtor_bytes: Vec<u8>,
 }
-
-/// The bytes of the largest vector table: 16 system and 240 external vectors.
-const MAX_VECTOR_TABLE_BYTES: u32 = 4 * (16 + crate::raw_vectors::MAX_EXTERNAL_VECTORS as u32);
 
 type MemoKey = [u8; 32];
 static MEMO: Mutex<Vec<(MemoKey, Arc<Follow>)>> = Mutex::new(Vec::new());
@@ -506,6 +505,8 @@ struct Machine<'a> {
     vtor: Vec<VtorStore>,
     vtor_not_listed: usize,
     vtor_last: Option<VtorStore>,
+    /// The known bytes at `vtor_last`'s value when it was stored.
+    vtor_bytes: Vec<u8>,
     continues_at: Option<u32>,
     /// The follow in segments: each entry-level call is one, and so is the entry's own code between them. A
     /// segment that ends by returning (or by the entry moving on to a call) completed its writes; one abandoned or
@@ -628,6 +629,7 @@ impl<'a> Machine<'a> {
             vtor: Vec::new(),
             vtor_not_listed: 0,
             vtor_last: None,
+            vtor_bytes: Vec::new(),
             continues_at: None,
             segment: 0,
             touched: Vec::new(),
@@ -743,6 +745,10 @@ impl<'a> Machine<'a> {
                     self.vtor_not_listed += 1;
                 }
                 self.vtor_last = Some(store);
+                // The table as it is when installed: later stores (a zero fill reusing the memory) do not change it.
+                self.vtor_bytes = (0..crate::raw_vectors::MAX_TABLE_BYTES as u32)
+                    .map_while(|offset| self.byte(value.checked_add(offset)?).value)
+                    .collect();
             }
             return Ok(());
         }
@@ -1116,10 +1122,6 @@ impl<'a> Machine<'a> {
             complete.push(!write.interrupted);
             overwritten.push(write.overwritten);
         }
-        let vtor_bytes = self.vtor_last.as_ref().map_or_else(Vec::new, |store| {
-            let start = store.value as u32;
-            (0..MAX_VECTOR_TABLE_BYTES).map_while(|offset| self.byte(start.checked_add(offset)?).value).collect()
-        });
         Follow {
             report: ScatterLoad {
                 entry: u64::from(entry),
@@ -1142,7 +1144,7 @@ impl<'a> Machine<'a> {
             },
             complete,
             overwritten,
-            vtor_bytes,
+            vtor_bytes: self.vtor_bytes,
         }
     }
 
@@ -2076,6 +2078,49 @@ mod tests {
         let binary = admit(0x1000_0000);
         let report = binary.raw_code_image().unwrap().scatter_load().unwrap();
         assert_eq!(report.vector_table.as_ref().map(|table| table.address), Some(0x1000_0000), "{report:#?}");
+    }
+
+    /// The table at a VTOR value no region maps is read as the program's stores left it when VTOR was set: a later
+    /// fill of that memory (here the same copy routine run again with zeros) does not spoil it.
+    #[test]
+    fn a_stored_vector_table_is_read_as_it_was_when_installed() {
+        const TABLE: u32 = 0x3000_0000;
+        let mut asm = Asm::at(BASE);
+        for source in [BASE + 0x100, BASE + 0x180] {
+            asm.ldr(0, TABLE);
+            asm.ldr(1, 64);
+            asm.ldr(2, source);
+            asm.ldr(4, 0);
+            asm.emit(BLX_R4);
+            if source == BASE + 0x100 {
+                asm.ldr(0, VTOR as u32);
+                asm.ldr(1, TABLE);
+                asm.emit(0x6001); // str r1, [r0]
+            }
+        }
+        asm.emit(HALT);
+        let copy_at = asm.here();
+        copy_routine(&mut asm);
+        asm.resolve_calls(copy_at);
+        let mut bytes = asm.finish();
+        bytes.resize(0x100, 0);
+        // SP in SRAM, Reset at the entry, SysTick at the copy routine; the rest unused.
+        let mut table = [0u32; 16];
+        table[0] = 0x2000_1000;
+        table[1] = BASE | 1;
+        table[15] = copy_at | 1;
+        bytes.extend(table.iter().flat_map(|word| word.to_le_bytes()));
+        bytes.resize(0x200, 0);
+
+        let binary = admit(bytes, Vec::new()).unwrap();
+        let raw = binary.raw_code_image().unwrap();
+        let report = raw.scatter_load().unwrap();
+        assert_eq!(report.last_vtor_store.as_ref().map(|store| store.value), Some(u64::from(TABLE)));
+        assert!(report.vector_table_refused.is_none(), "{report:#?}");
+        assert_eq!(report.vector_table_bytes, Some(VectorTableBytes::Stored));
+        let table = report.vector_table.as_ref().unwrap();
+        assert_eq!(table.reset(), Some(u64::from(BASE)));
+        assert!(raw.seeds().contains(&u64::from(copy_at)), "{:x?}", raw.seeds());
     }
 
     #[test]

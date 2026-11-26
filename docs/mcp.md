@@ -908,8 +908,9 @@ handlers are `accepted`, `refused_reason` says why (for example code at offset 0
 Thumb handler) and no handler of it becomes the entry or a seed; the words are still listed with their verdicts. A
 table whose Reset and two more handlers check out is kept with an SP outside RAM (external SDRAM, a part's own RAM),
 the SP word `refused` with `sp_outside_ram`. A table that VTOR stores install in a mapped region is not held to the
-SP rule. A refused table leaves the project without an entry unless you gave one: `binary_info` then adds a
-`warnings` line, and `list_functions` a `next`, saying to reopen without `vector_table` and with `entry`.
+SP rule. A refused table adds a `binary_info` `warnings` line. When it leaves the project without an entry,
+the line, and a `next` on `list_functions`, say to reopen without `vector_table` and with `entry`; when you gave
+`entry`, the line only says to drop `vector_table`.
 
 `"pointer_tables": true` (Cortex-M only) also seeds functions from tables of Thumb code pointers,
 such as handler arrays and command tables, so a raw image needs no hand-built symbol list. `false` never scans.

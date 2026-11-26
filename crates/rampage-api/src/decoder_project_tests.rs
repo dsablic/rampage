@@ -306,7 +306,7 @@ fn reviewed_raw_profiles_decompile_fixture_functions_directly_and_through_the_wo
 fn avr_raw_rename_at_a_byte_address_reaches_the_callers_c() {
     for worker in decompiler_workers() {
         let project = project(RawProfile::Avr8, AVR8_FIXTURE, 0x200, Some(0x200), vec![0x200, 0x210]);
-        project.set_decompiler_worker(worker);
+        project.set_decompiler_worker(worker.clone());
         project.rename(0x210, Some("blink_led")).unwrap();
         let main = project.decompile(0x200).unwrap().code;
         println!("AVR_RENAMED_C\n{main}");
@@ -314,6 +314,15 @@ fn avr_raw_rename_at_a_byte_address_reaches_the_callers_c() {
         assert!(!main.contains("sub_210") && !main.contains("108"), "{main}");
         let callee = project.decompile(0x210).unwrap().code;
         assert!(callee.contains("blink_led(void)"), "{callee}");
+
+        // Mapped at 0x400, the absolute `call` still targets byte 0x210, now unmapped and no function: the decompiler's
+        // own default name for it is the byte address too.
+        let moved = self::project(RawProfile::Avr8, AVR8_FIXTURE, 0x400, Some(0x400), vec![0x400]);
+        moved.set_decompiler_worker(worker);
+        let main = moved.decompile(0x400).unwrap();
+        assert!(main.code.contains("sub_210()") && !main.code.contains("sub_108"), "{}", main.code);
+        let names: Vec<_> = main.structure.calls.iter().map(|call| call.name.as_deref()).collect();
+        assert_eq!(names, [Some("sub_210")]);
     }
 }
 
@@ -336,21 +345,29 @@ fn distinct_raw_interpretations_never_share_cached_c() {
         let high = msp430(0x8000);
         low.set_decompiler_worker(worker.clone());
         high.set_decompiler_worker(worker.clone());
-        let low_c = low.decompile(0x4400).unwrap().code;
-        let high_c = high.decompile(0x8000).unwrap().code;
+        let low_result = low.decompile(0x4400).unwrap();
+        let high_result = high.decompile(0x8000).unwrap();
+        let (low_c, high_c) = (&low_result.code, &high_result.code);
         // `CALL #0x4410` is absolute: a discovered callee at base 0x4400, an unmapped address at base 0x8000. Both
-        // read `sub_4410`, the name every tool gives an address without a symbol, never Ghidra's `func_0x4410`.
+        // read `sub_4410`, the name every tool gives an address without a symbol, never Ghidra's `func_0x4410`, and
+        // the structured call carries that name too.
         assert!(low_c.contains("sub_4410()"), "{low_c}");
         assert!(high_c.contains("sub_4410()") && !high_c.contains("func_0x"), "{high_c}");
-        let callee = |project: &Project| project.decompile(project.binary.entry.unwrap()).unwrap().structure.calls;
-        let names = |project: &Project| callee(project).into_iter().map(|call| call.name).collect::<Vec<_>>();
-        assert_eq!(names(&low), [Some("sub_4410".to_owned())]);
-        assert_eq!(names(&high), [None]);
+        for result in [&low_result, &high_result] {
+            let names: Vec<_> = result.structure.calls.iter().map(|call| call.name.as_deref()).collect();
+            assert_eq!(names, [Some("sub_4410")]);
+        }
+        // The same bytes render the same C text at either base; the results still differ in every address they
+        // carry, so neither may be served for the other.
+        let starts = |result: &crate::Decompilation| -> Vec<Option<u64>> {
+            result.structure.blocks.iter().map(|block| block.start).collect()
+        };
+        assert_ne!(starts(&low_result), starts(&high_result));
 
         // Swapping a cached project's interpretation refuses instead of reusing its analysis, engine or C.
         let mut swapped = msp430(0x4400);
         swapped.set_decompiler_worker(worker.clone());
-        assert_eq!(swapped.decompile(0x4400).unwrap().code, low_c);
+        assert_eq!(&swapped.decompile(0x4400).unwrap().code, low_c);
         swapped.binary = msp430(0x8000).binary;
         let error = swapped.decompile(0x8000).unwrap_err();
         assert!(error.to_string().contains("another Raw decoder interpretation"), "{error}");

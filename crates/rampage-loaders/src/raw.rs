@@ -816,50 +816,56 @@ impl RawCodeImage {
                 // the program stored there before (a table it copies or fills in RAM the image has no bytes for).
                 if let Some(store) = report.last_vtor_store.clone() {
                     let holder = regions.iter().find(|region| region.backed() && region.range().contains(&store.value));
-                    let read = match holder {
-                        Some(region) => Some((
-                            VectorTableBytes::Mapped,
-                            crate::raw_vectors::read_with(
-                                &data[region.data_range()],
-                                region.base_address,
+                    let ram = |address: u64| {
+                        regions
+                            .iter()
+                            .any(|region| region.kind == RawRegionKind::Ram && region.range().contains(&address))
+                    };
+                    match holder {
+                        // A table in mapped bytes is read as the program installs it, without the reset-time rule.
+                        Some(region) => match crate::raw_vectors::read_with(
+                            &data[region.data_range()],
+                            region.base_address,
+                            store.value,
+                            &in_code,
+                        ) {
+                            Ok(table) => {
+                                options
+                                    .seeds
+                                    .extend(table.handlers().filter(|&handler| Some(handler) != options.entry));
+                                report.vector_table = Some(table);
+                                report.vector_table_bytes = Some(VectorTableBytes::Mapped);
+                            }
+                            Err(error) => report.vector_table_refused = Some(error.to_string()),
+                        },
+                        // A table read from the program's stores is held to the reset-time rule.
+                        None if vtor_bytes.len() >= 8 => {
+                            match crate::raw_vectors::read_checked_table(
+                                &vtor_bytes,
+                                store.value,
                                 store.value,
                                 &in_code,
-                            ),
-                        )),
-                        None if vtor_bytes.len() >= 8 => {
-                            let ram = |address: u64| {
-                                regions.iter().any(|region| {
-                                    region.kind == RawRegionKind::Ram && region.range().contains(&address)
-                                })
-                            };
-                            Some((
-                                VectorTableBytes::Stored,
-                                crate::raw_vectors::read_checked_table(
-                                    &vtor_bytes,
-                                    store.value,
-                                    store.value,
-                                    &in_code,
-                                    &ram,
-                                ),
-                            ))
-                        }
-                        None => None,
-                    };
-                    match read {
-                        None => report.vector_table_refused = Some(unbacked_vtor_reason(store.value, &regions)),
-                        Some((_, Err(error))) => report.vector_table_refused = Some(error.to_string()),
-                        Some((bytes, Ok(table))) => {
-                            if let Some(reason) = &table.refused_reason {
-                                report.vector_table_refused = Some(format!(
-                                    "the {} bytes the program stored at VTOR value {:#x} are not a {reason}",
-                                    vtor_bytes.len(),
-                                    store.value
-                                ));
+                                &ram,
+                            ) {
+                                Ok(table) => {
+                                    if let Some(reason) = &table.refused_reason {
+                                        report.vector_table_refused = Some(format!(
+                                            "the table at VTOR value {:#x}, read from the program's stores there ({} \
+                                             bytes known when VTOR was set), is not a {reason}",
+                                            store.value,
+                                            vtor_bytes.len()
+                                        ));
+                                    }
+                                    options
+                                        .seeds
+                                        .extend(table.handlers().filter(|&handler| Some(handler) != options.entry));
+                                    report.vector_table = Some(table);
+                                    report.vector_table_bytes = Some(VectorTableBytes::Stored);
+                                }
+                                Err(error) => report.vector_table_refused = Some(error.to_string()),
                             }
-                            options.seeds.extend(table.handlers().filter(|&handler| Some(handler) != options.entry));
-                            report.vector_table = Some(table);
-                            report.vector_table_bytes = Some(bytes);
                         }
+                        None => report.vector_table_refused = Some(unbacked_vtor_reason(store.value, &regions)),
                     }
                 }
                 Some(report)
@@ -969,23 +975,26 @@ impl RawCodeImage {
     pub fn vector_table_hint(&self) -> Option<String> {
         let table = self.vector_table.as_ref()?;
         let reason = table.refused_reason.as_deref()?;
-        let reason = reason.split(". If the image starts with code").next().unwrap_or(reason);
-        let consequence = match self.entry {
-            None => "so the project has no entry: discovery starts only from seeds, and the reset code and its \
-                     startup copies are not followed"
-                .to_owned(),
-            Some(entry) => format!("the entry you gave, {entry:#x}, is used"),
-        };
-        let first = if table.address == self.base {
-            format!("its first instruction; {:#x} when the code starts at the base", self.base)
-        } else {
-            "its first instruction".to_owned()
-        };
-        Some(format!(
-            "the vector table at {:#x} was refused ({reason}), {consequence}. If the image starts with code, reopen \
-             without \"vector_table\" and give \"entry\" ({first})",
-            table.address
-        ))
+        let reason = reason.strip_suffix(crate::raw_vectors::RESET_TABLE_ADVICE).unwrap_or(reason);
+        let address = table.address;
+        Some(match self.entry {
+            Some(entry) => format!(
+                "the vector table at {address:#x} was refused ({reason}); the entry, {entry:#x}, is used: reopen \
+                 without \"vector_table\" to drop the refused table"
+            ),
+            None => {
+                let first = if address == self.base {
+                    format!("its first instruction; {:#x} when the code starts at the base", self.base)
+                } else {
+                    "its first instruction".to_owned()
+                };
+                format!(
+                    "the vector table at {address:#x} was refused ({reason}), so the project has no entry: discovery \
+                     starts only from seeds, and the reset code and its startup copies are not followed. If the image \
+                     starts with code, reopen without \"vector_table\" and give \"entry\" ({first})"
+                )
+            }
+        })
     }
 
     /// Evidence for every pointer table found when pointer-table seeding was requested.
@@ -1258,17 +1267,20 @@ fn unbacked_vtor_reason(value: u64, regions: &[RawRegionInfo]) -> String {
          the code that loads it, fills that table at run time, so its interrupt handlers are not seeded; `xrefs` to \
          {value:#x} and the stores after it show the code that fills it"
     );
-    let max_table = 4 * (16 + crate::raw_vectors::MAX_EXTERNAL_VECTORS as u64);
     let above = regions
         .iter()
-        .filter(|region| region.base_address > value && region.base_address - value < max_table)
+        .filter(|region| {
+            region.base_address > value && region.base_address - value < crate::raw_vectors::MAX_TABLE_BYTES
+        })
         .min_by_key(|region| region.base_address);
     match above {
         Some(region) => {
             let gap = region.base_address - value;
+            // A region with bytes starts with its own (code, data); one without is only more unknown memory.
+            let own = if region.backed() { ", which starts with its own bytes rather than the table's" } else { "" };
             format!(
                 "{reason}. {} begins {gap:#x} bytes above it, room for {} vectors: the table is memory reserved below \
-                 that region, which starts with its own bytes rather than the table's",
+                 that region{own}",
                 region.name,
                 gap / 4
             )

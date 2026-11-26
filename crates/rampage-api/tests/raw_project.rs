@@ -1205,14 +1205,21 @@ fn cortex_m_code_read_as_a_vector_table_is_refused() {
     let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
     let next = page["next"].as_str().unwrap_or_else(|| panic!("{page:#}"));
     assert!(next.starts_with("The vector table at 0x8000040 was refused") && next.contains("give \"entry\""), "{next}");
-    // Given an entry, the refused table only says the entry is used.
+    // Given an entry, the warning says only to drop vector_table, and list_functions' pages carry no next.
     let with_entry = request(json!({
         "profile": "cortex-m4", "offset": 0, "length": code.len(), "base_address": "0x8000040", "vector_table": true,
         "pointer_tables": false, "entry": "0x8000040",
     }));
     let project = Session::default().open_raw(&path, &with_entry).unwrap();
     let summary = serde_json::to_value(project.summary()).unwrap();
-    assert!(summary["warnings"][0].as_str().unwrap().contains("the entry you gave, 0x8000040, is used"), "{summary:#}");
+    let warning = summary["warnings"][0].as_str().unwrap();
+    assert!(
+        warning.ends_with("the entry, 0x8000040, is used: reopen without \"vector_table\" to drop the refused table"),
+        "{warning}"
+    );
+    assert!(!warning.contains("give \"entry\""), "{warning}");
+    let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
+    assert!(page.get("next").is_none_or(Value::is_null), "{page:#}");
     // The real table is still accepted.
     let path = owned.file("records.bin", CORTEX_M_RECORDS);
     let project = Session::default().open_raw(&path, &records_request()).unwrap();

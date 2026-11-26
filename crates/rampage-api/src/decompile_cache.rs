@@ -27,7 +27,7 @@ use crate::{AnalysisStore, Project};
 /// Bump whenever the decompilation pipeline (the engine, the symbol, type and propagation plans, or the result
 /// shape) changes for the same key inputs. `decompile_cache_golden` (tests/integration) records digests of the
 /// decompiled C per fixture function and OS under this version and fails when they change but the version did not.
-pub const DECOMPILE_CACHE_VERSION: u32 = 1;
+pub const DECOMPILE_CACHE_VERSION: u32 = 2;
 
 /// A stored decompilation as kept in the store: everything [`Decompilation`] holds except what is recomputed from
 /// it (`recovery_status` and `variables`, both functions of `structure`).

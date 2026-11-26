@@ -1191,9 +1191,11 @@ impl Project {
     }
 
     /// What `list_functions` suggests next on a Raw project: reopening with `entry` when the vector table was
-    /// refused (the image may start with code), then the options a sparse discovery calls for.
+    /// refused and left no entry (the image may start with code), then the options a sparse discovery calls for.
     fn raw_functions_next(&self) -> Option<String> {
-        let vector = self.binary.raw_code_image().and_then(|raw| raw.vector_table_hint()).map(|hint| {
+        // Given an entry, the refused table costs nothing discovery needs: binary_info's warning is enough.
+        let raw = self.binary.raw_code_image().filter(|raw| raw.entry().is_none());
+        let vector = raw.and_then(|raw| raw.vector_table_hint()).map(|hint| {
             let mut hint = hint;
             if let Some(first) = hint.get_mut(..1) {
                 first.make_ascii_uppercase();

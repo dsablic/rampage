@@ -174,13 +174,17 @@ pub(crate) fn read_reset_table(
     let end = base.saturating_add(bytes.len() as u64);
     let mut table = read_checked_table(bytes, base, address, &|target| (base..end).contains(&target), ram)?;
     if let Some(reason) = table.refused_reason.take() {
-        table.refused_reason = Some(format!(
-            "not a reset {reason}. If the image starts with code, open it without vector_table and give entry (its \
-             first instruction) instead"
-        ));
+        table.refused_reason = Some(format!("not a reset {reason}{RESET_TABLE_ADVICE}"));
     }
     Ok(table)
 }
+
+/// What a refused reset-time table's reason ends with: what to do when the image starts with code.
+pub const RESET_TABLE_ADVICE: &str =
+    ". If the image starts with code, open it without vector_table and give entry (its first instruction) instead";
+
+/// The bytes of the largest vector table: 16 system and 240 external vectors.
+pub const MAX_TABLE_BYTES: u64 = 4 * (SYSTEM_VECTORS + MAX_EXTERNAL_VECTORS) as u64;
 
 /// [`read_reset_table`], with `in_image` deciding which handler targets lie in mapped code: for a table whose bytes
 /// are not the code's own, such as one the program stored at the address it installs through VTOR.

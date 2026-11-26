@@ -88,8 +88,11 @@ inline void collectFlow(ghidra::Funcdata *function, std::vector<Token> &tokens) 
     for (ghidra::int4 i = 0; i < function->numCalls(); ++i) {
         checkTokenLimit(tokens);
         auto *call = function->getCallSpecs(i);
-        if (!call->getEntryAddress().isInvalid())
-            tokens.push_back({call->getName(), "call", call->getEntryAddress().getOffset(), true});
+        if (!call->getEntryAddress().isInvalid()) {
+            std::string name = call->getName();
+            if (name.empty()) function->getArch()->nameFunction(call->getEntryAddress(), name);
+            tokens.push_back({name, "call", call->getEntryAddress().getOffset(), true});
+        }
     }
     for (ghidra::int4 i = 0; i < function->numJumpTables(); ++i) {
         auto *table = function->getJumpTable(i);

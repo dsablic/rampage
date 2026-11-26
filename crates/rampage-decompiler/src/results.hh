@@ -593,8 +593,14 @@ inline std::string collectResults(ghidra::Funcdata *function,
         if (external != externalSlots.end()) json.number(external->second);
         else json.address(target);
         json.append(",\"name\":");
-        if (call->getName().empty()) json.append("null");
-        else json.quote(call->getName());
+        if (!call->getName().empty()) json.quote(call->getName());
+        else if (external == externalSlots.end() && !target.isInvalid()) {
+            // A direct call without a symbol: the sub_<hex> name the rendered C calls it by.
+            std::string name;
+            function->getArch()->nameFunction(target, name);
+            json.quote(name);
+        }
+        else json.append("null");
         json.append(",\"indirect\":");
         json.boolean(op != nullptr && op->code() == ghidra::CPUI_CALLIND);
         const auto unavailable = callEvidenceUnavailable(call);

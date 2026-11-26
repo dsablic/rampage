@@ -430,11 +430,18 @@ fn decompiled_callees_use_the_default_names_other_tools_resolve() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/embedded-libs-m0.elf");
     let project = Project::new(Binary::open(path).unwrap());
     let query = FunctionsQuery { limit: Some(usize::MAX), ..Default::default() };
-    let known: BTreeSet<u64> = project.functions(&query).unwrap().items.iter().map(|row| row.address).collect();
+    let mut rows = project.functions(&query).unwrap().items;
+    let known: BTreeSet<u64> = rows.iter().map(|row| row.address).collect();
+    // Largest first: they make the most calls, those into undiscovered code among them. A few dozen are enough.
+    rows.sort_by_key(|row| std::cmp::Reverse(row.size));
     let call = regex::Regex::new(r"\bsub_([0-9a-f]+)\(").unwrap();
-    let (mut named, mut undiscovered) = (0, 0);
-    for &function in &known {
+    let (mut checked, mut named, mut undiscovered) = (0, 0, 0);
+    for function in rows.iter().map(|row| row.address) {
+        if checked >= 24 && named > 0 && undiscovered > 0 {
+            break;
+        }
         let Ok(decompilation) = project.decompile(function) else { continue };
+        checked += 1;
         assert!(!decompilation.code.contains("func_0x"), "{function:#x}: {}", decompilation.code);
         for capture in call.captures_iter(&decompilation.code) {
             let address = u64::from_str_radix(&capture[1], 16).unwrap();
@@ -444,6 +451,12 @@ fn decompiled_callees_use_the_default_names_other_tools_resolve() {
             named += 1;
             if !known.contains(&address) {
                 undiscovered += 1;
+                // The structured call carries the name the C calls it by.
+                let calls = &decompilation.structure.calls;
+                assert!(
+                    calls.iter().any(|call| call.target == Some(address) && call.name.as_deref() == Some(&name)),
+                    "{name}: {calls:?}"
+                );
                 // The name works where any address does: disassembly starts at the callee.
                 let lines = project.disassemble(Some(&name), 1).unwrap();
                 assert_eq!(lines[0].address, address, "{name}");

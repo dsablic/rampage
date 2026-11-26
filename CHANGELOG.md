@@ -60,13 +60,14 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `tests/fixtures/firmware/raw-cortex-m-scatter-vtor.bin`.
 - Raw Cortex-M: when `vector_table` is refused (an image that starts with code), `binary_info` adds a `warnings` line
   and `list_functions` a `next` saying to reopen without `vector_table` and with `entry`, and what the refusal cost
-  (no entry, so the reset code and its startup copies are not followed). The CLI's `function list` prints `next`.
+  (no entry, so the reset code and its startup copies are not followed). Given `entry`, only the warning remains,
+  saying to drop `vector_table`. The CLI's `function list` prints `next`.
 - Decompiled C names a callee without a symbol `sub_<hex>` (lowercase hex byte address, as listings, `xrefs` and
   address arguments use it) instead of Ghidra's `func_0x<padded hex>`, also for calls into code discovery never made
-  a function; the name resolves in every tool that takes an address. The decompiler's own default names (an
+  a function; the name resolves in every tool that takes an address, and the structured result's `calls[].name` and
+  call tokens carry it for direct calls (before, `null` and empty). The decompiler's own default names (an
   undiscovered function decompiled by address, the targets in a virtual-call comment, which said `FUN_<hex>`) follow
-  the same scheme. Only output that contained such names changes; the recorded fixture digests do not, so
-  `DECOMPILE_CACHE_VERSION` stays 1 (each build's executable stamp already keys its stored decompilations).
+  the same scheme. `DECOMPILE_CACHE_VERSION` is 2, so stored decompilations are made afresh once.
 
 ## 1.11.0 (2026-11-22)
 
