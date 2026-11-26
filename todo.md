@@ -551,8 +551,12 @@ fixture for each item. Start with 0.1 and 0.2.
 5. **Object files and static archives** (roadmap 4.3). Slice 1 done 2026-11-26: ELF `.o` and `ar` members
    (`lib.a(member.o)`), relocations for x86-64/i386/AArch64/ARM/Thumb/MIPS/RISC-V (byte-identical to ld.lld at the
    same layout), `extern` and GOT segments; libgcc.a 147 members, 249/253 symbol-table functions (the 4 are aliases).
-   Open: COFF `.obj`/`.lib`, Mach-O `MH_OBJECT`, signatures from archives (slice 2); whole-archive projects; TLS and
-   MIPS64 composite relocations; linker relaxation; DWARF in objects; thin archives; core dumps.
+   Slice 2 done 2026-11-27: COFF `.obj`/`.lib` (import libraries listed), Mach-O `MH_OBJECT` and universal `.a`,
+   `build_signatures` from a static library with relocation-exact PAT masks; acceptance: every symbol-table function
+   in 12 real libraries (MSVC libucrt/libcpmt/libvcruntime/libcmt x64+ARM64, libclang_rt.osx, Homebrew archives).
+   Open: whole-archive projects; TLS, MIPS64 composite, Mach-O TLV, COFF TOKEN/SECREL7, arm64e auth relocations;
+   linker relaxation (patterns miss relaxed GOT loads); 32-bit Mach-O objects; DWARF in objects; thin archives; core
+   dumps; rebuilding the bundled corpus with relocation patterns; ARM64 libucrt `strtok` decompile failure.
    - [ ] The demangler reads a function named `f` as `float` (a bare one-letter name is not a mangled name).
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
    layout, `__CxxFrameHandler4`, Swift metadata.
