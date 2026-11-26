@@ -306,15 +306,6 @@ enum Command {
     ExportCfg(FileArgs),
 }
 
-/// Every MCP tool name the server can list, for telling a CLI user which ones have no CLI command.
-fn mcp_tool_names() -> Vec<String> {
-    let tools = rampage_api::tools::tools().into_iter().map(|tool| tool.name);
-    let files = rampage_api::tools::file_tools().into_iter().map(|tool| tool.name);
-    let debug = rampage_api::tools::debug_tools().into_iter().map(|tool| tool.name);
-    let improve = rampage_api::flywheel::improve_tools().into_iter().map(|tool| tool.name);
-    tools.chain(files).chain(debug).chain(improve).chain([rampage_mcp::ENABLE_TOOLS]).map(str::to_owned).collect()
-}
-
 fn parse_arch(text: &str) -> Result<Arch, String> {
     text.parse()
 }
@@ -326,7 +317,7 @@ fn main() -> ExitCode {
     let matches = match parser.try_get_matches_from_mut(&args) {
         Ok(matches) => matches,
         Err(error) if error.kind() == clap::error::ErrorKind::InvalidSubcommand => {
-            match names::unknown_subcommand(&parser, &args, &mcp_tool_names()) {
+            match names::unknown_subcommand(&parser, &args, &rampage_mcp::all_tool_names()) {
                 Some(message) => {
                     eprintln!("error: {message}");
                     return ExitCode::from(2);

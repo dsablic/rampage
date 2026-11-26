@@ -24,6 +24,25 @@ use serde_json::{Map, Value, json};
 /// The meta-tool that lists the tool groups and enables them.
 pub const ENABLE_TOOLS: &str = "enable_tools";
 
+/// Every tool name any rampage server can list, whatever its groups, consent or mode: the analysis, file, observation
+/// and debug tools (the consent-gated write tools included), the improve tools of a corpus server, and
+/// [`ENABLE_TOOLS`]. Sorted, without duplicates.
+pub fn all_tool_names() -> Vec<&'static str> {
+    let consent = DebugConsent { writes: true, kill: true };
+    let mut names: Vec<&'static str> = tools::tools()
+        .into_iter()
+        .filter(|tool| !tool.interactive)
+        .map(|tool| tool.name)
+        .chain(tools::file_tools().into_iter().map(|tool| tool.name))
+        .chain([observation_tool().name, ENABLE_TOOLS])
+        .chain(tools::debug_tools_with(consent).into_iter().map(|tool| tool.name))
+        .chain(improve_tools().into_iter().map(|tool| tool.name))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
 /// The tool `_meta` key with which Claude Code lets a tool's results grow past its 50,000-character default before
 /// it replaces them with a preview.
 pub const MAX_RESULT_SIZE_META: &str = "anthropic/maxResultSizeChars";
@@ -1713,6 +1732,18 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn all_tool_names_match_the_tool_contract() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../../../tests/contract/mcp-tools.json")).expect("contract JSON");
+        let listed: Vec<&str> = contract["tools"].as_object().expect("tools").keys().map(String::as_str).collect();
+        // The contract lists no observing server, so its one tool is the only name the contract lacks.
+        let observation = observation_tool().name;
+        let names: Vec<&str> = all_tool_names().into_iter().filter(|name| *name != observation).collect();
+        assert_eq!(names, listed);
+        assert!(all_tool_names().contains(&observation));
+    }
 
     #[test]
     fn a_missing_worker_warns_or_under_require_pins_the_expected_path() {

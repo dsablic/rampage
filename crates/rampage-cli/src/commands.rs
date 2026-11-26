@@ -339,6 +339,25 @@ pub fn probe_compression(
     Ok(())
 }
 
+/// The `--output` file in the canonical directory: the directory the user typed (relative to the working directory,
+/// through `..` or a symlink) resolved to its canonical path. The API then checks the result as MCP checks
+/// `output_path`, and the file itself is still created exclusively without following a symlink.
+fn canonical_output(output: &Path) -> Result<std::path::PathBuf> {
+    if rampage_api::ends_in_separator(output) {
+        anyhow::bail!("--output ends in a path separator; name a file");
+    }
+    let output = std::path::absolute(output)?;
+    let name = match output.components().next_back() {
+        Some(std::path::Component::Normal(name)) => name.to_owned(),
+        _ => anyhow::bail!("--output must name a file"),
+    };
+    let parent = output.parent().ok_or_else(|| anyhow::anyhow!("--output has no directory"))?;
+    let directory = parent
+        .canonicalize()
+        .map_err(|_| anyhow::anyhow!("--output's directory {} does not exist", parent.display()))?;
+    Ok(directory.join(name))
+}
+
 pub fn decode_range(
     out: &mut impl Write,
     path: &Path,
@@ -348,8 +367,7 @@ pub fn decode_range(
 ) -> Result<()> {
     let (decoded, written) = match output {
         Some(output) => {
-            // A relative path is taken from the working directory; the API checks it as MCP checks output_path.
-            let output = std::path::absolute(output)?;
+            let output = canonical_output(output)?;
             let written = rampage_api::write_decoded_range(path, request, &output, "--output")?;
             (written.decoded, Some(written.path))
         }

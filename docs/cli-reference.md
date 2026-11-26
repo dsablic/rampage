@@ -313,8 +313,8 @@ precision above 2^53. Managed `--at` is an IL offset, not a native address.
 Each MCP tool below is a hidden alias for its CLI route, at the top level (`rampage binary_info FILE`) or within the
 route's group (`rampage binary binary_info FILE`). A route that needs flags to do what the tool does is not an
 alias; an unknown-subcommand error names it with its flags instead. MCP tools not listed have no CLI command, and
-the error says so. The table is generated from `MCP_ROUTES` in `crates/rampage-cli/src/names.rs`, and a test checks
-that every entry names a real route.
+the error says so. The table is kept in sync with `MCP_ROUTES` in `crates/rampage-cli/src/names.rs` by a test,
+which also checks that every entry names a real route. `rampage help binary_info` shows the route's help.
 
 | MCP tool | CLI route |
 | --- | --- |

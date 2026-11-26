@@ -126,7 +126,10 @@ fn takes_value(root: &clap::Command, command: &clap::Command, option: &str) -> b
         if long.contains('=') {
             return false;
         }
-        let named = |argument: &&clap::Arg| argument.get_long() == Some(long);
+        let named = |argument: &&clap::Arg| {
+            argument.get_long() == Some(long)
+                || argument.get_all_aliases().is_some_and(|aliases| aliases.contains(&long))
+        };
         return command.get_arguments().chain(root.get_arguments()).find(named).is_some_and(takes);
     }
     // A short option: the value is the next token only when nothing follows the letter.
@@ -135,19 +138,27 @@ fn takes_value(root: &clap::Command, command: &clap::Command, option: &str) -> b
         (Some(short), None) => command
             .get_arguments()
             .chain(root.get_arguments())
-            .find(|a| a.get_short() == Some(short))
+            .find(|argument| {
+                argument.get_short() == Some(short)
+                    || argument.get_all_short_aliases().is_some_and(|aliases| aliases.contains(&short))
+            })
             .is_some_and(takes),
         _ => false,
     }
 }
 
-/// The names of `path`'s commands below the root.
+/// The names of `path`'s commands below the root, without a leading `help` (`rampage help binary inspect`).
 fn names(path: &[&clap::Command]) -> Vec<String> {
-    path.iter().skip(1).map(|command| command.get_name().to_owned()).collect()
+    let mut names: Vec<String> = path.iter().skip(1).map(|command| command.get_name().to_owned()).collect();
+    if names.first().is_some_and(|name| name == "help") {
+        names.remove(0);
+    }
+    names
 }
 
 /// `args` with an MCP tool name in place of a subcommand replaced by its CLI path, when the route needs no flags
-/// and continues the path typed so far (`rampage binary_info`, `rampage binary binary_info`).
+/// and continues the path typed so far (`rampage binary_info`, `rampage binary binary_info`, `rampage help
+/// binary_info`).
 pub(crate) fn rewrite(root: &clap::Command, mut args: Vec<OsString>) -> Vec<OsString> {
     let (path, Some(index)) = walk(root, &args) else { return args };
     let typed = names(&path);
@@ -165,7 +176,7 @@ pub(crate) fn rewrite(root: &clap::Command, mut args: Vec<OsString>) -> Vec<OsSt
 }
 
 /// The error for an unknown subcommand in `args`, naming the command meant; `None` when `args` has none.
-pub(crate) fn unknown_subcommand(root: &clap::Command, args: &[OsString], mcp_tools: &[String]) -> Option<String> {
+pub(crate) fn unknown_subcommand(root: &clap::Command, args: &[OsString], mcp_tools: &[&str]) -> Option<String> {
     let (path, Some(index)) = walk(root, args) else { return None };
     let token = args[index].to_str()?;
     let typed = names(&path);
@@ -204,13 +215,13 @@ fn nearest(root: &clap::Command, typed: &[String], token: &str) -> Vec<Vec<Strin
         .into_iter()
         .map(|words| {
             let below = words.len() == typed.len() + 1 && words.starts_with(typed);
-            (distance(token, words.last().unwrap()), below, words)
+            (score(token, words.last().unwrap()), below, words)
         })
         .collect();
     let tool = token.replace('-', "_");
     for route in MCP_ROUTES.iter().filter(|route| route.flags.is_empty()) {
         let words = route.path.iter().map(|word| (*word).to_owned()).collect();
-        scored.push((distance(&tool, route.tool), false, words));
+        scored.push((score(&tool, route.tool), false, words));
     }
     let limit = (token.chars().count() / 3).max(2);
     scored.retain(|(distance, ..)| *distance <= limit);
@@ -239,6 +250,12 @@ fn collect(command: &clap::Command, prefix: &mut Vec<String>, out: &mut Vec<Vec<
         collect(sub, prefix, out);
         prefix.pop();
     }
+}
+
+/// How far `token` is from the name `name`: zero when it is a prefix of at least three characters (`decomp` for
+/// `decompile`), otherwise the edit distance.
+fn score(token: &str, name: &str) -> usize {
+    if token.chars().count() >= 3 && name.starts_with(token) { 0 } else { distance(token, name) }
 }
 
 /// The Levenshtein distance between `a` and `b`, by characters.
@@ -272,8 +289,23 @@ mod tests {
         std::iter::once("rampage").chain(words.iter().copied()).map(OsString::from).collect()
     }
 
-    fn mcp_tools() -> Vec<String> {
-        crate::mcp_tool_names()
+    fn mcp_tools() -> Vec<&'static str> {
+        rampage_mcp::all_tool_names()
+    }
+
+    fn rampage_words(args: &[OsString]) -> Vec<&str> {
+        args.iter().map(|arg| arg.to_str().unwrap()).collect()
+    }
+
+    /// The argument IDs of the command at `path` below `root`.
+    fn argument_ids(root: &clap::Command, path: &[&str]) -> Vec<String> {
+        let mut command = root;
+        for word in path {
+            command = command.find_subcommand(word).unwrap();
+        }
+        let mut ids: Vec<String> = command.get_arguments().map(|argument| argument.get_id().to_string()).collect();
+        ids.sort();
+        ids
     }
 
     #[test]
@@ -289,7 +321,7 @@ mod tests {
             }
             assert!(!command.has_subcommands(), "{}: {:?} is a group, not a command", route.tool, route.path);
             assert!(!command.is_hide_set(), "{}: {:?} is hidden", route.tool, route.path);
-            assert!(tools.iter().any(|tool| tool == route.tool), "{} is not an MCP tool", route.tool);
+            assert!(tools.contains(&route.tool), "{} is not an MCP tool", route.tool);
             assert_eq!(MCP_ROUTES.iter().filter(|other| other.tool == route.tool).count(), 1, "{}", route.tool);
         }
     }
@@ -317,6 +349,7 @@ mod tests {
             // A tool whose name is also a hidden top-level spelling (decompile, xrefs) is parsed by clap directly.
             if typed == ["rampage", route.tool, "--help"] {
                 assert!(root.find_subcommand(route.tool).is_some(), "{}", route.tool);
+                assert_eq!(argument_ids(&root, &[route.tool]), argument_ids(&root, route.path), "{}", route.tool);
             } else {
                 assert_eq!(rewritten, expected, "{}", route.tool);
             }
@@ -326,10 +359,6 @@ mod tests {
                 assert_eq!(rewrite(&root, untouched.clone()), untouched, "{dashed}");
             }
         }
-    }
-
-    fn rampage_words(args: &[OsString]) -> Vec<&str> {
-        args.iter().map(|arg| arg.to_str().unwrap()).collect()
     }
 
     #[test]
@@ -346,6 +375,8 @@ mod tests {
         assert_eq!(rewrite(&root, untouched.clone()), untouched);
         let untouched = args(&["binary", "inspect", "binary_info"]);
         assert_eq!(rewrite(&root, untouched.clone()), untouched);
+        let rewritten = rewrite(&root, args(&["help", "binary_info"]));
+        assert_eq!(rampage_words(&rewritten), ["rampage", "help", "binary", "inspect"]);
         // A route that needs flags is never an alias.
         let untouched = args(&["write_decoded_range", "file"]);
         assert_eq!(rewrite(&root, untouched.clone()), untouched);
@@ -365,6 +396,10 @@ mod tests {
         assert!(message(&["binary_inf"]).contains("`rampage binary inspect`"), "{}", message(&["binary_inf"]));
         assert!(message(&["binary", "decompile"]).contains("`rampage function decompile`"));
         assert!(!message(&["zzzzzzzzzzzz"]).contains("did you mean"));
+        let prefix = message(&["function", "decomp"]);
+        assert!(prefix.contains("did you mean `rampage function decompile`?"), "{prefix}");
+        let help = message(&["help", "binary", "inspct"]);
+        assert!(help.contains("`rampage binary inspect`") && help.contains("try 'rampage binary --help'"), "{help}");
         assert!(unknown_subcommand(&root, &args(&["binary", "inspect", "file"]), &tools).is_none());
     }
 

@@ -53,8 +53,11 @@ rampage --json binary decode sample.lzss --codec lzss-4k \
 The output preview is `ABC`. To inspect another decoded window, set `--preview-offset` and `--preview-size`.
 Offsets and lengths accept hexadecimal or decimal. A zero preview size requests hashes and metadata only.
 `--output PATH` also writes the whole decoded output to a new file, for tools that need one, with the refusals of
-MCP `write_decoded_range` ([below](#mcp)); a relative path is taken from the working directory. The receipt then
-has `written` (`path`, `bytes`), and the text output ends with the path. There is no automatic extraction,
+MCP `write_decoded_range` ([below](#mcp)). Unlike MCP, the CLI first resolves the directory you typed (relative to
+the working directory, through `..` or a symlink such as macOS `/tmp`) to its canonical path; the file name itself
+is still never followed or replaced, and a path ending in a separator is refused. The receipt then has `written`
+(`path`, the canonical path written, and `bytes`) and keeps its `preview` (MCP drops it), and the text output ends
+with the path. There is no automatic extraction,
 native loading or execution.
 
 | Argument | Meaning |
@@ -84,7 +87,7 @@ codec selection refuse before source access.
 arguments without a preview, plus `output_path`, and writes the whole decoded output to that new file for tools
 that need one; the result is the receipt with `written` (`path`, `bytes`). The path must be absolute, its directory
 must exist and be named by its canonical path (a directory reached through a symlink or `..` is refused, naming
-the canonical one), and no entry of that name may exist: an existing file or symlink is never replaced. The file
+the canonical one), it must not end in a path separator, and no entry of that name may exist: an existing file or symlink is never replaced. The file
 is created exclusively without following a symlink, with mode 0644 before the umask (never executable), and is
 removed again if writing fails. Nothing is written when the path or the decode is refused.
 

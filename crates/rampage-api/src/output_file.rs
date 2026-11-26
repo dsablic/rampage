@@ -24,17 +24,15 @@ impl Target {
     }
 }
 
-/// Checks `output` (called `what` in refusals): absolute, naming a file that is new, one `ours` says this tool
-/// wrote, or (with `overwrite`) any regular file, never a symlink, in an existing directory. The directory is
-/// resolved to its canonical path here, and the file is written there.
-pub(crate) fn check_output(
-    what: &str,
-    output: &Path,
-    overwrite: bool,
-    ours: impl Fn(&Path) -> bool,
-) -> Result<Target, String> {
+/// Splits `output` (called `what` in refusals) into the directory as written, that directory's canonical path and
+/// the file name: `output` must be absolute, must not end in a path separator, and must name a file in an existing
+/// directory.
+fn resolve_parent<'a>(what: &str, output: &'a Path) -> Result<(&'a Path, PathBuf, std::ffi::OsString), String> {
     if !output.is_absolute() {
         return Err(format!("{what} must be an absolute path"));
+    }
+    if ends_in_separator(output) {
+        return Err(format!("{what} ends in a path separator; name a file"));
     }
     let name = match output.components().next_back() {
         Some(std::path::Component::Normal(name)) => name.to_owned(),
@@ -47,6 +45,41 @@ pub(crate) fn check_output(
         .ok()
         .filter(|directory| directory.is_dir())
         .ok_or_else(|| format!("{what}'s directory {} does not exist", parent.display()))?;
+    Ok((parent, directory, name))
+}
+
+/// Whether `path` as written ends in a path separator (`/dir/name/`), which [`Path::components`] would drop.
+pub fn ends_in_separator(path: &Path) -> bool {
+    path.as_os_str().to_string_lossy().chars().next_back().is_some_and(std::path::is_separator)
+}
+
+/// Opens the canonical absolute `directory` one component at a time from the root, never following a symlink, so a
+/// directory swapped for a symlink after the path was checked cannot redirect a write.
+#[cfg(unix)]
+fn open_directory(directory: &Path) -> rustix::io::Result<rustix::fd::OwnedFd> {
+    use rustix::fs::{CWD, Mode, OFlags, openat};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut current = openat(CWD, "/", flags, Mode::empty())?;
+    for component in directory.components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(name) => current = openat(&current, name, flags, Mode::empty())?,
+            _ => return Err(rustix::io::Errno::INVAL),
+        }
+    }
+    Ok(current)
+}
+
+/// Checks `output` (called `what` in refusals): absolute, naming a file that is new, one `ours` says this tool
+/// wrote, or (with `overwrite`) any regular file, never a symlink, in an existing directory. The directory is
+/// resolved to its canonical path here, and the file is written there.
+pub(crate) fn check_output(
+    what: &str,
+    output: &Path,
+    overwrite: bool,
+    ours: impl Fn(&Path) -> bool,
+) -> Result<Target, String> {
+    let (_, directory, name) = resolve_parent(what, output)?;
     let mut target = Target { directory, name, replaced_mode: None };
     let path = target.path();
     match std::fs::symlink_metadata(&path) {
@@ -77,20 +110,7 @@ pub(crate) fn check_output(
 /// Checks `output` (called `what` in refusals) for a file that must be new: absolute, in an existing directory named
 /// by its canonical path (so no symlink anywhere in it), and no entry of that name, not even a symlink.
 pub(crate) fn check_new_output(what: &str, output: &Path) -> Result<Target, String> {
-    if !output.is_absolute() {
-        return Err(format!("{what} must be an absolute path"));
-    }
-    let name = match output.components().next_back() {
-        Some(std::path::Component::Normal(name)) => name.to_owned(),
-        _ => return Err(format!("{what} must name a file")),
-    };
-    let parent =
-        output.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or(format!("{what} has no directory"))?;
-    let directory = parent
-        .canonicalize()
-        .ok()
-        .filter(|directory| directory.is_dir())
-        .ok_or_else(|| format!("{what}'s directory {} does not exist", parent.display()))?;
+    let (parent, directory, name) = resolve_parent(what, output)?;
     if directory != parent {
         return Err(format!(
             "{what}'s directory {} is reached through a symlink or `..`; name it by its canonical path {}",
@@ -110,15 +130,9 @@ pub(crate) fn check_new_output(what: &str, output: &Path) -> Result<Target, Stri
 /// removed again.
 #[cfg(unix)]
 pub(crate) fn write_new(target: &Target, bytes: &[u8]) -> Result<(), String> {
-    use rustix::fs::{AtFlags, CWD, Mode, OFlags, openat, unlinkat};
+    use rustix::fs::{AtFlags, Mode, OFlags, openat, unlinkat};
     let failed = |error: &dyn std::fmt::Display| format!("write {}: {error}", target.path().display());
-    let directory = openat(
-        CWD,
-        &target.directory,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|error| failed(&error))?;
+    let directory = open_directory(&target.directory).map_err(|error| failed(&error))?;
     let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let file = openat(&directory, &target.name, flags, Mode::from_bits_truncate(0o644)).map_err(|error| {
         if error == rustix::io::Errno::EXIST {
@@ -152,11 +166,10 @@ pub(crate) fn write_new(target: &Target, bytes: &[u8]) -> Result<(), String> {
 /// through the opened directory, so a directory swapped in the path meanwhile is not followed.
 #[cfg(unix)]
 pub(crate) fn write_atomically(target: &Target, bytes: &[u8]) -> Result<(), String> {
-    use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, fchmod, openat, renameat, statat, unlinkat};
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags, fchmod, openat, renameat, statat, unlinkat};
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let failed = |error: &dyn std::fmt::Display| format!("write {}: {error}", target.path().display());
-    let directory = openat(CWD, &target.directory, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())
-        .map_err(|error| failed(&error))?;
+    let directory = open_directory(&target.directory).map_err(|error| failed(&error))?;
     let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut temporary = std::ffi::OsString::from(".");
     temporary.push(&target.name);

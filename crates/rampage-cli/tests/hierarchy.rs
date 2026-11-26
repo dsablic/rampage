@@ -167,12 +167,23 @@ fn decode_output_writes_a_new_file_only() {
     std::os::unix::fs::symlink(root.join("elsewhere.bin"), root.join("link.bin")).unwrap();
     assert!(refused(decode(root.join("link.bin").to_str().unwrap())).contains("exists"));
     assert!(!root.join("elsewhere.bin").exists());
+    // The directory typed is resolved first, so one reached through a symlink (as /tmp is on macOS) or `..` works.
     std::fs::create_dir(root.join("real")).unwrap();
     std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
-    let text = refused(decode(root.join("alias/decoded.bin").to_str().unwrap()));
-    assert!(text.contains("symlink") && text.contains("/real"), "{text}");
-    assert!(!root.join("real/decoded.bin").exists());
+    let result = decode(root.join("alias/decoded.bin").to_str().unwrap());
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let receipt: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(receipt["written"]["path"], root.join("real/decoded.bin").to_str().unwrap());
+    assert_eq!(std::fs::read(root.join("real/decoded.bin")).unwrap(), b"ABC");
+    let result = decode(root.join("real/../up.bin").to_str().unwrap());
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert_eq!(std::fs::read(root.join("up.bin")).unwrap(), b"ABC");
+    // The final name is still never followed or replaced, through any directory spelling.
+    assert!(refused(decode(root.join("alias/decoded.bin").to_str().unwrap())).contains("exists"));
     assert!(refused(decode(root.join("missing/decoded.bin").to_str().unwrap())).contains("does not exist"));
+    assert!(refused(decode(&format!("{}/", root.join("dir.bin").display()))).contains("path separator"));
+    assert!(!root.join("dir.bin").exists());
+    assert!(refused(decode(root.join("real/..").to_str().unwrap())).contains("must name a file"));
 
     // Text output says where the bytes went.
     let text = Command::cargo_bin("rampage")
@@ -201,6 +212,11 @@ fn mcp_tool_names_alias_their_cli_commands() {
     assert!(String::from_utf8_lossy(&typo.stderr).contains("did you mean `rampage binary inspect`"));
     let misplaced = run(&["function", "binary_info", &path]);
     assert!(String::from_utf8_lossy(&misplaced.stderr).contains("the CLI command is `rampage binary inspect`"));
+    let help = run(&["help", "binary_info"]);
+    assert!(help.status.success(), "{}", String::from_utf8_lossy(&help.stderr));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("rampage binary inspect"));
+    let gated = run(&["debug_write_memory"]);
+    assert!(String::from_utf8_lossy(&gated.stderr).contains("MCP tool with no CLI command"));
     let writer = run(&["write_decoded_range"]);
     assert!(String::from_utf8_lossy(&writer.stderr).contains("`rampage binary decode --output <PATH>`"));
 }

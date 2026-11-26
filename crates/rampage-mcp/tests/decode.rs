@@ -150,6 +150,9 @@ async fn only_write_decoded_range_writes_and_only_new_files() {
     assert!(!root.join("real/decoded.bin").exists());
     assert!(refused(write(std::path::PathBuf::from("decoded.bin")).await).contains("absolute"));
     assert!(refused(write(root.join("missing/decoded.bin")).await).contains("does not exist"));
+    let trailing = std::path::PathBuf::from(format!("{}/", root.join("dir.bin").display()));
+    assert!(refused(write(trailing).await).contains("path separator"));
+    assert!(!root.join("dir.bin").exists());
     client.cancel().await.unwrap();
 }
 

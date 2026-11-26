@@ -66,6 +66,7 @@ mod objc;
 mod offset;
 mod operand_types;
 mod output_file;
+pub use output_file::ends_in_separator;
 pub mod pack_archive;
 pub mod packs;
 mod patches;

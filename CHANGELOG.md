@@ -15,13 +15,17 @@ see the [stability policy](docs/stability.md) for what the version promises.
   peripheral space is listed too. The CLI's `function xrefs` prints the evidence. New fixture
   `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` is 12.
 - `binary decode --output PATH` writes the whole decoded output to a new file, through the same API function and with
-  the same refusals as MCP `write_decoded_range`: a new file only (never over an existing file or symlink), a
-  directory named by its canonical path, mode 0644, and the decode's size caps. A relative path is taken from the
-  working directory; `--json` adds `written` (`path`, `bytes`) to the receipt.
+  the same refusals as MCP `write_decoded_range`: a new file only (never over an existing file or symlink), mode
+  0644, and the decode's size caps. The CLI resolves the directory typed (relative, through `..` or a symlinked
+  `/tmp`) to its canonical path first; `--json` adds `written` (`path`, `bytes`) to the receipt and keeps `preview`.
+- `write_decoded_range` and `endpoint_blocklist` refuse an output path that ends in a separator, and open the output
+  directory one component at a time without following a symlink, so an ancestor swapped for a symlink after the
+  check cannot redirect the write.
 - MCP tool names work at the CLI as hidden aliases where one CLI command does the same thing (`rampage binary_info
   FILE` runs `binary inspect`; also within a group). An unknown subcommand is refused with the
   command meant: the CLI route of an MCP tool name (with flags, as for `write_decoded_range`), a note that an MCP
-  tool has no CLI command, or the nearest routes by edit distance. The mapping is one table, listed in the
+  tool has no CLI command, or the nearest routes by edit distance (a prefix such as `function decomp` counts as close).
+  `rampage help <tool>` shows the route's help. The mapping is one table, listed in the
   [CLI reference](docs/cli-reference.md#mcp-tool-names).
 
 ## 1.11.0 (2026-11-22)
