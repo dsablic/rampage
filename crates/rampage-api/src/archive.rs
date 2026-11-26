@@ -164,8 +164,13 @@ pub struct StaticMemberRow {
     pub member: rampage_loaders::ar::Member,
     /// The path that opens this member in any binary tool: `archive(member)`.
     pub open: String,
-    /// The member's format, kind and architecture (`elf relocatable x86_64`), or `not an object file`.
+    /// The member's format, kind and architecture (`elf relocatable x86_64`, `coff import x86_64`), or `not an
+    /// object file`.
     pub format: String,
+    /// A short import object's import (an import library's member): `dll`, `symbol`, `kind` (code, data, const),
+    /// `by` (ordinal or which form of name) and the `import` name or `ordinal_or_hint`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import: Option<rampage_loaders::ar::ImportMember>,
     /// Symbols the archive's index says the member defines (those matching `contains` first), at most 16.
     pub symbols: Vec<String>,
     pub symbols_total: usize,
@@ -175,7 +180,8 @@ pub struct StaticMemberRow {
 #[derive(Debug, Serialize)]
 pub struct StaticArchivePage {
     pub file_path: PathBuf,
-    /// Always `ar`.
+    /// `ar`, or `universal ar` for a Mach-O universal library (one archive per architecture; each member row says
+    /// its slice's `arch`).
     pub format: &'static str,
     /// `gnu`, `gnu64`, `bsd`, `bsd64`, `coff` or `unknown` (no symbol index or long names to tell).
     pub kind: &'static str,
@@ -193,11 +199,17 @@ pub struct StaticArchivePage {
     pub next: &'static str,
 }
 
-/// Whether the file at `path` is a static (`ar`) archive.
+/// Whether the file at `path` is a static library: an `ar` archive, or a Mach-O universal file of them.
 pub fn is_static_archive(path: &Path) -> bool {
     let mut magic = [0u8; 8];
-    std::fs::File::open(path).and_then(|mut file| std::io::Read::read_exact(&mut file, &mut magic)).is_ok()
-        && rampage_loaders::ar::is_archive(&magic)
+    if std::fs::File::open(path).and_then(|mut file| std::io::Read::read_exact(&mut file, &mut magic)).is_err() {
+        return false;
+    }
+    if rampage_loaders::ar::is_archive(&magic) {
+        return true;
+    }
+    matches!(magic[..4], [0xca, 0xfe, 0xba, 0xbe] | [0xca, 0xfe, 0xba, 0xbf])
+        && rampage_loaders::ar::map(path).is_ok_and(|data| rampage_loaders::ar::is_static_library(&data))
 }
 
 /// A static archive's members, paged, each with the path that opens it and the symbols its index lists.
@@ -208,27 +220,48 @@ pub fn static_archive_inventory(path: &Path, query: &ArchiveQuery) -> Result<Sta
     }
     let load = |source| ApiError::Load { path: path.to_owned(), source };
     let data = rampage_loaders::ar::map(path).map_err(load)?;
-    let archive = rampage_loaders::ar::read(&data).map_err(load)?;
-    let mut defined: Vec<Vec<&str>> = vec![Vec::new(); archive.members.len()];
-    for (name, member) in &archive.symbols {
-        defined[*member].push(name);
+    // A universal library lists every slice's members, each with its architecture.
+    let universal = rampage_loaders::ar::universal_archives(&data);
+    let libraries = match &universal {
+        Some(slices) => slices
+            .iter()
+            .filter_map(|(arch, _)| *arch)
+            .map(|arch| rampage_loaders::ar::read_library(&data, Some(arch)).map(|library| library.archive))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(load)?,
+        None => vec![rampage_loaders::ar::read(&data).map_err(load)?],
+    };
+    let mut archive = rampage_loaders::ar::Archive {
+        kind: libraries.first().map_or("unknown", |library| library.kind),
+        members: Vec::new(),
+        symbols: Vec::new(),
+    };
+    let mut defined: Vec<Vec<&str>> = Vec::new();
+    for library in &libraries {
+        let first = defined.len();
+        defined.extend(std::iter::repeat_with(Vec::new).take(library.members.len()));
+        for (name, member) in &library.symbols {
+            defined[first + *member].push(name);
+        }
+        archive.members.extend(library.members.iter().cloned());
     }
+    let row_of = |position: usize| &archive.members[position];
     let needle = query.contains.as_deref();
-    let matching = |member: &rampage_loaders::ar::Member| match needle {
+    let matching = |position: usize| match needle {
         None => true,
         Some(needle) => {
-            member.name.contains(needle) || defined[member.index].iter().any(|symbol| symbol.contains(needle))
+            row_of(position).name.contains(needle) || defined[position].iter().any(|symbol| symbol.contains(needle))
         }
     };
-    let matched: Vec<&rampage_loaders::ar::Member> = archive.members.iter().filter(|member| matching(member)).collect();
+    let matched: Vec<usize> = (0..archive.members.len()).filter(|&position| matching(position)).collect();
     let offset = query.offset.unwrap_or(0);
     let display = path.to_string_lossy();
     let mut page = StaticArchivePage {
         file_path: path.to_owned(),
-        format: "ar",
+        format: if universal.is_some() { "universal ar" } else { "ar" },
         kind: archive.kind,
         members_total: archive.members.len(),
-        index_symbols: archive.symbols.len(),
+        index_symbols: defined.iter().map(Vec::len).sum(),
         matched: matched.len(),
         returned: 0,
         offset,
@@ -236,24 +269,33 @@ pub fn static_archive_inventory(path: &Path, query: &ArchiveQuery) -> Result<Sta
         more: true,
         next_offset: Some(usize::MAX),
         members: Vec::new(),
-        next: "Pass a row's `open` as the path of any binary tool (binary_info, list_functions, decompile, ...) to \
-               analyze that member; `name#N` picks member N where names repeat.",
+        next: if universal.is_some() {
+            "Pass a row's `open` as the path of any binary tool (binary_info, list_functions, decompile, ...), with \
+             `arch` set to the row's arch to pick that slice; `name#N` picks member N of a slice where names repeat."
+        } else {
+            "Pass a row's `open` as the path of any binary tool (binary_info, list_functions, decompile, ...) to \
+             analyze that member; `name#N` picks member N where names repeat."
+        },
     };
     let mut used = json_size(&page)?;
-    for member in matched.iter().skip(offset).take(limit) {
+    for &position in matched.iter().skip(offset).take(limit) {
+        let member = row_of(position);
         let start = usize::try_from(member.offset).unwrap_or(usize::MAX);
         let end = start.saturating_add(usize::try_from(member.size).unwrap_or(usize::MAX));
-        let format = data.get(start..end).map_or_else(|| "truncated".to_owned(), rampage_loaders::ar::member_format);
-        let mut symbols = defined[member.index].clone();
+        let bytes = data.get(start..end);
+        let format = bytes.map_or_else(|| "truncated".to_owned(), rampage_loaders::ar::member_format);
+        let import = bytes.and_then(rampage_loaders::ar::import_member);
+        let mut symbols = defined[position].clone();
         if let Some(needle) = needle {
             symbols.sort_by_key(|symbol| !symbol.contains(needle));
         }
         let row = StaticMemberRow {
             open: format!("{display}({})", member.selector()),
             format,
+            import,
             symbols_total: symbols.len(),
             symbols: symbols.into_iter().take(MAX_MEMBER_SYMBOLS).map(str::to_owned).collect(),
-            member: (*member).clone(),
+            member: member.clone(),
         };
         let bytes = json_size(&row)? + 1;
         if used + bytes > MAX_ARCHIVE_RESULT_BYTES {

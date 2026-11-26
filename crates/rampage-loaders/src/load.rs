@@ -647,7 +647,7 @@ impl Binary {
 
     /// Opens a binary, requiring the given architecture when one is requested.
     pub fn open_with(path: impl AsRef<Path>, wanted: Option<Arch>) -> Result<Self, LoadError> {
-        if let (archive, _, Some(member)) = crate::ar::member_image(path.as_ref(), None)? {
+        if let (archive, _, Some(member)) = crate::ar::member_image(path.as_ref(), None, wanted)? {
             return Self::open_member(archive, member, wanted);
         }
         let data = map_executable(path.as_ref())?;
@@ -687,11 +687,20 @@ impl Binary {
             }
         })?;
         let (slices, image) = match kind {
+            object::FileKind::MachOFat32 | object::FileKind::MachOFat64 if crate::ar::is_static_library(&data) => {
+                let library = crate::ar::read_library(&data, wanted)?;
+                return Err(crate::ar::whole_archive_error(Some(&data.path), &library.archive));
+            }
             object::FileKind::MachOFat32 => select_universal::<FatArch32>(&data, wanted)?,
             object::FileKind::MachOFat64 => select_universal::<FatArch64>(&data, wanted)?,
             object::FileKind::Archive => {
                 let archive = crate::ar::read(&data)?;
                 return Err(crate::ar::whole_archive_error(Some(&data.path), &archive));
+            }
+            object::FileKind::CoffImport => {
+                let import = crate::ar::import_member(&data)
+                    .ok_or_else(|| LoadError::Malformed("unreadable short import object".to_owned()))?;
+                return Err(crate::ar::import_member_error(&import));
             }
             _ => (Vec::new(), 0..data.len()),
         };
@@ -713,7 +722,7 @@ impl Binary {
     /// that [is the whole file](ImageAt::is_whole_file) opens it as [`Binary::open_with`] does, so that one image
     /// has one identity.
     pub fn open_image(path: impl AsRef<Path>, image: Option<ImageAt>, wanted: Option<Arch>) -> Result<Self, LoadError> {
-        let (path, image, member) = crate::ar::member_image(path.as_ref(), image)?;
+        let (path, image, member) = crate::ar::member_image(path.as_ref(), image, wanted)?;
         if let Some(member) = member {
             return Self::open_member(path, member, wanted);
         }
@@ -730,7 +739,7 @@ impl Binary {
         image: Option<ImageAt>,
         wanted: Option<Arch>,
     ) -> Result<Self, LoadError> {
-        let (path, image, member) = crate::ar::member_image(path.as_ref(), image)?;
+        let (path, image, member) = crate::ar::member_image(path.as_ref(), image, wanted)?;
         let data = map_executable(&path)?;
         match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_mapped_at_recovery(data, image.offset, image.length, wanted, false, member),
@@ -763,7 +772,7 @@ impl Binary {
         max_source_bytes: usize,
         admit: impl FnOnce(&[u8]) -> Result<(), LoadError>,
     ) -> Result<Self, LoadError> {
-        let (path, image, member) = crate::ar::member_image(path.as_ref(), image)?;
+        let (path, image, member) = crate::ar::member_image(path.as_ref(), image, wanted)?;
         let data = map_executable_checked(&path, max_source_bytes.min(128 * 1024 * 1024))?;
         consume_admitted_source(data, admit, |data| match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_mapped_at_recovery(data, image.offset, image.length, wanted, true, member),
@@ -790,7 +799,7 @@ impl Binary {
     /// Enumerates supported universal-header architectures without requiring any individual slice to load.
     /// Thin images and snapshots use ordinary loading. Ambiguous duplicate architectures are rejected.
     pub fn architecture_slices(path: impl AsRef<Path>, image: Option<ImageAt>) -> Result<Vec<Arch>, LoadError> {
-        let (path, image, _) = crate::ar::member_image(path.as_ref(), image)?;
+        let (path, image, _) = crate::ar::member_image(path.as_ref(), image, None)?;
         let path = path.as_path();
         let data = map_executable(path)?;
         let view = match image.filter(|image| !image.is_whole_file()) {
@@ -879,6 +888,32 @@ impl Binary {
                 return Ok(binary);
             }
         }
+        // An image at a member's offset in a static library is that member (read here unless the caller resolved it).
+        let member = member.or_else(|| crate::ar::member_at(&data, offset));
+        // A library member's extent is the member; COFF objects and import objects have no header carving knows.
+        if let Some(found) = member.as_ref().filter(|found| found.offset == offset) {
+            let end = usize::try_from(found.size)
+                .ok()
+                .and_then(|size| start.checked_add(size))
+                .filter(|&end| end <= data.len());
+            if let Some(end) = end.filter(|_| length.is_none_or(|length| length == found.size)) {
+                match object::FileKind::parse(&data[start..end]) {
+                    Ok(object::FileKind::CoffImport) => {
+                        let import = crate::ar::import_member(&data[start..end])
+                            .ok_or_else(|| LoadError::Malformed("unreadable short import object".to_owned()))?;
+                        return Err(crate::ar::import_member_error(&import));
+                    }
+                    Ok(object::FileKind::Coff | object::FileKind::CoffBig) => {
+                        let size = found.size;
+                        let mut binary = Self::load_recovery(data, start..end, Vec::new(), wanted, recover)?;
+                        binary.embedded = Some(Embedded { offset, size, file_size, trailing: available - size });
+                        binary.archive_member = member;
+                        return Ok(binary);
+                    }
+                    _ => {}
+                }
+            }
+        }
         let candidate = crate::carve::executable(&data[start..])
             .ok_or_else(|| LoadError::Malformed(format!("no ELF, PE or Mach-O header at offset {offset:#x}")))?;
         if candidate.confidence != crate::carve::Confidence::Validated {
@@ -910,10 +945,6 @@ impl Binary {
             }
             _ => (Vec::new(), image),
         };
-        // An image at a member's offset in a static archive is that member (read here unless the caller resolved it).
-        let member = member.or_else(|| {
-            crate::ar::is_archive(&data).then(|| crate::ar::read(&data).ok()?.member_at(offset).cloned()).flatten()
-        });
         let mut binary = Self::load_recovery(data, image, slices, wanted, recover)?;
         binary.embedded = Some(Embedded { offset, size, file_size, trailing: available - size });
         binary.archive_member = member;
@@ -956,7 +987,8 @@ impl Binary {
 
         let format = match parsed.format() {
             object::BinaryFormat::Elf => Format::Elf,
-            object::BinaryFormat::Pe => Format::Pe,
+            // A COFF object is the PE/COFF format: Windows code, laid out the way a relocatable object is.
+            object::BinaryFormat::Pe | object::BinaryFormat::Coff => Format::Pe,
             object::BinaryFormat::MachO => Format::MachO,
             other => return Err(LoadError::Unsupported(format!("format {other:?}"))),
         };
@@ -976,7 +1008,10 @@ impl Binary {
         // ARM marks Thumb code addresses with the low bit, MIPS its MIPS16e ones; code lives at the even address.
         let code_address = |address: u64| if arch == Arch::Arm || mips16 { address & !1 } else { address };
         // A relocatable object is laid out at synthetic addresses with its relocations applied.
-        let thumb_externs = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut Vec::new());
+        // Windows on ARM is Thumb-2 only, as an M-profile processor is.
+        let coff_thumb = parsed.format() == object::BinaryFormat::Coff && arch == Arch::Arm;
+        let thumb_externs =
+            coff_thumb || (format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut Vec::new()));
         let relocated = crate::relocatable::load(&parsed, image_bytes, arch, !parsed.is_little_endian(), thumb_externs);
         // Where a symbol of the file lies: its value, or for a relocatable object its placed address (`None` for one
         // in a section that is not loaded).
@@ -987,8 +1022,11 @@ impl Binary {
             }
         };
 
+        // A relocatable object's segments are its placed sections (a COFF object's sections and a Mach-O object's one
+        // segment are at the object's own addresses).
         let mut segments: Vec<Segment> = parsed
             .segments()
+            .filter(|_| relocated.is_none())
             .enumerate()
             .map(|(index, segment)| {
                 let (file_offset, file_size) = segment.file_range();
@@ -1037,6 +1075,10 @@ impl Binary {
                 if matches!(arch, Arch::Arm | Arch::Aarch64) && arm_mapping_symbol(name).is_some() {
                     return None;
                 }
+                // The assembler's section-start labels of a Mach-O object (`ltmp0`) would shadow the functions there.
+                if relocated.is_some() && format == Format::MachO && macho_section_label(name) {
+                    return None;
+                }
                 let code = symbol.kind() == object::SymbolKind::Text;
                 let address = place(&symbol)?;
                 Some(Symbol {
@@ -1075,6 +1117,23 @@ impl Binary {
                 address: item.address,
                 size: 0,
                 kind: if item.function { SymbolKind::Function } else { SymbolKind::Data },
+            }));
+            symbols.extend(relocated.import_pointers.iter().map(|(name, slot)| Symbol {
+                name: name.clone(),
+                address: *slot,
+                size: 0,
+                kind: SymbolKind::Data,
+            }));
+            // A COFF weak definition is named for what it defines, not for LLVM's `.weak.NAME.default.X` label.
+            symbols.retain(|symbol| {
+                !(symbol.name.starts_with(".weak.") && symbol.name.contains(".default."))
+                    || !relocated.weak_definitions.iter().any(|(_, address, _)| *address == symbol.address)
+            });
+            symbols.extend(relocated.weak_definitions.iter().map(|(name, address, function)| Symbol {
+                name: name.clone(),
+                address: if *function { code_address(*address) } else { *address },
+                size: 0,
+                kind: if *function { SymbolKind::Function } else { SymbolKind::Data },
             }));
         }
         symbols.sort_by(|a, b| (a.address, &a.name).cmp(&(b.address, &b.name)));
@@ -1305,6 +1364,11 @@ impl Binary {
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
         if arch == Arch::Xtensa && xtensa_abi_note.is_none() {
             binary.xtensa_call0 = xtensa_prologue_vote(&binary);
+        }
+        if coff_thumb && binary.relocated.is_some() {
+            let executable = binary.segments.iter().filter(|segment| segment.perms.execute && segment.size > 0);
+            let ranges = executable.map(|segment| segment.address..segment.address.saturating_add(segment.size));
+            binary.thumb = merged(binary.thumb.drain(..).chain(ranges).collect());
         }
         if elf_m_profile {
             // An M-profile processor has no A32 state: all of its executable memory is Thumb, `$d` islands and code
@@ -1948,6 +2012,11 @@ fn code_ranges(sections: &[Section], segments: &[Segment]) -> Vec<Range<u64>> {
     merged(ranges)
 }
 
+/// Whether `name` is a section-start label an assembler gives a Mach-O object's sections (`ltmp0`, `ltmp1`).
+fn macho_section_label(name: &str) -> bool {
+    name.strip_prefix("ltmp").is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 /// Sorts `ranges` and merges the overlapping and adjacent ones.
 fn merged(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
     ranges.sort_unstable_by_key(|range| (range.start, range.end));
@@ -2087,7 +2156,7 @@ fn select_slice(slices: Vec<Slice>, wanted: Option<Arch>) -> Result<(Vec<Arch>, 
     Ok((present, chosen.range.clone()))
 }
 
-fn arch_of(architecture: object::Architecture) -> Option<Arch> {
+pub(crate) fn arch_of(architecture: object::Architecture) -> Option<Arch> {
     use object::Architecture as A;
     Some(match architecture {
         A::I386 => Arch::X86,

@@ -1,0 +1,7 @@
+; SPDX-License-Identifier: Apache-2.0
+; The import library fixture (build-objects.sh): a function by name, a variable, and a function by ordinal only.
+LIBRARY fixture.dll
+EXPORTS
+    GetTickCount
+    imported_flag DATA
+    by_ordinal @7 NONAME

@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Rebuilds the relocatable-object and static-library fixtures in objects/ from src/objects.c and
 # src/objects-helper.c: one object per architecture (non-PIC, plus PIC builds that reach data and calls through a
-# GOT), a GNU-format library with two members that share a name, and a BSD-format one. The tests assert what the
+# GOT), a GNU-format library with two members that share a name, and a BSD-format one. COFF objects (src/objects-
+# coff.c, x64/x86/ARM64/Thumb, one rewritten as a big object), an MSVC-style .lib of them and an import library
+# (llvm-lib, llvm-dlltool); Mach-O objects (src/objects-macho.c, Apple clang) and a universal library of them
+# (libtool, lipo). The tests assert what the
 # loader makes of them (call targets, data references, Thumb mode, MIPS HI16/LO16 pairs, member selection), not
 # their exact bytes, so another zig release that emits other code still passes them.
 set -euo pipefail
@@ -49,5 +52,38 @@ rm -f "$out/libobjects-gnu.a" "$out/libobjects-bsd.a"
     && "$zig" ar --format=gnu s libobjects-gnu.a)
 (cd "$work" && "$zig" ar --format=bsd rcs libobjects-bsd.a objects.o helper.o)
 cp "$work/libobjects-gnu.a" "$work/libobjects-bsd.a" "$out/"
+
+# COFF: the objects, a big-object copy, a .lib holding the x64 object and the helper, and an import library.
+llvm=${LLVM:-/opt/homebrew/opt/llvm/bin}
+coff() { # target, output
+    "$zig" cc -target "$1" "${flags[@]}" -o "$out/$2" src/objects-coff.c
+}
+coff x86_64-windows-msvc objects-coff-x86_64.obj
+coff x86-windows-msvc objects-coff-x86.obj
+coff aarch64-windows-msvc objects-coff-aarch64.obj
+coff thumb-windows-msvc objects-coff-thumb.obj
+# The CodeView object name in `.debug$S` is zig's temporary output path; blank its cache directory.
+zig_cache=$("$zig" env | sed -n 's/.*\.global_cache_dir = "\(.*\)",/\1/p')
+python3 -I "$repo/tests/fixtures/scrub-paths.py" --root "$zig_cache" "$out"/objects-coff-*.obj
+python3 -I coff-bigobj.py "$out/objects-coff-x86_64.obj" "$out/objects-coff-bigobj.obj"
+mkdir "$work/coff"
+cp "$out/objects-coff-x86_64.obj" "$work/coff/objects.obj"
+"$zig" cc -target x86_64-windows-msvc "${flags[@]}" -o "$work/coff/helper.obj" src/objects-helper.c
+python3 -I "$repo/tests/fixtures/scrub-paths.py" --root "$zig_cache" "$work/coff/helper.obj"
+rm -f "$out/libobjects-coff.lib" "$out/imports-coff.lib"
+(cd "$work/coff" && "$llvm/llvm-lib" /out:libobjects-coff.lib objects.obj helper.obj)
+cp "$work/coff/libobjects-coff.lib" "$out/"
+"$llvm/llvm-dlltool" -m i386:x86-64 -d src/objects-imports.def -l "$out/imports-coff.lib"
+
+# Mach-O: the objects, and a universal library of one member per architecture (libtool's `__.SYMDEF SORTED`).
+for arch in x86_64 arm64; do
+    clang -arch "$arch" -O1 -g0 -fno-inline -fno-common -ffile-prefix-map="$PWD"=. -c \
+        -o "$out/objects-macho-$arch.o" src/objects-macho.c
+    mkdir -p "$work/macho-$arch"
+    cp "$out/objects-macho-$arch.o" "$work/macho-$arch/objects.o"
+    (cd "$work/macho-$arch" && libtool -static -o "lib-$arch.a" objects.o)
+done
+rm -f "$out/libobjects-macho.a"
+lipo -create -output "$out/libobjects-macho.a" "$work/macho-x86_64/lib-x86_64.a" "$work/macho-arm64/lib-arm64.a"
 set +x
 python3 -I "$repo/tests/fixtures/scrub-paths.py" --check "$out"/*

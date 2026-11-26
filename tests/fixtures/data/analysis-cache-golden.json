@@ -1,5 +1,5 @@
 {
-  "version": 14,
+  "version": 15,
   "digests": {
     "bin/Microsoft.Bcl.HashCode.dll": "c59e4b889e12bdf098892d09583c80800359852241feb8efb30a0ed9f945d42a",
     "bin/auditable-arm64.macho": "57a5ac1991367cc9c9c189bc26f97bfe3af9c61523098fea787c1135d9948f85",
@@ -52,7 +52,7 @@
     "bin/hello-x64.elf": "62de7c0fcb7da09567f1e778f1a63536b62ca8ffc9098389d5b71ce7c0da9509",
     "bin/hello-x64.exe": "3b9cd9696852bfbc4e760114e54f824d4fda36184856ed9dc016c702eea214d0",
     "bin/hello-x64.macho": "d9772663e56b3268843ee5872df82a928bc5ad325ed18ea9ca581304bf6a2eeb",
-    "bin/hello-x64.o": "e2766d76bd5947a09a13d9ade199dfcaae772f2aa2d29f9119d10ed1f26d6d33",
+    "bin/hello-x64.o": "37074a7536759d0c569f3c6faa57fd2342208c62ddf30faacba0982f0cbc9365",
     "bin/libhelper-x64.so": "aeb1751c4bcf2c50b555e356888ee362c95078d30e8ac5494b18ced6ff2392f6",
     "bin/libhelper-x86.so": "7a6dd0fca6b7c95aee090737ddd5cff0e3c05820c88c7c8471bc2823285adf88",
     "bin/musl-static-aarch64.elf": "62f7ccadd5a10a8d386aa6c62b485f0de82608f9e7c8c7d18be20141fa009966",

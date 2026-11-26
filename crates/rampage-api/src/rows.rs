@@ -278,6 +278,16 @@ pub struct RelocatableSummary<'a> {
     /// Relocation types left unapplied, once per type: their fields hold the file's bytes.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub unsupported: &'a [rampage_loaders::relocatable::UnsupportedRelocation],
+    /// COMDAT sections (COFF `IMAGE_SCN_LNK_COMDAT`, ELF groups), laid out like any other section.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub comdats: usize,
+    /// A COFF object's linker directives (`.drectve`: `/DEFAULTLIB:...`, `/EXPORT:...`).
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub directives: &'a [String],
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 /// A page of [`FunctionRow`]s, with the code regions discovery did not explore because they are judged encrypted

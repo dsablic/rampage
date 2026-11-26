@@ -383,7 +383,7 @@ impl Session {
         // A static archive's member (`libfoo.a(member.o)`) is the image at the member's location in the archive, so
         // it is cached, identified and annotated as that embedded image.
         let load = |source| ApiError::Load { path: path.to_owned(), source };
-        let (archive, image, member) = rampage_loaders::ar::member_image(path, image).map_err(load)?;
+        let (archive, image, member) = rampage_loaders::ar::member_image(path, image, arch).map_err(load)?;
         let path = archive.as_path();
         let image = image.filter(|image| !image.is_whole_file());
         let held_source = checked.then(|| crate::project_workspace::open_source(path)).transpose()?;

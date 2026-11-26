@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use rampage_arch::Arch;
 
-use super::{GotKey, Image, Refused, Reloc};
+use super::{Applied, GotKey, Image, Refused, Reloc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Machine {
@@ -27,9 +27,6 @@ pub(crate) enum Special {
     /// MIPS `_gp_disp`: the global pointer's distance from the `lui` (and `addiu`) using it.
     GpDisp,
 }
-
-/// Results `apply` gives: the addend used and the resolved target, or nothing for a type that writes nothing.
-type Applied = Result<Option<(i64, u64)>, Refused>;
 
 /// Relocation state carried between relocations: MIPS HI16s awaiting their LO16, RISC-V `auipc` values.
 #[derive(Default)]
@@ -154,21 +151,21 @@ pub(crate) fn finish(image: &mut Image, state: &mut State, machine: &Machine) {
     }
 }
 
-fn sign_extend(value: u64, bits: u32) -> i64 {
+pub(super) fn sign_extend(value: u64, bits: u32) -> i64 {
     let shift = 64 - bits;
     ((value << shift) as i64) >> shift
 }
 
-fn got(image: &Image, reloc: &Reloc) -> Result<u64, Refused> {
+pub(super) fn got(image: &Image, reloc: &Reloc) -> Result<u64, Refused> {
     let index = reloc.symbol_index.ok_or(Refused::Unsupported)?;
     image.got_entry(GotKey::Symbol(index)).ok_or(Refused::Unsupported)
 }
 
-fn put(image: &mut Image, place: u64, width: usize, value: u64) -> Result<(), Refused> {
+pub(super) fn put(image: &mut Image, place: u64, width: usize, value: u64) -> Result<(), Refused> {
     image.put(place, width, value).ok_or(Refused::OutOfRange)
 }
 
-fn get(image: &Image, place: u64, width: usize) -> Result<u64, Refused> {
+pub(super) fn get(image: &Image, place: u64, width: usize) -> Result<u64, Refused> {
     image.get(place, width).ok_or(Refused::OutOfRange)
 }
 
@@ -274,12 +271,12 @@ fn x86(image: &mut Image, reloc: &Reloc) -> Applied {
     }
 }
 
-fn page(address: u64) -> u64 {
+pub(super) fn page(address: u64) -> u64 {
     address & !0xfff
 }
 
 /// Writes an A64 `adr`/`adrp` immediate (21 bits, split immlo:immhi).
-fn a64_adr(image: &mut Image, place: u64, value: u64) -> Result<(), Refused> {
+pub(super) fn a64_adr(image: &mut Image, place: u64, value: u64) -> Result<(), Refused> {
     let insn = get(image, place, 4)?;
     let immlo = value & 3;
     let immhi = (value >> 2) & 0x7ffff;
@@ -287,7 +284,7 @@ fn a64_adr(image: &mut Image, place: u64, value: u64) -> Result<(), Refused> {
 }
 
 /// Writes an A64 immediate field of `bits` bits at bit `shift`.
-fn a64_field(image: &mut Image, place: u64, value: u64, shift: u32, bits: u32) -> Result<(), Refused> {
+pub(super) fn a64_field(image: &mut Image, place: u64, value: u64, shift: u32, bits: u32) -> Result<(), Refused> {
     let insn = get(image, place, 4)?;
     let mask = ((1u64 << bits) - 1) << shift;
     put(image, place, 4, (insn & !mask) | ((value << shift) & mask))
@@ -381,7 +378,7 @@ fn thumb_branch_offset(high: u64, low: u64) -> i64 {
     sign_extend(value, 25)
 }
 
-fn thumb_branch_encode(high: u64, low: u64, offset: u64) -> (u64, u64) {
+pub(super) fn thumb_branch_encode(high: u64, low: u64, offset: u64) -> (u64, u64) {
     let s = (offset >> 24) & 1;
     let i1 = (offset >> 23) & 1;
     let i2 = (offset >> 22) & 1;
@@ -393,7 +390,7 @@ fn thumb_branch_encode(high: u64, low: u64, offset: u64) -> (u64, u64) {
 }
 
 /// The 16-bit immediate of an A32 `movw`/`movt` (imm4:imm12) or a T32 one (imm4:i:imm3:imm8).
-fn mov_immediate(insn: u64, thumb: bool) -> u64 {
+pub(super) fn mov_immediate(insn: u64, thumb: bool) -> u64 {
     if thumb {
         let (high, low) = (insn >> 16, insn & 0xffff);
         ((high & 0xf) << 12) | (((high >> 10) & 1) << 11) | (((low >> 12) & 7) << 8) | (low & 0xff)
@@ -402,7 +399,7 @@ fn mov_immediate(insn: u64, thumb: bool) -> u64 {
     }
 }
 
-fn mov_encode(insn: u64, thumb: bool, value: u64) -> u64 {
+pub(super) fn mov_encode(insn: u64, thumb: bool, value: u64) -> u64 {
     let value = value & 0xffff;
     if thumb {
         let (high, low) = (insn >> 16, insn & 0xffff);
@@ -415,12 +412,12 @@ fn mov_encode(insn: u64, thumb: bool, value: u64) -> u64 {
 }
 
 /// Reads two Thumb halfwords as one value, the first in the high half.
-fn thumb_pair(image: &Image, place: u64) -> Result<u64, Refused> {
+pub(super) fn thumb_pair(image: &Image, place: u64) -> Result<u64, Refused> {
     let second = place.checked_add(2).ok_or(Refused::OutOfRange)?;
     Ok((get(image, place, 2)? << 16) | get(image, second, 2)?)
 }
 
-fn put_thumb_pair(image: &mut Image, place: u64, value: u64) -> Result<(), Refused> {
+pub(super) fn put_thumb_pair(image: &mut Image, place: u64, value: u64) -> Result<(), Refused> {
     put(image, place, 2, value >> 16)?;
     put(image, place.checked_add(2).ok_or(Refused::OutOfRange)?, 2, value & 0xffff)
 }

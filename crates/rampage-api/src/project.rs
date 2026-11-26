@@ -953,6 +953,8 @@ impl Project {
                 externs: relocated.externs.len(),
                 relocations_applied: relocated.sites_total,
                 unsupported: &relocated.unsupported,
+                comdats: relocated.comdats,
+                directives: &relocated.directives,
             }),
             entry: binary.entry,
             segments: &binary.segments,

@@ -391,3 +391,176 @@ fn a_missing_member_path_says_what_was_looked_for() {
     );
     assert!(error.contains("absent.a(member.o)") && error.contains("member `member.o`"), "{error}");
 }
+
+/// The COFF and Mach-O fixtures and their architectures.
+const COFF_AND_MACHO: [(&str, Arch); 7] = [
+    ("objects-coff-x86_64.obj", Arch::X86_64),
+    ("objects-coff-bigobj.obj", Arch::X86_64),
+    ("objects-coff-x86.obj", Arch::X86),
+    ("objects-coff-aarch64.obj", Arch::Aarch64),
+    ("objects-coff-thumb.obj", Arch::Arm),
+    ("objects-macho-x86_64.o", Arch::X86_64),
+    ("objects-macho-arm64.o", Arch::Aarch64),
+];
+
+/// A symbol's address, under its COFF i386 or Mach-O spelling (a leading underscore) where it has one.
+fn either(binary: &Binary, name: &str) -> u64 {
+    binary
+        .symbol_by_name(name)
+        .or_else(|| binary.symbol_by_name(&format!("_{name}")))
+        .unwrap_or_else(|| panic!("no symbol {name}"))
+        .address
+}
+
+#[test]
+fn coff_and_macho_objects_are_laid_out_with_every_relocation_applied() {
+    for (name, arch) in COFF_AND_MACHO {
+        let binary = open(name);
+        assert_eq!(binary.arch, arch, "{name}");
+        let relocated = binary.relocated().unwrap_or_else(|| panic!("{name}: not laid out"));
+        assert!(relocated.unsupported.is_empty(), "{name}: {:?}", relocated.unsupported);
+        assert!(relocated.sites_total > 15, "{name}: {}", relocated.sites_total);
+        let mut segments = binary.segments.clone();
+        segments.sort_by_key(|segment| segment.address);
+        assert!(segments.first().is_some_and(|segment| segment.address == OBJECT_BASE), "{name}: {segments:?}");
+        for pair in segments.windows(2) {
+            assert!(pair[0].address + pair[0].size <= pair[1].address, "{name}: {pair:?} overlap");
+        }
+        // Debug and linker-directive sections are not loaded.
+        assert!(!segments.iter().any(|segment| segment.name.starts_with(".debug") || segment.name == ".drectve"));
+        for function in ["sum", "main", "dispatch"] {
+            assert!(binary.is_code(either(&binary, function)), "{name}: {function}");
+        }
+        // A call to an extern lands on its slot, a function.
+        let printf = binary.symbol_by_name("printf").or_else(|| binary.symbol_by_name("_printf")).unwrap();
+        assert_eq!(printf.kind, SymbolKind::Function, "{name}");
+        let call = relocated.sites.iter().find(|site| site.symbol.as_deref() == Some(printf.name.as_str())).unwrap();
+        assert_eq!(call.value & !1, printf.address, "{name}");
+    }
+}
+
+#[test]
+fn coff_imports_go_through_pointer_slots_holding_their_externs() {
+    for name in
+        ["objects-coff-x86_64.obj", "objects-coff-x86.obj", "objects-coff-aarch64.obj", "objects-coff-thumb.obj"]
+    {
+        let binary = open(name);
+        let relocated = binary.relocated().unwrap();
+        assert_eq!(relocated.directives, ["/DEFAULTLIB:kernel32.lib"], "{name}");
+        let table = binary.sections.iter().find(|section| section.name == ".idata").expect(name);
+        let width = binary.arch.default_pointer_size().unwrap();
+        for import in ["GetTickCount", "imported_flag"] {
+            let slot = binary.import_slots.iter().find(|slot| slot.name.trim_start_matches('_') == import).unwrap();
+            assert!(slot.address >= table.address && slot.address < table.address + table.size, "{name}");
+            assert_eq!(binary.read_pointer(slot.address, width), Some(either(&binary, import)), "{name}: {import}");
+            assert_eq!(either(&binary, &format!("__imp_{}", slot.name)), slot.address, "{name}: {import}");
+        }
+        let function = binary.symbol_by_name("GetTickCount").or(binary.symbol_by_name("_GetTickCount")).unwrap();
+        assert_eq!(function.kind, SymbolKind::Function, "{name}");
+        // The weak definition is named for what it defines; the undefined weak function is null, as linked.
+        assert!(binary.is_code(either(&binary, "weak_hook")), "{name}");
+        assert!(!binary.symbols.iter().any(|symbol| symbol.name.starts_with(".weak.")), "{name}");
+        let null =
+            relocated.sites.iter().find(|site| matches!(site.symbol.as_deref(), Some("maybe_hook" | "_maybe_hook")));
+        assert_eq!(null.map(|site| site.value), Some(0), "{name}");
+    }
+}
+
+#[test]
+fn a_big_object_loads_as_the_object_it_was_made_from() {
+    let small = open("objects-coff-x86_64.obj");
+    let big = open("objects-coff-bigobj.obj");
+    let read = |binary: &Binary| {
+        let text = binary.sections.iter().find(|section| section.name == ".text").unwrap();
+        binary.read(text.address, text.size).unwrap().to_vec()
+    };
+    assert_eq!(read(&small), read(&big));
+    assert_eq!(small.relocated().unwrap().sites, big.relocated().unwrap().sites);
+}
+
+/// Fields as rampage applies them, each checked against lld-link and ld64.lld output for the same object: every
+/// relocation references S + A in both images, with each image's own S.
+#[test]
+fn coff_and_macho_applied_fields_are_pinned() {
+    let expected: [(&str, &[(u64, &str)]); 6] = [
+        ("objects-coff-x86_64.obj", &[(0x100fa, "12020000"), (0x10130, "fc010000")]),
+        ("objects-coff-x86.obj", &[(0x100d3, "78010100"), (0x100dd, "1f010000"), (0x1011a, "20020100")]),
+        ("objects-coff-aarch64.obj", &[(0x100fc, "69000094"), (0x10130, "08000090"), (0x10138, "086141f9")]),
+        ("objects-coff-thumb.obj", &[(0x100cc, "00f0d0f8"), (0x100f0, "40f29020")]),
+        (
+            "objects-macho-arm64.o",
+            &[(0x10104, "49080094"), (0x10140, "082141f9"), (0x10150, "000000b0"), (0x10154, "00d02891")],
+        ),
+        (
+            "objects-macho-x86_64.o",
+            &[(0x10112, "82220000"), (0x10136, "f9020000"), (0x1013d, "f3020000"), (0x10148, "64220000")],
+        ),
+    ];
+    for (name, words) in expected {
+        let binary = open(name);
+        for &(address, hex) in words {
+            let bytes: String = binary.read(address, 4).unwrap().iter().map(|byte| format!("{byte:02x}")).collect();
+            assert_eq!(bytes, hex, "{name} at {address:#x}");
+        }
+    }
+}
+
+#[test]
+fn macho_objects_keep_their_section_addresses_and_resolve_pairs() {
+    let binary = open("objects-macho-arm64.o");
+    let relocated = binary.relocated().unwrap();
+    // An ADDEND pair: the page and offset of `local_array + 6000`.
+    let far = relocated.sites.iter().find(|site| site.kind == "ARM64_RELOC_PAGEOFF12" && site.addend == 6000).unwrap();
+    assert_eq!(far.value, symbol(&binary, "_local_array") + 6000);
+    // A SUBTRACTOR pair: `_greeting - _sum` in `_differences`.
+    let field = binary.read(symbol(&binary, "_differences"), 8).unwrap();
+    let difference = u64::from_le_bytes(field.try_into().unwrap());
+    assert_eq!(difference, symbol(&binary, "_greeting") - symbol(&binary, "_sum"));
+    // The assembler's section labels do not shadow the functions.
+    assert!(binary.symbols.iter().all(|symbol| !symbol.name.starts_with("ltmp")));
+    // An extern reached through the GOT is an import slot.
+    let slot = binary.import_slots.iter().find(|slot| slot.name == "_ext_array").unwrap();
+    assert_eq!(binary.read_pointer(slot.address, 8), Some(symbol(&binary, "_ext_array")));
+}
+
+#[test]
+fn msvc_libraries_and_universal_libraries_open_members() {
+    let lib = object("libobjects-coff.lib");
+    let (_, archive) = archive("libobjects-coff.lib");
+    assert_eq!(archive.kind, "coff");
+    let helper = Binary::open(format!("{}(helper.obj)", lib.display())).unwrap();
+    assert!(helper.symbol_by_name("hal_init").is_some() && helper.relocated().is_some());
+    let objects = Binary::open(format!("{}(objects.obj)", lib.display())).unwrap();
+    assert!(objects.symbol_by_name("uses_imports").is_some());
+
+    // An import library's members are imports, which open with a message, not as code.
+    let imports = std::fs::read(object("imports-coff.lib")).unwrap();
+    let library = rampage_loaders::ar::read(&imports).unwrap();
+    let rows: Vec<_> = library
+        .members
+        .iter()
+        .filter_map(|member| {
+            let bytes = &imports[member.offset as usize..(member.offset + member.size) as usize];
+            rampage_loaders::ar::import_member(bytes).map(|import| (member.index, import))
+        })
+        .collect();
+    let by = |symbol: &str| rows.iter().find(|(_, import)| import.symbol == symbol).unwrap();
+    assert_eq!((by("GetTickCount").1.dll.as_str(), by("GetTickCount").1.kind), ("fixture.dll", "code"));
+    assert_eq!(by("imported_flag").1.kind, "data");
+    assert_eq!((by("by_ordinal").1.by, by("by_ordinal").1.ordinal_or_hint), ("ordinal", 7));
+    let error = Binary::open(format!("{}(#{})", object("imports-coff.lib").display(), by("GetTickCount").0))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("short import object") && error.contains("fixture.dll!GetTickCount"), "{error}");
+
+    // A universal library opens a member of the slice the architecture picks.
+    let universal = object("libobjects-macho.a");
+    let member = format!("{}(objects.o)", universal.display());
+    let x86 = Binary::open(&member).unwrap();
+    let arm = Binary::open_with(&member, Some(Arch::Aarch64)).unwrap();
+    assert_eq!((x86.arch, arm.arch), (Arch::X86_64, Arch::Aarch64));
+    assert_eq!(arm.archive_member.as_ref().and_then(|member| member.arch.as_deref()), Some("aarch64"));
+    assert!(arm.symbol_by_name("_bump").is_some() && arm.relocated().is_some());
+    let whole = Binary::open(&universal).unwrap_err().to_string();
+    assert!(whole.contains("universal library"), "{whole}");
+}
