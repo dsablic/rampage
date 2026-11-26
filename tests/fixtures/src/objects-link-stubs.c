@@ -4,6 +4,13 @@
  * what signatures built from the library are checked against. */
 int main(int argc, char **argv);
 
+#ifdef __APPLE__
+/* The Mach-O library has no helper member: what objects-macho.c leaves undefined. */
+int ext_counter = 3;
+int ext_array[200];
+void hal_init(int pin, int mode) { ext_counter += pin * mode; }
+#endif
+
 int printf(const char *format, ...) { return format[0]; }
 
 __SIZE_TYPE__ strlen(const char *text) {

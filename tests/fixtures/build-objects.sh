@@ -85,6 +85,12 @@ rm -f "$out/libobjects-coff.lib" "$out/imports-coff.lib"
 (cd "$work/coff" && "$llvm/llvm-lib" /out:libobjects-coff.lib objects.obj helper.obj)
 cp "$work/coff/libobjects-coff.lib" "$out/"
 "$llvm/llvm-dlltool" -m i386:x86-64 -d src/objects-imports.def -l "$out/imports-coff.lib"
+# A program linked against the .lib (and the import library), with no symbols, for signatures built from the .lib.
+lld_link=${LLD_LINK:-lld-link}
+"$zig" cc -target x86_64-windows-msvc "${flags[@]}" -o "$work/coff/stubs.obj" src/objects-link-stubs.c
+python3 -I "$repo/tests/fixtures/scrub-paths.py" --root "$zig_cache" "$work/coff/stubs.obj"
+"$lld_link" /nologo /entry:_start /subsystem:console /nodefaultlib /machine:x64 /out:"$out/linked-coff-x86_64.exe" \
+    "$work/coff/stubs.obj" "$out/libobjects-coff.lib" "$out/imports-coff.lib"
 
 # Mach-O: the objects, and a universal library of one member per architecture (libtool's `__.SYMDEF SORTED`).
 for arch in x86_64 arm64; do
@@ -96,5 +102,13 @@ for arch in x86_64 arm64; do
 done
 rm -f "$out/libobjects-macho.a"
 lipo -create -output "$out/libobjects-macho.a" "$work/macho-x86_64/lib-x86_64.a" "$work/macho-arm64/lib-arm64.a"
+# An arm64 program linked against the library's arm64 slice, stripped, for signatures built from the library
+# (without the linker's optimization hints, which rewrite instructions no relocation names).
+ld64=${LD64_LLD:-ld64.lld}
+clang -arch arm64 -O1 -g0 -fno-inline -ffile-prefix-map="$PWD"=. -c -o "$work/macho-arm64/stubs.o" \
+    src/objects-link-stubs.c
+"$ld64" -arch arm64 -platform_version macos 13.0 13.0 -static -e __start -ignore_optimization_hints -o "$out/linked-macho-arm64" \
+    "$work/macho-arm64/stubs.o" "$work/macho-arm64/lib-arm64.a"
+strip "$out/linked-macho-arm64"
 set +x
 python3 -I "$repo/tests/fixtures/scrub-paths.py" --check "$out"/*

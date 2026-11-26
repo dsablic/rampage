@@ -1135,7 +1135,7 @@ impl Binary {
             }));
             // A COFF weak definition is named for what it defines, not for LLVM's `.weak.NAME.default.X` label.
             symbols.retain(|symbol| {
-                !(symbol.name.starts_with(".weak.") && symbol.name.contains(".default."))
+                !llvm_weak_default(&symbol.name)
                     || !relocated.weak_definitions.iter().any(|(_, address, _)| *address == symbol.address)
             });
             symbols.extend(relocated.weak_definitions.iter().map(|(name, address, function)| Symbol {
@@ -1147,6 +1147,11 @@ impl Binary {
         }
         symbols.sort_by(|a, b| (a.address, &a.name).cmp(&(b.address, &b.name)));
         symbols.dedup();
+        // COFF and Mach-O symbols carry no size: in a relocatable object a function runs to the next symbol in its
+        // section, or to the section's end.
+        if let Some(relocated) = relocated.as_ref().filter(|_| format != Format::Elf) {
+            sized_by_neighbours(&mut symbols, &relocated.segments);
+        }
 
         let mut warnings = dynamic_warnings;
         let mut imports = parsed
@@ -1189,18 +1194,23 @@ impl Binary {
             });
 
         if let Some(relocated) = &relocated {
-            // Undefined symbols are what an object imports; its global definitions are what it exports.
-            imports.extend(relocated.externs.iter().map(|item| Import { library: None, name: item.name.clone() }));
+            // Undefined symbols are what an object imports (and all it imports: a Mach-O object's undefined symbols
+            // are also what `object` lists); its global definitions are what it exports.
+            imports = relocated.externs.iter().map(|item| Import { library: None, name: item.name.clone() }).collect();
             let executable = |address| segments.iter().any(|s: &Segment| s.perms.execute && s.contains(address));
             exports = parsed
                 .symbols()
                 .filter(|symbol| symbol.is_definition() && symbol.is_global())
                 .filter_map(|symbol| {
-                    let name = symbol.name().ok().filter(|name| !name.is_empty())?;
+                    let name = symbol.name().ok().filter(|name| !name.is_empty() && !llvm_weak_default(name))?;
                     let address = place(&symbol)?;
                     let address = if executable(code_address(address)) { code_address(address) } else { address };
                     Some(Export { name: name.to_owned(), address })
                 })
+                .chain(relocated.weak_definitions.iter().map(|(name, address, function)| Export {
+                    name: name.clone(),
+                    address: if *function { code_address(*address) } else { *address },
+                }))
                 .collect();
         }
         if sectionless && let Some(dynamic) = &dynamic {
@@ -2043,6 +2053,39 @@ fn coff_pdata_starts(binary: &Binary) -> Vec<u64> {
         }
     }
     starts
+}
+
+/// Whether `name` is LLVM's label for a COFF weak external's default definition (`.weak.NAME.default.X`).
+fn llvm_weak_default(name: &str) -> bool {
+    name.starts_with(".weak.") && name.contains(".default.")
+}
+
+/// Gives each unsized function symbol of a relocatable object the extent to the next symbol after it in its
+/// segment (a placed section), or to the segment's end. `symbols` is sorted by address.
+fn sized_by_neighbours(symbols: &mut [Symbol], segments: &[Segment]) {
+    // Labels (COFF `$LN5`, section symbols) are no boundary; functions and data are.
+    let addresses: Vec<u64> = symbols
+        .iter()
+        .filter(|symbol| matches!(symbol.kind, SymbolKind::Function | SymbolKind::Data))
+        .map(|symbol| symbol.address)
+        .collect();
+    for symbol in symbols.iter_mut() {
+        if symbol.size != 0 || symbol.kind != SymbolKind::Function {
+            continue;
+        }
+        let Some(segment) = segments.iter().find(|segment| segment.perms.execute && segment.contains(symbol.address))
+        else {
+            continue;
+        };
+        // The extern segment's stubs stay unsized: they stand for code elsewhere.
+        if segment.name == "extern" {
+            continue;
+        }
+        let end = segment.address.saturating_add(segment.size);
+        let next = addresses.partition_point(|&address| address <= symbol.address);
+        let until = addresses.get(next).copied().filter(|&address| address < end).unwrap_or(end);
+        symbol.size = until - symbol.address;
+    }
 }
 
 /// Whether `name` is a section-start label an assembler gives a Mach-O object's sections (`ltmp0`, `ltmp1`).

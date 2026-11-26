@@ -6,7 +6,7 @@
 
 use rampage_arch::Arch;
 
-use super::elf::{a64_adr, a64_field, get, page, put, sign_extend};
+use super::elf::{a64_adr, a64_field, a64_offset_scale, get, page, put, sign_extend};
 use super::{Applied, GotKey, Image, Refused, Reloc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,9 +90,13 @@ fn unsigned(image: &mut Image, reloc: &Reloc) -> Applied {
             put(image, p, width, value)?;
             Ok(Some((a, reloc.symbol.value.wrapping_add(a as u64))))
         }
-        // The section-relative minuend and a subtrahend defined here moved by the same distance.
-        (Some(minus), false) if minus.defined => Ok(Some((a, stored.wrapping_add(image.delta)))),
-        (Some(_), false) => Err(Refused::Unsupported),
+        // A section-relative minuend: the field holds its address in the object (plus the addend), and the
+        // subtrahend is subtracted as for a symbol.
+        (Some(minus), false) => {
+            let target = stored.wrapping_add(image.delta);
+            put(image, p, width, target.wrapping_sub(minus.value))?;
+            Ok(Some((0, target)))
+        }
         (None, true) => {
             let target = reloc.symbol.value.wrapping_add(a as u64);
             put(image, p, width, target)?;
@@ -149,14 +153,11 @@ fn x86_64(image: &mut Image, reloc: &Reloc) -> Applied {
 /// The page offset `value` encoded in an A64 `add` (unscaled) or load/store (scaled by its access size).
 fn pageoff12(image: &mut Image, place: u64, value: u64) -> Result<(), Refused> {
     let insn = get(image, place, 4)?;
-    let scale = if insn & 0x3b00_0000 == 0x3900_0000 {
-        let size = (insn >> 30) as u32;
-        if insn & 0x0480_0000 == 0x0480_0000 { size + 4 } else { size }
-    } else {
-        0
-    };
-    a64_field(image, place, (value & 0xfff) >> scale, 10, 12)
+    a64_field(image, place, (value & 0xfff) >> a64_offset_scale(insn), 10, 12)
 }
+
+/// The pages section-relative `PAGE21`s reach, by place, for the `PAGEOFF12`s after them.
+const PAGE_PAIR_DISTANCE: u64 = 64;
 
 fn arm64(image: &mut Image, reloc: &Reloc) -> Applied {
     let p = reloc.place;
@@ -171,7 +172,24 @@ fn arm64(image: &mut Image, reloc: &Reloc) -> Applied {
             let offset = sign_extend(get(image, p, 4)? & 0x3ff_ffff, 26) << 2;
             Ok(Some((0, p.wrapping_add(offset as u64))))
         }
-        3 | 4 if !reloc.external => Ok(Some((0, reloc.symbol.value))),
+        // Against a section the page is the `adrp`'s own (the object moved by whole pages), and the offset after
+        // it completes the address.
+        3 if !reloc.external => {
+            let insn = get(image, p, 4)?;
+            let immediate = sign_extend(((insn >> 29) & 3) | ((insn >> 3) & 0x1f_fffc), 21);
+            let target = page(p).wrapping_add((immediate << 12) as u64);
+            image.last_page = Some((p, target));
+            Ok(Some((0, target)))
+        }
+        4 if !reloc.external => {
+            let insn = get(image, p, 4)?;
+            let low = ((insn >> 10) & 0xfff) << a64_offset_scale(insn);
+            match image.last_page.filter(|&(at, _)| at < p && p - at <= PAGE_PAIR_DISTANCE) {
+                Some((_, page)) => Ok(Some((0, page | low))),
+                // With no `adrp` before it the high bits are unknown: report the field as left as it is.
+                None => Err(Refused::Unsupported),
+            }
+        }
         2 => {
             a64_field(image, p, x.wrapping_sub(p) >> 2, 0, 26)?;
             Ok(Some((a, x)))

@@ -614,7 +614,11 @@ const SESSION_PATH_FILE_TOOLS: [&str; 15] = [
 
 /// A file tool's listed schema: `path` is optional on the tools where it defaults to the session's target.
 /// `build_signatures` on a static library: every relocatable member's functions, written to `output`.
-fn library_signatures(path: &Path, arguments: &Map<String, Value>) -> Result<Value, String> {
+fn library_signatures(
+    path: &Path,
+    arguments: &Map<String, Value>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value, String> {
     if arguments.get("fuzzy_request").is_some_and(|value| !value.is_null()) {
         return Err("fuzzy_request builds from a binary, not a static library; open one member as the path".to_owned());
     }
@@ -629,7 +633,7 @@ fn library_signatures(path: &Path, arguments: &Map<String, Value>) -> Result<Val
         Some(Value::String(arch)) => Some(arch.parse::<Arch>()?),
         Some(_) => return Err("`arch` must be an architecture string or null".to_owned()),
     };
-    let built = rampage_api::build_library_signatures(path, arch).map_err(|error| error.to_string())?;
+    let built = rampage_api::build_library_signatures(path, arch, cancelled).map_err(|error| error.to_string())?;
     std::fs::write(output, built.database.to_json()).map_err(|error| format!("cannot write {output}: {error}"))?;
     let mut report = serde_json::to_value(&built.report).map_err(|error| error.to_string())?;
     report["output"] = Value::String(output.to_owned());
@@ -1174,7 +1178,7 @@ impl RampageServer {
             && let Some(path) = arguments.get("path").and_then(Value::as_str)
             && rampage_api::is_static_archive(Path::new(path))
         {
-            return match library_signatures(Path::new(path), &arguments) {
+            return match library_signatures(Path::new(path), &arguments, &|| cancel.is_cancelled()) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };

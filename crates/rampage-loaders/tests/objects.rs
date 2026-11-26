@@ -493,7 +493,7 @@ fn coff_and_macho_applied_fields_are_pinned() {
         ),
         (
             "objects-macho-x86_64.o",
-            &[(0x10112, "82220000"), (0x10136, "f9020000"), (0x1013d, "f3020000"), (0x10148, "64220000")],
+            &[(0x10112, "92220000"), (0x10136, "09030000"), (0x1013d, "03030000"), (0x10148, "74220000")],
         ),
     ];
     for (name, words) in expected {
@@ -503,6 +503,37 @@ fn coff_and_macho_applied_fields_are_pinned() {
             assert_eq!(bytes, hex, "{name} at {address:#x}");
         }
     }
+}
+
+/// A difference whose minuend is a temporary label (`.long Lstring - .`): the field holds the label's address in
+/// the object, and the linked difference reaches the string.
+#[test]
+fn a_macho_difference_from_a_section_relative_minuend_reaches_its_target() {
+    let binary = open("objects-macho-x86_64.o");
+    let at = symbol(&binary, "_to_local");
+    let field = i32::from_le_bytes(binary.read(at, 4).unwrap().try_into().unwrap());
+    assert_eq!(binary.read(at.wrapping_add(field as i64 as u64), 6), Some(&b"local\0"[..]));
+}
+
+/// COFF and Mach-O symbols carry no size: an object's function runs to the next symbol in its section, or to the
+/// section's end; imports are listed once, and LLVM's weak-definition label is no export.
+#[test]
+fn coff_and_macho_functions_are_sized_and_listed_once() {
+    for name in
+        ["objects-coff-x86_64.obj", "objects-coff-aarch64.obj", "objects-macho-x86_64.o", "objects-macho-arm64.o"]
+    {
+        let binary = open(name);
+        let main = binary.symbol_by_name("main").or_else(|| binary.symbol_by_name("_main")).unwrap();
+        assert!(main.size > 16, "{name}: {main:?}");
+        let mut imports: Vec<&str> = binary.imports.iter().map(|import| import.name.as_str()).collect();
+        let count = imports.len();
+        imports.sort_unstable();
+        imports.dedup();
+        assert_eq!(imports.len(), count, "{name}: {:?}", binary.imports);
+        assert!(!binary.exports.iter().any(|export| export.name.starts_with(".weak.")), "{name}");
+    }
+    let coff = open("objects-coff-x86_64.obj");
+    assert!(coff.exports.iter().any(|export| export.name == "weak_hook"));
 }
 
 #[test]

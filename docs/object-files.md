@@ -97,7 +97,9 @@ reads `printf - 4`). A RISC-V `call` is relocated at its `auipc` while the call 
 `PCREL_LO12` names its `auipc`: both report the relocation there. Another instruction's relocation is never
 borrowed.
 
-**Functions.** A COFF object's `.pdata` entries seed function starts, so SEH funclets (`$fin$0`, `$dtor$0`,
+**Functions.** COFF and Mach-O symbols carry no size, so in an object each function symbol runs to the next
+function or data symbol in its section, or to the section's end (labels such as COFF `$LN5` are no boundary).
+A COFF object's `.pdata` entries seed function starts, so SEH funclets (`$fin$0`, `$dtor$0`,
 `$filt$0`), which only the exception tables reach, are functions too.
 
 **Measured** (2026-11-26, on libraries the fixtures were not built from): every symbol-table function of every
@@ -199,8 +201,18 @@ into; the patterns leave those out and nothing else. A record whose fixed bytes 
 is not written, since it would only withhold names. The receipt counts members used and skipped, functions,
 signatures, callee keys and `pat_records`.
 
+Members are judged by their format before loading: short import objects, machine-independent alias objects and
+other non-objects are counted under `skipped` by kind, a member that loads but names no sized function as `no named
+functions`, and a library none of whose objects names one is refused. A cancelled MCP call stops between members
+and writes nothing.
+
 On the fixtures, a database built from a two-member MIPS library names all seven of its functions in a stripped
-program statically linked against it; the same objects' hashes alone name two (the ones with no relocation).
+program statically linked against it; the same objects' hashes alone name two (the ones with no relocation). One
+built from the COFF `.lib` names all ten functions of the program `lld-link` links from it (x64), and one from the
+universal library's arm64 slice the four of `ld64.lld`'s program that pass the hash gate's four instructions and
+keep their bytes (`_bump`'s GOT load is relaxed by the linker); the patterns alone, with every hash taken out of the
+database, name the functions with relocations in both. That program is linked without arm64 optimization hints:
+with them, `ld64.lld` rewrites `adrp`/`ldr` pairs no relocation names, and those functions do not match.
 
 ## Limits
 
@@ -211,6 +223,7 @@ program statically linked against it; the same objects' hashes alone name two (t
 - DWARF in an object is not imported (its addresses are relocated too).
 - No linker relaxation: `GOTPCRELX` loads keep going through the GOT.
 - Signature patterns from a library match a function only where the linked copy has the object's bytes outside
-  the relocated fields: a linker that relaxes an instruction (`GOTPCRELX` to `lea`, a TLS sequence, arm64 LOH
-  hints) changes bytes no relocation names, and the pattern does not match there (the hash may). A pattern also
+  the relocated fields: a linker that relaxes an instruction (`GOTPCRELX` to `lea`, a TLS sequence, an arm64 GOT
+  load turned into an address computation, arm64 optimization hints) changes bytes no relocation names, and the
+  pattern does not match there (the hash may). A pattern also
   needs the target's discovered extent to equal the function's length in the object or its discovered extent there.

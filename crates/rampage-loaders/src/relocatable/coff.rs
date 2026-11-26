@@ -4,7 +4,9 @@
 
 use rampage_arch::Arch;
 
-use super::elf::{a64_adr, get, mov_encode, mov_immediate, put, put_thumb_pair, sign_extend, thumb_pair};
+use super::elf::{
+    a64_adr, a64_offset_scale, get, mov_encode, mov_immediate, put, put_thumb_pair, sign_extend, thumb_pair,
+};
 use super::{Applied, Image, Refused, Reloc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,9 +156,13 @@ fn secrel(reloc: &Reloc) -> u64 {
 /// `REL32` and its forms: `S + A - (P + 4 + extra)`, where `extra` counts the bytes of the instruction after the
 /// field. The site's value is `S + A`, the address referenced.
 fn rel32(image: &mut Image, reloc: &Reloc, extra: u64) -> Applied {
-    let p = reloc.place;
+    rel32_to(image, reloc.place, reloc.symbol.value, extra)
+}
+
+/// [`rel32`] against `s`, which for ARM carries a Thumb function's bit.
+fn rel32_to(image: &mut Image, p: u64, s: u64, extra: u64) -> Applied {
     let a = sign_extend(get(image, p, 4)?, 32);
-    let target = reloc.symbol.value.wrapping_add(a as u64);
+    let target = s.wrapping_add(a as u64);
     put(image, p, 4, target.wrapping_sub(p.wrapping_add(4 + extra)))?;
     Ok(Some((a, target)))
 }
@@ -197,16 +203,10 @@ fn a64_imm12(image: &mut Image, place: u64, value: u64, limit: u32) -> Result<u6
     Ok(stored)
 }
 
-/// The access size (log2 bytes) of an A64 load/store with an unsigned offset: 128-bit SIMD loads are 4.
-fn a64_scale(insn: u64) -> u32 {
-    let size = (insn >> 30) as u32;
-    if insn & 0x0480_0000 == 0x0480_0000 { size + 4 } else { size }
-}
-
 /// A scaled 12-bit load/store offset (`PAGEOFFSET_12L`, `SECREL_LOW12L`): the page offset `value` divided by the
 /// access size, added to the stored one. Returns the addend in bytes.
 fn a64_ldst(image: &mut Image, place: u64, value: u64) -> Result<i64, Refused> {
-    let scale = a64_scale(get(image, place, 4)?);
+    let scale = a64_offset_scale(get(image, place, 4)?);
     let stored = a64_imm12(image, place, value >> scale, scale)?;
     Ok((stored << scale) as i64)
 }
@@ -260,13 +260,15 @@ fn arm64(image: &mut Image, reloc: &Reloc) -> Applied {
         8 => add(image, p, 4, secrel(reloc)),
         9 | 10 => {
             let offset = secrel(reloc);
-            let part = if reloc.r_type == 9 { offset & 0xfff } else { (offset >> 12) & 0xfff };
-            let a = a64_imm12(image, p, part, 0)? as i64;
-            Ok(Some((a, s)))
+            let high = reloc.r_type == 10;
+            let part = if high { (offset >> 12) & 0xfff } else { offset & 0xfff };
+            let stored = a64_imm12(image, p, part, 0)?;
+            let a = (if high { stored << 12 } else { stored }) as i64;
+            Ok(Some((a, s.wrapping_add(a as u64))))
         }
         11 => {
             let a = a64_ldst(image, p, secrel(reloc) & 0xfff)?;
-            Ok(Some((a, s)))
+            Ok(Some((a, s.wrapping_add(a as u64))))
         }
         13 => section_number(image, reloc),
         _ => Err(Refused::Unsupported),
@@ -297,7 +299,7 @@ fn armnt(image: &mut Image, reloc: &Reloc) -> Applied {
     match reloc.r_type {
         0 => Ok(None),
         1 | 2 => add(image, p, 4, s),
-        10 => rel32(image, reloc, 0),
+        10 => rel32_to(image, p, s, 0),
         14 => section_number(image, reloc),
         15 => add(image, p, 4, secrel(reloc)),
         // MOV32T: a `movw`/`movt` pair holding the address, the stored halves the addend.
@@ -348,6 +350,7 @@ mod tests {
             pointer: 8,
             delta: 0,
             touched: None,
+            last_page: None,
         };
         let symbol = SymbolInfo { value, section_number: 3, section_base: 0x2000, ..SymbolInfo::NONE };
         let reloc = Reloc {

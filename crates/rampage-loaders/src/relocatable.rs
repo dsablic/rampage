@@ -95,6 +95,8 @@ pub struct Relocated {
     /// The fields of relocations left unapplied (at most [`MAX_UNAPPLIED_SITES`]): they hold the file's bytes, not
     /// a value to fold.
     pub unapplied: Vec<u64>,
+    /// Each unapplied field's width in bytes, where the relocation gives one (Mach-O), else 4, by address.
+    pub unapplied_widths: Vec<(u64, u8)>,
     pub warnings: Vec<String>,
     /// COFF: the linker directives of `.drectve` (`/DEFAULTLIB:...`, `/EXPORT:...`).
     pub directives: Vec<String>,
@@ -304,6 +306,8 @@ pub(crate) struct Image<'a> {
     pub delta: u64,
     /// The bytes written at and after the current relocation's field: (place, end).
     touched: Option<(u64, u64)>,
+    /// Mach-O arm64: the last section-relative `PAGE21`'s place and the page it reaches.
+    pub last_page: Option<(u64, u64)>,
 }
 
 /// What a GOT entry holds: a symbol's address, or (MIPS local GOT16) a 64 KiB page.
@@ -910,11 +914,13 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         pointer: width,
         delta,
         touched: None,
+        last_page: None,
     };
     let mut sites = Vec::new();
     let mut sites_total = 0;
     let mut unsupported: BTreeMap<u32, (usize, u64)> = BTreeMap::new();
     let mut unapplied = Vec::new();
+    let mut unapplied_widths = Vec::new();
     let mut out_of_range = 0usize;
     let section_info = |index: SectionIndex| -> SymbolInfo {
         let base = places.section(index).unwrap_or(0);
@@ -1012,6 +1018,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
                 entry.0 += 1;
                 if unapplied.len() < MAX_UNAPPLIED_SITES {
                     unapplied.push(place);
+                    unapplied_widths.push((place, u8::try_from(length).ok().filter(|&width| width > 0).unwrap_or(4)));
                 }
             }
             Err(Refused::OutOfRange) => out_of_range += 1,
@@ -1022,6 +1029,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
     }
     sites.sort_by_key(|site| site.address);
     unapplied.sort_unstable();
+    unapplied_widths.sort_unstable();
     let unsupported: Vec<UnsupportedRelocation> = unsupported
         .into_iter()
         .map(|(r_type, (count, first))| UnsupportedRelocation { kind: machine.type_name(r_type), count, first })
@@ -1054,6 +1062,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         sites_total,
         unsupported,
         unapplied,
+        unapplied_widths,
         warnings,
         directives,
         comdats: parsed.comdats().count(),

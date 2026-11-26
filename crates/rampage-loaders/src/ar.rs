@@ -284,8 +284,12 @@ pub fn member_at(data: &[u8], offset: u64) -> Option<Member> {
     }
     let slices = universal_archives(data)?;
     let at = usize::try_from(offset).ok()?;
-    let (arch, _) = slices.iter().find(|(_, range)| range.contains(&at))?;
-    read_library(data, *arch).ok()?.archive.member_at(offset).cloned()
+    let (arch, range) = slices.iter().find(|(_, range)| range.contains(&at))?;
+    let archive = read(&data[range.clone()]).ok()?;
+    let mut member = archive.member_at(offset - range.start as u64)?.clone();
+    member.offset += range.start as u64;
+    member.arch = arch.map(|arch| arch.to_string());
+    Some(member)
 }
 
 /// The member a member path names, as the archive's path and the member's location in it; `wanted` picks a

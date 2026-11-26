@@ -460,8 +460,8 @@ fn object_patterns(binary: &Binary, extents: &BTreeMap<u64, u64>, lines: &mut Ve
                 }
             }
             // A field left unapplied holds the object's bytes, which a linked copy does not.
-            for &address in &relocated.unapplied {
-                for byte in address..address.saturating_add(4) {
+            for &(address, width) in &relocated.unapplied_widths {
+                for byte in address..address.saturating_add(u64::from(width)) {
                     if let Some(index) = byte.checked_sub(symbol.address).filter(|&index| index < length) {
                         body[index as usize] = None;
                     }
@@ -473,6 +473,22 @@ fn object_patterns(binary: &Binary, extents: &BTreeMap<u64, u64>, lines: &mut Ve
     functions.len()
 }
 
+/// Why a library member's bytes are no object to build signatures from, judged by its format before loading it.
+fn member_skip_reason(bytes: &[u8]) -> Option<&'static str> {
+    match object::FileKind::parse(bytes) {
+        Ok(object::FileKind::CoffImport) => Some("short import object"),
+        Ok(
+            object::FileKind::Coff | object::FileKind::CoffBig | object::FileKind::MachO64 | object::FileKind::MachO32,
+        ) => None,
+        Ok(object::FileKind::Elf32 | object::FileKind::Elf64) => None,
+        Ok(_) => Some("not an object file"),
+        Err(_) if bytes.starts_with(&[0, 0]) && object::read::coff::CoffFile::<&[u8]>::parse(bytes).is_ok() => {
+            Some("machine-independent COFF object (aliases only)")
+        }
+        Err(_) => Some("not an object file"),
+    }
+}
+
 /// Builds a signature database from every relocatable object in the static library at `path` (an `ar` archive,
 /// an MSVC `.lib`, or the `arch` slice of a universal library): masked-hash signatures as for a binary, plus
 /// relocation-exact patterns, which leave out exactly the bytes a relocation patched, where the hashes can only
@@ -481,11 +497,11 @@ fn object_patterns(binary: &Binary, extents: &BTreeMap<u64, u64>, lines: &mut Ve
 pub fn build_library_signatures(
     path: &std::path::Path,
     arch: Option<rampage_arch::Arch>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<LibrarySignatures, ApiError> {
     let load = |source| ApiError::Load { path: path.to_owned(), source };
     let data = rampage_loaders::ar::map(path).map_err(load)?;
     let library = rampage_loaders::ar::read_library(&data, arch).map_err(load)?;
-    drop(data);
     let mut report = LibrarySignatureReport {
         arch: None,
         members: library.archive.members.len(),
@@ -502,18 +518,24 @@ pub fn build_library_signatures(
     let mut lines = Vec::new();
     let mut functions = 0;
     let wanted = arch.or(library.arch);
+    let mut load_errors = Vec::new();
     for member in library.archive.members.iter().take(MAX_LIBRARY_MEMBERS) {
+        if cancelled() {
+            return Err(ApiError::Invalid("signature build cancelled; nothing was written".to_owned()));
+        }
+        let start = usize::try_from(member.offset).unwrap_or(usize::MAX);
+        let bytes = data.get(start..start.saturating_add(usize::try_from(member.size).unwrap_or(usize::MAX)));
+        if let Some(reason) = bytes.map_or(Some("truncated"), member_skip_reason) {
+            skip(reason);
+            continue;
+        }
         let binary = match Binary::open_member(path, member.clone(), wanted) {
             Ok(binary) => binary,
             Err(error) => {
-                let text = error.to_string();
-                skip(if text.contains("short import object") {
-                    "short import object"
-                } else if text.contains("slice; the file contains") {
-                    "another architecture"
-                } else {
-                    "not a loadable object"
-                });
+                skip("failed to load");
+                if load_errors.len() < 4 {
+                    load_errors.push(format!("{}: {error}", member.selector()));
+                }
                 continue;
             }
         };
@@ -538,8 +560,22 @@ pub fn build_library_signatures(
                 .map_err(|error| ApiError::Invalid(error.to_string()))?,
             None => database = Some(SignatureDb::from_binary_with_extents(&project.binary, &extents)),
         }
-        functions += object_patterns(&project.binary, &extents, &mut lines);
+        let named = object_patterns(&project.binary, &extents, &mut lines);
+        if named == 0 {
+            skip("no named functions");
+            continue;
+        }
+        functions += named;
         report.members_used += 1;
+    }
+    report.warnings.extend(load_errors.into_iter().map(|error| format!("member not loaded: {error}")));
+    if functions == 0 && database.is_some() {
+        return Err(ApiError::Invalid(format!(
+            "the objects of {} hold no named function with a size, so no signatures were built ({} members: {})",
+            path.display(),
+            report.members,
+            report.skipped.iter().map(|(reason, count)| format!("{count} {reason}")).collect::<Vec<_>>().join(", ")
+        )));
     }
     if library.archive.members.len() > MAX_LIBRARY_MEMBERS {
         report.warnings.push(format!(

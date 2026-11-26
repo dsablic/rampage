@@ -204,12 +204,71 @@ fn coff_and_macho_objects_decompile_with_their_callees_named() {
     }
 }
 
+/// Signatures from a COFF `.lib` and a Mach-O universal library name their functions in programs linked against
+/// them (lld-link; ld64.lld for the arm64 slice), and the relocation-exact patterns alone name the functions whose
+/// fields the linker filled in.
+#[test]
+fn coff_and_macho_library_signatures_name_the_functions_of_linked_programs() {
+    let cases: [(&str, Option<rampage_arch::Arch>, &str, &[&str]); 2] = [
+        (
+            "libobjects-coff.lib",
+            None,
+            "linked-coff-x86_64.exe",
+            &[
+                "dispatch",
+                "hal_init",
+                "main",
+                "scale",
+                "set_flags",
+                "sum",
+                "thrice",
+                "twice",
+                "uses_imports",
+                "weak_hook",
+            ],
+        ),
+        // `_twice`, `_thrice` and `_far_element` are under the hash gate's four instructions; `_bump`'s GOT load
+        // is relaxed by the linker into an address computation no relocation names.
+        (
+            "libobjects-macho.a",
+            Some(rampage_arch::Arch::Aarch64),
+            "linked-macho-arm64",
+            &["_dispatch", "_main", "_scale", "_sum"],
+        ),
+    ];
+    for (library, arch, linked, expected) in cases {
+        let built = rampage_api::build_library_signatures(&Path::new(DIR).join(library), arch, &|| false).unwrap();
+        assert!(built.report.functions > 0 && built.report.pat_records > 0, "{library}: {:?}", built.report);
+        let program = project(linked);
+        let found = program.apply_signatures(&built.database, false).unwrap();
+        let mut names: Vec<&str> = found.matches.iter().map(|item| item.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, expected, "{library}");
+
+        // The patterns alone: a database with every hash entry taken out.
+        let mut json: serde_json::Value = serde_json::from_str(&built.database.to_json()).unwrap();
+        for key in ["exact", "ambiguous", "ambiguous_exact", "calls", "ambiguous_calls"] {
+            json.as_object_mut().unwrap().remove(key);
+        }
+        json["entries"] = serde_json::json!({});
+        let patterns = rampage_api::SignatureDb::from_json(&json.to_string()).unwrap();
+        let found = program.apply_signatures(&patterns, false).unwrap();
+        let named: Vec<&str> = found.matches.iter().map(|item| item.name.as_str()).collect();
+        let relocated = if library.ends_with(".lib") { "uses_imports" } else { "_main" };
+        assert!(named.contains(&relocated), "{library}: {named:?}");
+        assert!(named.iter().all(|name| expected.contains(name)), "{library}: {named:?}");
+    }
+    // A single object builds signatures too, now that its functions have sizes.
+    assert!(project("objects-coff-x86_64.obj").build_signatures().len() > 4);
+    assert!(project("objects-macho-arm64.o").build_signatures().len() > 2);
+}
+
 /// Signatures built from a static library name its functions in a program linked against it, where the objects'
 /// masked hashes alone miss the functions whose MIPS `%hi`/`%lo` pairs the linker filled in.
 #[test]
 fn library_signatures_name_the_functions_of_a_program_linked_against_the_library() {
     let library = Path::new(DIR).join("libobjects-mipsel.a");
-    let built = rampage_api::build_library_signatures(&library, None).unwrap();
+    let built = rampage_api::build_library_signatures(&library, None, &|| false).unwrap();
     assert_eq!((built.report.members, built.report.members_used), (2, 2));
     assert!(built.report.pat_records >= 6, "{:?}", built.report);
     let program = project("linked-mipsel");
@@ -226,8 +285,35 @@ fn library_signatures_name_the_functions_of_a_program_linked_against_the_library
     // The same objects' hashes, without the relocation-exact patterns, name only what has no relocations.
     let hashes = project("objects-mipsel.o").build_signatures();
     let only = program.apply_signatures(&hashes, false).unwrap();
-    assert!(only.matched < 4, "{:?}", only.matches);
+    let mut hashed: Vec<&str> = only.matches.iter().map(|item| item.name.as_str()).collect();
+    hashed.sort_unstable();
+    assert_eq!(hashed, ["thrice", "twice"]);
     // Building is deterministic.
-    let again = rampage_api::build_library_signatures(&library, None).unwrap();
+    let again = rampage_api::build_library_signatures(&library, None, &|| false).unwrap();
     assert_eq!(again.database.to_json(), built.database.to_json());
+}
+
+/// Members that are no object are skipped by their format, counted by why; a cancelled build writes nothing.
+#[test]
+fn library_signature_builds_skip_by_member_format_and_stop_when_cancelled() {
+    let imports = rampage_api::build_library_signatures(&Path::new(DIR).join("imports-coff.lib"), None, &|| false);
+    let error = imports.err().expect("an import library has no code").to_string();
+    assert!(error.contains("short import object"), "{error}");
+    let built = rampage_api::build_library_signatures(&Path::new(DIR).join("libobjects-coff.lib"), None, &|| false);
+    assert!(built.unwrap().report.skipped.is_empty());
+    let cancelled = rampage_api::build_library_signatures(&Path::new(DIR).join("libobjects-mipsel.a"), None, &|| true);
+    assert!(cancelled.err().unwrap().to_string().contains("cancelled"));
+}
+
+/// An image offset at a universal library's member opens that member of its own slice.
+#[test]
+fn an_image_offset_in_a_universal_library_opens_the_member_of_that_slice() {
+    let path = Path::new(DIR).join("libobjects-macho.a");
+    let data = std::fs::read(&path).unwrap();
+    let arm = rampage_loaders::ar::read_library(&data, Some(rampage_arch::Arch::Aarch64)).unwrap();
+    let member = arm.archive.members.iter().find(|member| member.name == "objects.o").unwrap();
+    let image = rampage_loaders::ImageAt::new(member.offset, None);
+    let binary = rampage_loaders::Binary::open_image(&path, Some(image), None).unwrap();
+    assert_eq!(binary.arch, rampage_arch::Arch::Aarch64);
+    assert_eq!(binary.archive_member.as_ref(), Some(member));
 }

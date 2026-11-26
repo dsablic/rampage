@@ -408,7 +408,13 @@ const MAX_TAIL_BYTES: usize = MAX_PAT_FIELDS / 2;
 /// PAT, or when the record would not pass the matcher's own content gate
 /// ([`PatternRecord::has_discriminating_pattern`]): a weak record would only withhold names.
 pub fn pat_record(name: &str, body: &[Option<u8>]) -> Option<String> {
-    if name.is_empty() || name.contains(char::is_whitespace) || name.starts_with([':', '^', '(', '#']) || name == "?" {
+    // What the parser would refuse would take the whole namespace with it: it parses atomically.
+    let unspellable = name.is_empty()
+        || name.len() > MAX_PAT_FIELDS
+        || name.chars().any(|character| character.is_whitespace() || character.is_control())
+        || name.starts_with([':', '^', '(', '#'])
+        || name == "?";
+    if unspellable {
         return None;
     }
     if body.is_empty() || body.len() > 0xffff_ffff {
@@ -438,6 +444,26 @@ pub fn pat_record(name: &str, body: &[Option<u8>]) -> Option<String> {
     let positions = body.len().min(PREFIX_BYTES) + tail.len();
     let fixed = body.iter().take(PREFIX_BYTES).chain(tail).filter(|value| value.is_some()).count();
     (fixed >= MIN_CONTENT_BYTES && fixed * 2 >= positions).then_some(text)
+}
+
+#[cfg(test)]
+mod generated_tests {
+    use super::{PatternDb, pat_record};
+    use rampage_arch::Arch;
+
+    /// A name the parser would refuse is never written, so it cannot take the other records with it.
+    #[test]
+    fn unspellable_names_are_left_out_and_the_rest_parse() {
+        let body: Vec<Option<u8>> = (0u8..48).map(|byte| if byte % 7 == 0 { None } else { Some(byte) }).collect();
+        let long = "x".repeat(5000);
+        for bad in [long.as_str(), "with\u{1}control", "tab\tname", "", "?", ":colon"] {
+            assert_eq!(pat_record(bad, &body), None, "{bad:?}");
+        }
+        let good: Vec<String> = ["first", "second"].iter().filter_map(|name| pat_record(name, &body)).collect();
+        assert_eq!(good.len(), 2);
+        let text = format!("{}\n---\n", good.join("\n"));
+        assert_eq!(PatternDb::parse(Arch::X86_64, text.as_bytes()).unwrap().records().len(), 2);
+    }
 }
 
 fn parse_record(raw: &str, line: usize) -> Result<PatternRecord, PatError> {

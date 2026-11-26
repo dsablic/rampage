@@ -29,7 +29,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
   table holding the extern `X` (so calls through them decompile by name), weak externals resolved to their default,
   COMDAT, debug and directive sections handled (`binary_info` reports `comdats` and the `.drectve` `directives`),
   image base 0 for `ADDR32NB`, `.pdata` entries seeding function starts (SEH funclets); the format is `pe`. Mach-O: sections keep their own addresses moved by the base,
-  `SUBTRACTOR` and `ADDEND` pairs, a synthetic `__got`. Every relocation of the fixtures references the same symbol
+  `SUBTRACTOR` (a section-relative minuend too) and `ADDEND` pairs, a synthetic `__got`. COFF and Mach-O function
+  symbols are sized to the next symbol in their section, so objects and libraries build signatures. Every relocation of the fixtures references the same symbol
   plus addend in rampage's image as in `lld-link`'s or `ld64.lld`'s output. MSVC `.lib` members open as
   `lib.lib(member.obj)`; import-library members (short import objects) are listed by `archive_inventory` with their
   `import` (DLL, symbol, kind, by name or ordinal) and refused with what they import when opened; a Mach-O universal
@@ -37,7 +38,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `build_signatures` (CLI `function build-signatures`) takes a static library as its path and builds from all its
   objects, adding PAT patterns whose wildcards are exactly the bytes relocations patched (the 16-bit immediate for
   MIPS `%hi`/`%lo`): a MIPS library's database names all seven of its functions in a program linked against it,
-  where the objects' hashes alone named two. `ANALYSIS_VERSION` is 15 (Mach-O objects were loaded unlaid-out
+  where the objects' hashes alone named two; a COFF `.lib`'s names all ten functions of a program lld-link links
+  from it. Members are skipped by format (import objects, alias-only objects), and the MCP call is cancellable. `ANALYSIS_VERSION` is 15 (Mach-O objects were loaded unlaid-out
   before). New fixtures: COFF and Mach-O objects, `libobjects-coff.lib`, `imports-coff.lib`, `libobjects-macho.a`,
   `libobjects-mipsel.a` and `linked-mipsel`.
 

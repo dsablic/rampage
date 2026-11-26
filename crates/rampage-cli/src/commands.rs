@@ -2649,7 +2649,7 @@ pub fn signatures(
         && options.raw.is_none()
         && rampage_api::is_static_archive(path)
     {
-        let built = rampage_api::build_library_signatures(path, options.arch)?;
+        let built = rampage_api::build_library_signatures(path, options.arch, &|| false)?;
         let json = built.database.to_json();
         match output {
             Some(output) => {

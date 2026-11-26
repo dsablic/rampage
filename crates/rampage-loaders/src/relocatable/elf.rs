@@ -271,6 +271,16 @@ fn x86(image: &mut Image, reloc: &Reloc) -> Applied {
     }
 }
 
+/// The access size (log2 bytes) an A64 instruction scales a 12-bit page offset by: a load or store with an
+/// unsigned offset by its size (128-bit SIMD ones by 16), anything else (`add`) not at all.
+pub(super) fn a64_offset_scale(insn: u64) -> u32 {
+    if insn & 0x3b00_0000 != 0x3900_0000 {
+        return 0;
+    }
+    let size = (insn >> 30) as u32;
+    if insn & 0x0480_0000 == 0x0480_0000 { size + 4 } else { size }
+}
+
 pub(super) fn page(address: u64) -> u64 {
     address & !0xfff
 }
