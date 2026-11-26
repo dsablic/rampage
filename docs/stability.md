@@ -140,6 +140,8 @@ Snapshots under `tests/contract/` pin the stable surface, and tests compare it w
   test. `query_debugger` runs against a scripted bridge socket, so its envelope is pinned; the fields inside
   `data` follow the bridge protocol (`rampage-lldb-query-v1`).
 - `cli-commands.json`: every CLI route, the compatibility spellings included, with its flags and positionals.
+  The hidden aliases that accept MCP tool names (`rampage binary_info FILE`) are a convenience, not part of this
+  snapshot: an alias may be added or dropped in any release; the route it points at is what is stable.
 - `cli-json.json`: the `--json` field paths of the main commands on committed fixtures.
 
 Each difference is classified. A new tool, command, optional argument, flag or result field, or a widened argument

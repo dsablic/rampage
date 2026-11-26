@@ -218,8 +218,9 @@ enum Command {
     /// Compare function starts with a versioned, image-hash-matched reference export
     #[command(hide = true)]
     Compare(CompareArgs),
-    /// Build a library-function signature database from a binary whose functions are named, hashing each over its
-    /// symbol size and its discovered extent, with callee keys for functions whose bodies collide
+    /// Build a library-function signature database from a binary whose functions are named, or from a static library
+    /// (`.a`, `.lib`), hashing each over its symbol size and its discovered extent, with callee keys for functions
+    /// whose bodies collide; a library also gets patterns masked exactly at its relocations
     #[command(hide = true)]
     Signatures(SignaturesArgs),
     /// Name functions by matching a signature database (FLIRT/Function-ID style); functions whose bodies collide
