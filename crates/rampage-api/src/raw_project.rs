@@ -97,7 +97,7 @@ pub struct RawProjectRequest {
     pub regions: Vec<RawRegionRequest>,
     /// Whether the program writes the primary code region: `true` maps it rwx for the decompiler, so reads of the
     /// globals inside it are never folded to the bytes the image holds (its literal pools still read as constants);
-    /// `false` keeps it r-x. Unset decides on ARM:LE:32:Cortex: writable when base_address lies in SRAM
+    /// `false` keeps it r-x. ARM:LE:32:Cortex only. Unset decides: writable when base_address lies in SRAM
     /// (0x20000000-0x3fffffff), or when the region is decoded and discovered code stores into it; read-only
     /// otherwise. binary_info reports the verdict as `writable` and `writable_reason` on regions[0]. Not with
     /// `format: esp`, whose segments map by the chip's memory map.
@@ -172,10 +172,10 @@ pub struct RawRegionRequest {
     /// receipt (source range and hash, codec, parameters, output hash) with the region.
     #[serde(default)]
     pub decode: Option<RawRegionDecode>,
-    /// `code` only: `true` states that the program also stores into the region (code and its globals together in
-    /// RAM), so the decompiler maps it rwx and never folds reads of its globals; its literal pools still read as
-    /// constants. Default: the kind's (`ram` writable, `code` and `data` not). `true` on `data` and `false` on
-    /// `ram` are refused: use the other kind.
+    /// ARM:LE:32:Cortex `code` regions: `true` states that the program also stores into the region (code and its
+    /// globals together in RAM), so the decompiler maps it rwx and never folds reads of its globals; its literal pools
+    /// still read as constants. Default: the kind's (`ram` writable, `data` not, `code` writable when based in SRAM).
+    /// `true` on `data` and `false` on `ram` are refused: use the other kind.
     #[serde(default)]
     pub writable: Option<bool>,
 }

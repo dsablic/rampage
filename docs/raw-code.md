@@ -168,14 +168,16 @@ a global carries `WARNING: Read-only address (ram,0x…) is written`, and a read
 be folded into the value the image held (`return 3;` for a mode set at run time). On Cortex-M a primary region the
 program writes is therefore writable for the decompiler:
 
-- mapped in SRAM (`base_address` 0x20000000 to 0x3fffffff), it is writable by its address;
-- decoded (`decode`) anywhere else, it is writable once discovery finds code storing into at least two of its words;
-- `"writable": true` or `false` on the selector says so yourself, for any profile, such as for a plain dump of an
-  image that runs from RAM at a non-SRAM address. A further `code` region takes `"writable": true` the same way.
+- mapped in SRAM (0x20000000 to 0x3fffffff), it is writable by its address, as is a further `code` region or a
+  record run there;
+- decoded (`decode`) anywhere else, it is writable once discovery finds at least two functions storing into it
+  outside their bodies;
+- `"writable": true` or `false` on the selector says so yourself, such as for a plain dump of an image that runs
+  from RAM at a non-SRAM address. A further `code` region takes `"writable"` the same way. Other profiles refuse it.
 
 Its function bodies, literal pools and strings stay read-only, so calls, switches, strings and constants read as
 before; only its globals stop folding. Check
-the verdict in `binary_info`: `raw.regions[0].writable` and `writable_reason` (`ram_address`, `stores` or
+the verdict in `binary_info`: each region's `writable` and `writable_reason` (`ram_address`, `stores` or
 `stated`). An image that runs from flash stays read-only, so its constants keep folding. See
 [writable code regions](mcp.md#writable-code-regions).
 

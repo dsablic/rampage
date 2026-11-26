@@ -149,7 +149,7 @@ impl BaseEvidence {
         4 * self.function_pointers as u64
             + 2 * self.string_pointers as u64
             + 4 * self.reset_only_pointers as u64
-            + if (0x2000_0000..0x4000_0000).contains(&base) { literals / 2 } else { literals }
+            + if crate::raw::CORTEX_M_SRAM.contains(&base) { literals / 2 } else { literals }
             + if self.vector_table { 32 } else { 0 }
             + if self.hints.is_empty() { 0 } else { 16 }
     }

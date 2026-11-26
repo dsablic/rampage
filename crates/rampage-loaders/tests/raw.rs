@@ -529,25 +529,37 @@ fn pointer_tables_are_found_in_further_code_regions() {
     assert_eq!(binary.function_starts, [0x1000_0100, 0x1000_0104, 0x1000_0108]);
 }
 
-fn admit(base: u64, profile: RawProfile, writable: Option<bool>, regions: Vec<rampage_loaders::RawRegion>) -> Binary {
-    let options = RawCodeOptions { profile, ..cortex(base, None) };
-    let image = rampage_loaders::RawImage {
+fn image(
+    base: u64,
+    profile: RawProfile,
+    writable: Option<bool>,
+    regions: Vec<rampage_loaders::RawRegion>,
+) -> rampage_loaders::RawImage {
+    rampage_loaders::RawImage {
         bytes: vec![0; 0x100],
-        options,
+        options: RawCodeOptions { profile, ..cortex(base, None) },
         source: None,
         regions,
         records: None,
         esp: None,
         scatter_load: None,
         writable,
-    };
-    Binary::from_raw_image(image).unwrap()
+    }
 }
 
-fn region(kind: rampage_loaders::RawRegionKind, writable: Option<bool>) -> rampage_loaders::RawRegion {
+fn admit(base: u64, profile: RawProfile, writable: Option<bool>, regions: Vec<rampage_loaders::RawRegion>) -> Binary {
+    Binary::from_raw_image(image(base, profile, writable, regions)).unwrap()
+}
+
+fn refusal(image: rampage_loaders::RawImage) -> String {
+    let Err(error) = Binary::from_raw_image(image) else { panic!("the image must be refused") };
+    error.to_string()
+}
+
+fn region(kind: rampage_loaders::RawRegionKind, base: u64, writable: Option<bool>) -> rampage_loaders::RawRegion {
     rampage_loaders::RawRegion {
         kind,
-        base: 0x3000_0000,
+        base,
         size: 0x10,
         bytes: Some(vec![0; 0x10]),
         source: rampage_loaders::RawRegionSource::FileRange { offset: 0, length: 0x10 },
@@ -556,8 +568,8 @@ fn region(kind: rampage_loaders::RawRegionKind, writable: Option<bool>) -> rampa
 }
 
 /// A Cortex-M primary region in SRAM runs from RAM: writable for the decompiler, by its address. Flash stays
-/// read-only, other profiles never take the Cortex-M map, and a stated `writable` wins either way. Segment
-/// permissions stay the kind's, so native analysis keeps reading literal pools as constants.
+/// read-only, and a stated `writable` wins either way; other profiles refuse it. Segment permissions stay the
+/// kind's, so native analysis keeps reading literal pools as constants.
 #[test]
 fn a_cortex_m_primary_region_in_sram_is_writable_unless_stated_otherwise() {
     use rampage_loaders::RawWritableReason;
@@ -585,53 +597,58 @@ fn a_cortex_m_primary_region_in_sram_is_writable_unless_stated_otherwise() {
         primary(&admit(0x0800_0000, RawProfile::CortexM, Some(true), vec![])),
         (true, Some(RawWritableReason::Stated))
     );
-    // Any profile takes a stated verdict.
-    assert_eq!(
-        primary(&admit(0x2000_0000, RawProfile::Mips32Le, Some(true), vec![])),
-        (true, Some(RawWritableReason::Stated))
-    );
-    // The verdict is part of the interpretation.
+    // Only the Cortex-M decompiler keeps a writable region's pools read-only, so other profiles refuse the field.
+    for (writable, regions) in [
+        (Some(true), vec![]),
+        (Some(false), vec![]),
+        (None, vec![region(rampage_loaders::RawRegionKind::Code, 0x3000_0000, Some(true))]),
+    ] {
+        let message = refusal(image(0x2000_0000, RawProfile::Mips32Le, writable, regions));
+        assert!(message.contains("writable is defined only for ARM:LE:32:Cortex"), "{message}");
+    }
+    // The verdict, and whether it was stated, are part of the interpretation: a decoded region's unstated verdict
+    // is reached after admission, so `false` and unset must not share cached results.
     let identity = |binary: &Binary| binary.raw_interpretation_identity().unwrap().unwrap();
     let flash = identity(&admit(0x0800_0000, RawProfile::CortexM, None, vec![]));
     assert_eq!(flash.schema, "rampage-raw-interpretation-v7");
-    assert_eq!(flash, identity(&admit(0x0800_0000, RawProfile::CortexM, Some(false), vec![])));
+    assert_ne!(flash, identity(&admit(0x0800_0000, RawProfile::CortexM, Some(false), vec![])));
     assert_ne!(flash, identity(&admit(0x0800_0000, RawProfile::CortexM, Some(true), vec![])));
+    let sram = identity(&admit(0x2000_0000, RawProfile::CortexM, None, vec![]));
+    assert_ne!(sram, identity(&admit(0x2000_0000, RawProfile::CortexM, Some(true), vec![])));
 }
 
 /// Further regions take `writable` only where it describes the kind: code the program writes, or the kind's own
-/// default; `true` on constant data and `false` on RAM are refused.
+/// default; `true` on constant data and `false` on RAM are refused. Code mapped in SRAM is written by its address,
+/// as the primary region is.
 #[test]
 fn further_regions_state_writable_code_and_refuse_contradicting_kinds() {
     use rampage_loaders::{RawRegionKind, RawWritableReason};
-    let further = |kind, writable| {
-        let binary = admit(0x0800_0000, RawProfile::CortexM, None, vec![region(kind, writable)]);
+    let further = |kind, base, writable| {
+        let binary = admit(0x0800_0000, RawProfile::CortexM, None, vec![region(kind, base, writable)]);
         let region = binary.raw_code_image().unwrap().regions()[1].clone();
         (region.writable, region.writable_reason, binary.segments[1].perms)
     };
-    let (writable, reason, perms) = further(RawRegionKind::Code, Some(true));
+    let flash = 0x0900_0000;
+    let (writable, reason, perms) = further(RawRegionKind::Code, flash, Some(true));
     assert_eq!((writable, reason), (true, Some(RawWritableReason::Stated)));
     assert!(perms.execute && !perms.write);
-    assert!(!further(RawRegionKind::Code, None).0);
-    assert!(further(RawRegionKind::Ram, None).0);
-    assert!(further(RawRegionKind::Ram, Some(true)).0);
-    assert!(!further(RawRegionKind::Data, Some(false)).0);
-    for (kind, writable, message) in [
+    assert!(!further(RawRegionKind::Code, flash, None).0);
+    let (writable, reason, perms) = further(RawRegionKind::Code, 0x2000_0000, None);
+    assert_eq!((writable, reason), (true, Some(RawWritableReason::RamAddress)));
+    assert!(perms.execute && !perms.write);
+    let (writable, reason, _) = further(RawRegionKind::Code, 0x2000_0000, Some(false));
+    assert_eq!((writable, reason), (false, Some(RawWritableReason::Stated)));
+    // Data and RAM keep their kind's verdict wherever they are.
+    assert!(!further(RawRegionKind::Data, 0x2000_0000, None).0);
+    assert!(further(RawRegionKind::Ram, flash, None).0);
+    assert!(further(RawRegionKind::Ram, flash, Some(true)).0);
+    assert!(!further(RawRegionKind::Data, flash, Some(false)).0);
+    for (kind, writable, expected) in [
         (RawRegionKind::Data, true, "map bytes the program writes as a ram region"),
         (RawRegionKind::Ram, false, "map constant bytes as a data region"),
     ] {
-        let options = cortex(0x0800_0000, None);
-        let image = rampage_loaders::RawImage {
-            bytes: vec![0; 0x100],
-            options,
-            source: None,
-            regions: vec![region(kind, Some(writable))],
-            records: None,
-            esp: None,
-            scatter_load: None,
-            writable: None,
-        };
-        let Err(error) = Binary::from_raw_image(image) else { panic!("contradicting writable must be refused") };
-        let error = error.to_string();
-        assert!(error.contains(message), "{error}");
+        let regions = vec![region(kind, flash, Some(writable))];
+        let message = refusal(image(0x0800_0000, RawProfile::CortexM, None, regions));
+        assert!(message.contains(expected), "{message}");
     }
 }

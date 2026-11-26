@@ -89,6 +89,8 @@
     "firmware/raw-cortex-m-crc.elf": "d6c8133582e1b782267274d3732677f0f5b462feb9a37e33908d1fc616b3da55",
     "firmware/raw-cortex-m-decompile.elf": "04bfa306c5710dd2cd6ec7cc3ea1326e46733b9d26da36bfa0dfce4ca41d17ba",
     "firmware/raw-cortex-m-locks.elf": "ccb5b4ee8aa1f6d163e21d2a524e850e689cea7e8ae8714647500e2e5d489ac6",
+    "firmware/raw-cortex-m-ramapp-lo.elf": "d6a6318a17122e013b8927b22044dacde266fb158f0fb3d379470e50c42aa5a8",
+    "firmware/raw-cortex-m-ramapp.elf": "ccd384379b3b7cbf5ab8fff9454064eb92dff0aea52f1975eb7db9224f469eee",
     "firmware/raw-cortex-m-records.elf": "82cb91ea9e5e075976b0088e66f725ea4d37a1796ca1221594edbbdfe2ce6b31",
     "firmware/raw-cortex-m-scatter-gcc.elf": "b5a27df6797e7849079db72494ea1a3ba7d5beb50275c432237c271aeb399d98",
     "firmware/raw-cortex-m-scatter-table.elf": "5f2a4fbf7780b430db9bbbd6aa585b25bd3c55fd462ceb7fcdbc61a65bd1a24d",

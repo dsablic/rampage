@@ -161,6 +161,7 @@
     "raw.regions[].source.receipt.trailing_input_bytes",
     "raw.regions[].source.type",
     "raw.regions[].writable",
+    "raw.regions[].writable_reason",
     "raw.scatter_load",
     "raw.scatter_load.copies",
     "raw.scatter_load.copies[].call_site",

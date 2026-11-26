@@ -265,7 +265,7 @@ code) and, when it looks wrong, names the better base in next. \
 When Raw discovery is that sparse, list_functions (and binary_info \
 afterwards) return a one-line next naming the options still off (pointer_tables false, unmapped startup copies). \
 Cortex-M only: regions (up to 15) maps more of the same file beside the primary code region, each {kind: code|data|\
-ram, base_address, offset, length, decode?, from?}: e.g. a second stage at its RAM base \
+ram, base_address, offset, length, decode?, from?, writable?}: e.g. a second stage at its RAM base \
 {\"kind\":\"code\",\"base_address\":\"0x20000000\",\"offset\":\"0x400\",\"length\":128}; ram is writable (its bytes \
 are never folded as constants) and may omit offset for unbacked RAM/MMIO; decode {codec, lzss?, \
 expected_output_size, initial_write_offset?, dictionary_fill?, timeout_ms?} maps decode_file_range's in-memory \
@@ -277,10 +277,10 @@ calls and seeds cross regions; binary_info lists every region with its SHA-256 a
 receipt, slice, scatter_load copy, records). format ihex|srec reads Intel HEX or S-records instead (omit offset/length/base_address): each contiguous run is a code region, a regions entry \
 without offset matching a run exactly states its kind, and the start-address record becomes the entry, reported \
 with its verdict. \
-writable (top level for the primary region, or on a code region) says the program stores into that code: the \
-decompiler maps it rwx so globals in it are never folded (literal pools still are). Unset, a Cortex-M primary region \
-is writable when mapped in SRAM (0x20000000-0x3fffffff) or decoded with code storing into it; binary_info reports \
-writable and writable_reason per region.
+Cortex-M only: writable (top level for the primary region, or on a code region) says the program stores into that \
+code: the decompiler maps it rwx so globals in it are never folded (function bodies, literal pools and string \
+literals still are). Unset, code mapped in SRAM (0x20000000-0x3fffffff) is writable, and so is a decoded primary \
+region two or more functions store into; binary_info reports writable and writable_reason per region.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \

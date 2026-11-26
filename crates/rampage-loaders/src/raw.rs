@@ -334,8 +334,8 @@ pub struct RawRegion {
     pub bytes: Option<Vec<u8>>,
     pub source: RawRegionSource,
     /// The analyst's statement that the program writes the region (`true`) or does not (`false`); `None` takes the
-    /// kind's default (only `ram` is written). Only a `code` region may differ from its kind: a `data` region the
-    /// program writes is `ram`, and a `ram` region it does not write is `data`.
+    /// kind's default (only `ram` is written; Cortex-M code mapped in SRAM too). Only a `code` region may differ from
+    /// its kind: a `data` region the program writes is `ram`, and a `ram` region it does not write is `data`.
     pub writable: Option<bool>,
 }
 
@@ -365,7 +365,7 @@ pub struct RawImage {
     /// `None` does not follow.
     pub scatter_load: Option<bool>,
     /// The analyst's statement that the program writes the primary code region; `None` decides automatically
-    /// (Cortex-M: writable when mapped in SRAM, [`CORTEX_M_SRAM`]).
+    /// (writable when mapped in SRAM, [`CORTEX_M_SRAM`]). ARM:LE:32:Cortex only, as is a region's `writable`.
     pub writable: Option<bool>,
 }
 
@@ -384,10 +384,11 @@ pub struct RawRegionInfo {
     pub sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<RawRegionSource>,
-    /// Whether the program writes the region: `ram` always, `code` when stated or, for a Cortex-M primary region,
-    /// when it runs from RAM. The decompiler maps a writable code region `rwx`, so its globals are never folded to
-    /// the values the image holds; its literal pools still read as constants. Segment permissions, and with them
-    /// the native analysis, stay those of the kind.
+    /// Whether the program writes the region: `ram` always, Cortex-M `code` when stated or mapped in SRAM (and a
+    /// decoded primary region the code stores into, which binary_info reports after discovery). The decompiler maps
+    /// a writable code region `rwx`, so its globals are never folded to the values the image holds; its function
+    /// bodies, literal pools and strings stay read-only. Segment permissions, and with them the native analysis,
+    /// stay those of the kind.
     pub writable: bool,
     /// Why `writable` is what it is, when stated or found by a Cortex-M rule rather than taken from the kind.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -534,6 +535,23 @@ thread_local! {
     pub(crate) static IDENTITY_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Whether a region the opener mapped is written, and why when not by its kind: as stated, or for Cortex-M code
+/// mapped in SRAM, by its address (a stage that runs from RAM keeps its globals in its own bytes).
+fn code_writable(
+    profile: RawProfile,
+    kind: RawRegionKind,
+    base: u64,
+    stated: Option<bool>,
+) -> (bool, Option<RawWritableReason>) {
+    match stated {
+        Some(stated) => (stated, Some(RawWritableReason::Stated)),
+        None if kind == RawRegionKind::Code && profile.m_profile() && CORTEX_M_SRAM.contains(&base) => {
+            (true, Some(RawWritableReason::RamAddress))
+        }
+        None => (kind == RawRegionKind::Ram, None),
+    }
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     rampage_arch::hex::bytes(&Sha256::digest(bytes))
 }
@@ -573,14 +591,17 @@ impl RawCodeImage {
             return Err(LoadError::Malformed("Raw base violates profile instruction alignment".into()));
         }
         let end = checked_code_end(options.base, length, space.highest_byte)?;
-        // A Cortex-M image mapped in SRAM runs from RAM and writes its own globals.
-        let (writable, writable_reason) = match primary_writable {
-            Some(stated) => (stated, Some(RawWritableReason::Stated)),
-            None if options.profile.m_profile() && CORTEX_M_SRAM.contains(&options.base) => {
-                (true, Some(RawWritableReason::RamAddress))
-            }
-            None => (false, None),
-        };
+        // Only the Cortex-M decompiler keeps a writable code region's literal pools, bodies and strings read-only.
+        if !options.profile.m_profile()
+            && (primary_writable.is_some() || extra.iter().any(|region| region.writable.is_some()))
+        {
+            return Err(LoadError::Malformed(format!(
+                "Raw writable is defined only for ARM:LE:32:Cortex, not {}",
+                options.profile.language_id()
+            )));
+        }
+        let (writable, writable_reason) =
+            code_writable(options.profile, RawRegionKind::Code, options.base, primary_writable);
         let mut regions = vec![RawRegionInfo {
             name: "raw.code".into(),
             kind: RawRegionKind::Code,
@@ -655,6 +676,7 @@ impl RawCodeImage {
                     max / 1024
                 )));
             }
+            let (writable, writable_reason) = code_writable(options.profile, region.kind, region.base, region.writable);
             let info = RawRegionInfo {
                 name,
                 kind: region.kind,
@@ -662,8 +684,8 @@ impl RawCodeImage {
                 length: region.size,
                 sha256: region.bytes.as_deref().map(sha256_hex),
                 source: Some(region.source),
-                writable: region.writable.unwrap_or(region.kind == RawRegionKind::Ram),
-                writable_reason: region.writable.map(|_| RawWritableReason::Stated),
+                writable,
+                writable_reason,
                 data_offset: data.len() as u64,
             };
             data.extend_from_slice(backed);
@@ -985,8 +1007,10 @@ impl RawCodeImage {
         // Schema v5 binds every region: kind, mapping, where its bytes lie in `bytes`, and the stated source.
         hash.update((self.regions.len() as u64).to_be_bytes());
         for region in &self.regions {
-            // Schema v7 binds whether the program writes each region, which decides what the decompiler folds.
-            hash.update([region.kind as u8, u8::from(region.backed()), u8::from(region.writable)]);
+            // Schema v7 binds whether the program writes each region, which decides what the decompiler folds, and
+            // whether that was stated: an unstated verdict on decoded code is reached after admission (`stores`).
+            let stated = region.writable_reason == Some(RawWritableReason::Stated);
+            hash.update([region.kind as u8, u8::from(region.backed()), u8::from(region.writable), u8::from(stated)]);
             for value in [region.base_address, region.length, region.data_offset] {
                 hash.update(value.to_be_bytes());
             }

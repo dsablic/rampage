@@ -1090,24 +1090,31 @@ keeps its globals in the same bytes, and on a read-only mapping the decompiler r
 3` for a mode the program changes). So a code region can be writable: the decompiler maps it `rwx`, its globals stay
 reads and stores, and what the code does not write is made read-only again: the body of every discovered function
 (its instructions and the switch tables and pools between its blocks), the literal-pool words its code loads
-PC-relative, and the strings (up to 255 printable bytes and a NUL) a pool word or an `adr` points at. A body or
-string the code stores into through an address it forms, and a pool word such an address reaches, stay writable.
-So pools still fold into the constants, addresses and calls they hold, `tbb`/`tbh` switches are still recovered and
-text reads as string literals.
+PC-relative, and the string literals a pool word or an `adr` points at. A string literal is at least four printable
+bytes and a NUL (at most 256 bytes) followed within four bytes by the next string or alignment padding; an
+initialised char array (`char name[16] = "default"`) is followed by its own zero padding and stays writable. A word
+of a body or pool that the code reaches through an address it forms (field references included, so bases carried
+across blocks and loops count) stays writable, as does a string such an address stores to. So pools still fold into
+the constants, addresses and calls they hold, `tbb`/`tbh` switches are still recovered and text reads as string
+literals.
 
-`writable` on the selector states it for the primary region, and on a `regions` entry for that region: `true` on a
-`code` region, or the kind's own default. `true` on `data` and `false` on `ram` are refused (use the other kind), as
-is `writable` with `"format": "esp"`, whose segments map by the chip's memory map. With ihex/srec input, a `regions`
-entry that states a run's kind may state its `writable` too. Unset, a Cortex-M primary region is writable when:
+`writable` (Cortex-M only; other profiles refuse it) on the selector states it for the primary region, and on a
+`regions` entry for that region: `true` on a `code` region, or the kind's own default. `true` on `data` and `false`
+on `ram` are refused (use the other kind), as is `writable` with `"format": "esp"`, whose segments map by the chip's
+memory map. With ihex/srec input, a `regions` entry that states a run's kind may state its `writable` too. Unset, a
+Cortex-M code region is writable when:
 
-- its `base_address` lies in the architectural SRAM region, 0x20000000 to 0x3fffffff (`writable_reason`
-  `ram_address`); or
-- it holds decoded bytes (`decode`) and discovered code stores into at least two of its words through addresses
-  loaded from its literal pools (`stores`): a compressed image is decoded into the memory it runs from, wherever
-  the device maps that RAM. This verdict needs discovery, which a Cortex-M Raw project runs at open unless
-  `pointer_tables` is set, and `binary_info` shows it once discovery has run.
+- its base address lies in the architectural SRAM region, 0x20000000 to 0x3fffffff (`writable_reason`
+  `ram_address`): the primary region, a further `code` region or an Intel HEX or S-record run; or
+- it is the primary region, holds decoded bytes (`decode`), and at least two discovered functions store into it
+  outside every function body through addresses they form (`stores`): a compressed image is decoded into the memory
+  it runs from, wherever the device maps that RAM. One storing routine is not enough (it may program the image's own
+  flash). This verdict needs discovery, which a Cortex-M Raw project runs at open unless `pointer_tables` is set, and
+  `binary_info` shows it once discovery has run.
 
-Anything else stays read-only, as flash is, and other profiles and native images are unchanged. `binary_info` reports
+Anything else stays read-only, as flash is (scatter-load copies keep their own verdict), and other profiles and
+native images are unchanged. Whether `writable` was stated is part of the Raw interpretation, so `false` and unset
+never share cached results. `binary_info` reports
 `writable` on every `raw.regions` entry and, when stated or decided by a rule, `writable_reason` (`stated`,
 `ram_address` or `stores`). Segment and section permissions stay the kind's, so native analysis (references, string
 and constant search, discovery) keeps reading literal pools as constants.
@@ -1115,7 +1122,7 @@ and constant search, discovery) keeps reading literal pools as constants.
 ```json
 {
   "path": "tests/fixtures/firmware/raw-cortex-m-ramapp-lo.bin",
-  "raw": { "profile": "cortex-m0", "base_address": "0x1000000", "entry": "0x1000044", "writable": true }
+  "raw": { "profile": "cortex-m0", "base_address": "0x1000000", "entry": "0x1000100", "writable": true }
 }
 ```
 
