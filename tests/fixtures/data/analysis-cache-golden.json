@@ -95,6 +95,7 @@
     "firmware/raw-cortex-m-records.elf": "db4c8c1c727a7fe41fbd1874aea11223ef2d55dd2d0a31e7b489f90f872a80d8",
     "firmware/raw-cortex-m-scatter-gcc.elf": "dc1ee6d6d1623582568c10716c8abf59e339e5a28eed47c7d4946171db695325",
     "firmware/raw-cortex-m-scatter-table.elf": "50a0619ddeee10d61c18734113fa586c2210bee2e1698414675e364cf77d7e7f",
+    "firmware/raw-cortex-m-scatter-vtor.elf": "771a28dee2acf60cafcb14fb63ab25b2701db33ea44943130cb9cc6084f67521",
     "firmware/raw-cortex-m-stages-lzss.elf": "64ce22c1f9e1f1ef6a8144163a82a088166e8a4d04bb7707e82cbd580fd4b47f",
     "firmware/raw-cortex-m-stages.elf": "066c72910d0509b70c2cd28f9113962cc6aa5b42acb622d3f47ee859ad9d028f",
     "firmware/raw-cortex-m-strings.elf": "53bc211f2ac11fb9b563c3142a3718f3b9634b964db99b5eba6b3bdf0426d210",
