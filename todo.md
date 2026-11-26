@@ -490,7 +490,9 @@ from an agent run and a hand analysis of a private vendor image: a Cortex-M audi
 LZSS-compressed and runs from RAM. Acceptance is that image (local only, never committed or named) plus a public
 fixture for each item. Start with 0.1 and 0.2.
 
-- [ ] 0.1 **A decoded image that runs from RAM is mapped read-only** (likely correctness bug). The application
+- [x] (2026-11-26, `writable` regions for the decompiler: SRAM or decoded-and-stored; private image 53→0 warnings; open:
+      scatter-load copies keep their own verdict; native constant search and `evaluate_function` still read initial
+      bytes) 0.1 **A decoded image that runs from RAM is mapped read-only** (likely correctness bug). The application
       decodes to its load address in RAM and runs there, but the Raw project maps that primary region `r-x`. The
       decompiler warns "Read-only address is written" on every global store, and Ghidra may fold reads of these
       "read-only" globals into constants, so decompiled output can be silently wrong. Fix: map a decoded image
