@@ -399,7 +399,7 @@ struct WasmModuleArgs {
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ArchiveInventoryArgs {
-    /// Explicit standalone single-disk ZIP32 file; never a binary or member path.
+    /// Explicit standalone single-disk ZIP32 file or static (`ar`) library; never a binary or member path.
     path: std::path::PathBuf,
     /// Matching records to skip, not a native-image or byte offset.
     offset: Option<usize>,
@@ -878,7 +878,9 @@ pub fn file_tools() -> Vec<FileTool> {
             description: "List a standalone ZIP file's central directory (names, sizes, offsets) without opening any \
                 member: nothing is decompressed, extracted or verified. ZIP64, multi-disk and SFX archives are \
                 unsupported, and an archive past the size limits is refused whole. Filter with contains \
-                (case-sensitive), page with offset/limit. fs_list and fs_extract read ZIP/APK members.",
+                (case-sensitive), page with offset/limit. fs_list and fs_extract read ZIP/APK members. A static \
+                library (`ar`: .a, GNU or BSD) lists its members with the symbols its index gives each, and the \
+                path that opens one in any binary tool, `lib.a(member.o)`; contains also matches those symbols.",
             input_schema: schema::<ArchiveInventoryArgs>(),
             handler: |_, input| {
                 (|| -> Result<Value, String> {
@@ -887,8 +889,15 @@ pub fn file_tools() -> Vec<FileTool> {
                     }
                     let args: ArchiveInventoryArgs = arguments(input)?;
                     let query = crate::ArchiveQuery { offset: args.offset, limit: args.limit, contains: args.contains };
-                    let page = crate::archive_inventory(&args.path, &query).map_err(|error| error_chain(&error))?;
-                    let output = serde_json::to_value(page).map_err(|error| error.to_string())?;
+                    let output = if crate::is_static_archive(&args.path) {
+                        let page =
+                            crate::static_archive_inventory(&args.path, &query).map_err(|error| error_chain(&error))?;
+                        serde_json::to_value(page)
+                    } else {
+                        let page = crate::archive_inventory(&args.path, &query).map_err(|error| error_chain(&error))?;
+                        serde_json::to_value(page)
+                    }
+                    .map_err(|error| error.to_string())?;
                     if output.to_string().len() > crate::MAX_ARCHIVE_RESULT_BYTES {
                         return Err("archive result exceeds the JSON byte budget".to_owned());
                     }

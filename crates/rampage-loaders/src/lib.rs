@@ -1,3 +1,4 @@
+pub mod ar;
 pub mod arm_attributes;
 pub mod carve;
 pub mod container;

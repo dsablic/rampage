@@ -228,6 +228,12 @@ pub struct Summary<'a> {
     /// Where the image lies in the outer file, when it was opened at an offset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedded: Option<rampage_loaders::Embedded>,
+    /// The static archive member this image is (opened as `libfoo.a(member.o)`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive_member: Option<&'a rampage_loaders::ar::Member>,
+    /// A relocatable object's layout: where its sections start, its externs, and the relocations applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relocatable: Option<RelocatableSummary<'a>>,
     #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub entry: Option<u64>,
     pub segments: &'a [Segment],
@@ -257,6 +263,21 @@ pub struct Summary<'a> {
     /// their code: what to try next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+}
+
+/// How a relocatable object was laid out and relocated (see `rampage_loaders::relocatable`).
+#[derive(Debug, Serialize)]
+pub struct RelocatableSummary<'a> {
+    /// The address the first allocated section starts at; sections follow in file order, each aligned.
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub base: u64,
+    /// Undefined symbols, each given a slot in the `extern` segment.
+    pub externs: usize,
+    /// Relocations applied into the loaded bytes.
+    pub relocations_applied: usize,
+    /// Relocation types left unapplied, once per type: their fields hold the file's bytes.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub unsupported: &'a [rampage_loaders::relocatable::UnsupportedRelocation],
 }
 
 /// A page of [`FunctionRow`]s, with the code regions discovery did not explore because they are judged encrypted

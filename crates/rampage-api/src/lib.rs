@@ -122,7 +122,8 @@ pub use android_privacy::privacy_surface_input;
 pub use annotations::{DataTypeAnnotation, DerivedTypeHint, TypeHintAnnotation, TypeHintEvidence, TypeHintTarget};
 pub use archive::{
     ArchiveMember, ArchiveMemberRef, ArchivePage, ArchiveQuery, ArchiveRef, MAX_ARCHIVE_PAGE, MAX_ARCHIVE_RESULT_BYTES,
-    archive_inventory,
+    MAX_MEMBER_SYMBOLS, StaticArchivePage, StaticMemberRow, archive_inventory, is_static_archive,
+    static_archive_inventory,
 };
 pub use assembly::{AssemblyReport, AssemblyRequest};
 pub use batch::{

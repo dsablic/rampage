@@ -216,7 +216,7 @@ pub(crate) enum BinaryCommand {
     Carve(CarveArgs),
     /// Inventory binaries in a bundle or already-extracted package without executing it
     Inventory(DirectoryArgs),
-    /// Inventory standalone single-disk ZIP32 metadata, without opening, extracting or probing members
+    /// Inventory standalone single-disk ZIP32 metadata, or a static (ar) library's members and index symbols
     ArchiveInventory(ArchiveInventoryArgs),
     /// Inspect a PyInstaller CArchive (cookie, Python version, TOC entries), without extracting anything
     PyinstallerArchive(crate::args::PyInstallerArchiveArgs),

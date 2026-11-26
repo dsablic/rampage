@@ -645,6 +645,9 @@ pub fn archive_inventory(
     query: &rampage_api::ArchiveQuery,
     options: &Options,
 ) -> Result<()> {
+    if rampage_api::is_static_archive(path) {
+        return static_archive_inventory(out, path, query, options);
+    }
     let page = rampage_api::archive_inventory(path, query)?;
     if options.json {
         serde_json::to_writer(&mut *out, &page)?;
@@ -681,6 +684,50 @@ pub fn archive_inventory(
     for limitation in page.limitations {
         writeln!(out, "note: {limitation}")?;
     }
+    Ok(())
+}
+
+fn static_archive_inventory(
+    out: &mut impl Write,
+    path: &Path,
+    query: &rampage_api::ArchiveQuery,
+    options: &Options,
+) -> Result<()> {
+    let page = rampage_api::static_archive_inventory(path, query)?;
+    if options.json {
+        return write_json(out, &page);
+    }
+    writeln!(
+        out,
+        "{} static archive ({} ar format): {} members, {} index symbols; {} matched, {} returned",
+        path.display(),
+        page.kind,
+        page.members_total,
+        page.index_symbols,
+        page.matched,
+        page.returned
+    )?;
+    for row in &page.members {
+        let more = row.symbols_total.saturating_sub(row.symbols.len());
+        let more = if more > 0 { format!(" (+{more})") } else { String::new() };
+        writeln!(
+            out,
+            "#{:<4} {:>8} bytes  {}  [{}]  {}{more}",
+            row.member.index,
+            row.member.size,
+            row.open,
+            row.format,
+            row.symbols.join(" ")
+        )?;
+    }
+    if let Some(next) = page.next_offset {
+        writeln!(out, "more members; continue with --offset {next}")?;
+    }
+    writeln!(
+        out,
+        "open a member by passing its path, quoted: '{}'",
+        page.members.first().map_or("lib.a(member.o)", |row| row.open.as_str())
+    )?;
     Ok(())
 }
 
@@ -1254,6 +1301,16 @@ pub fn info(out: &mut impl Write, path: &Path, view: Option<crate::args::OutputV
     }
     if let Some(embedded) = summary.embedded {
         writeln!(out, "embedded  {} bytes at offset {:#x} of the outer file", embedded.size, embedded.offset)?;
+    }
+    if let Some(member) = summary.archive_member {
+        writeln!(out, "member    {} (#{} of the archive)", member.name, member.index)?;
+    }
+    if let Some(relocatable) = &summary.relocatable {
+        writeln!(
+            out,
+            "object    relocatable, laid out from {:#x}; {} externs, {} relocations applied",
+            relocatable.base, relocatable.externs, relocatable.relocations_applied
+        )?;
     }
     match summary.entry {
         Some(entry) => writeln!(out, "entry     {entry:#x}")?,

@@ -947,6 +947,13 @@ impl Project {
             arch: binary.arch,
             slices: &binary.slices,
             embedded: binary.embedded,
+            archive_member: binary.archive_member.as_ref(),
+            relocatable: binary.relocated().map(|relocated| crate::rows::RelocatableSummary {
+                base: rampage_loaders::relocatable::OBJECT_BASE,
+                externs: relocated.externs.len(),
+                relocations_applied: relocated.sites_total,
+                unsupported: &relocated.unsupported,
+            }),
             entry: binary.entry,
             segments: &binary.segments,
             sections: &binary.sections,

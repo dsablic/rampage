@@ -153,3 +153,121 @@ fn json_size(value: &impl Serialize) -> Result<usize, ApiError> {
         .map(|bytes| bytes.len())
         .map_err(|error| ApiError::Invalid(format!("archive result is not JSON-serializable: {error}")))
 }
+
+/// The most index symbols listed per member row; `symbols_total` counts them all.
+pub const MAX_MEMBER_SYMBOLS: usize = 16;
+
+/// One member of a static (`ar`) archive, with what its symbol index says it defines.
+#[derive(Debug, Serialize)]
+pub struct StaticMemberRow {
+    #[serde(flatten)]
+    pub member: rampage_loaders::ar::Member,
+    /// The path that opens this member in any binary tool: `archive(member)`.
+    pub open: String,
+    /// The member's format, kind and architecture (`elf relocatable x86_64`), or `not an object file`.
+    pub format: String,
+    /// Symbols the archive's index says the member defines (those matching `contains` first), at most 16.
+    pub symbols: Vec<String>,
+    pub symbols_total: usize,
+}
+
+/// A page of a static archive's members.
+#[derive(Debug, Serialize)]
+pub struct StaticArchivePage {
+    pub file_path: PathBuf,
+    /// Always `ar`.
+    pub format: &'static str,
+    /// `gnu`, `gnu64`, `bsd`, `bsd64`, `coff` or `unknown` (no symbol index or long names to tell).
+    pub kind: &'static str,
+    pub members_total: usize,
+    /// Entries in the archive's symbol index.
+    pub index_symbols: usize,
+    /// Members whose name, or a symbol the index gives them, contains `contains` (every member without it).
+    pub matched: usize,
+    pub returned: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub more: bool,
+    pub next_offset: Option<usize>,
+    pub members: Vec<StaticMemberRow>,
+    pub next: &'static str,
+}
+
+/// Whether the file at `path` is a static (`ar`) archive.
+pub fn is_static_archive(path: &Path) -> bool {
+    let mut magic = [0u8; 8];
+    std::fs::File::open(path).and_then(|mut file| std::io::Read::read_exact(&mut file, &mut magic)).is_ok()
+        && rampage_loaders::ar::is_archive(&magic)
+}
+
+/// A static archive's members, paged, each with the path that opens it and the symbols its index lists.
+pub fn static_archive_inventory(path: &Path, query: &ArchiveQuery) -> Result<StaticArchivePage, ApiError> {
+    let limit = query.limit.unwrap_or(MAX_ARCHIVE_PAGE);
+    if !(1..=MAX_ARCHIVE_PAGE).contains(&limit) {
+        return Err(ApiError::Invalid("archive limit must be in 1..=100".to_owned()));
+    }
+    let load = |source| ApiError::Load { path: path.to_owned(), source };
+    let data = rampage_loaders::ar::map(path).map_err(load)?;
+    let archive = rampage_loaders::ar::read(&data).map_err(load)?;
+    let mut defined: Vec<Vec<&str>> = vec![Vec::new(); archive.members.len()];
+    for (name, member) in &archive.symbols {
+        defined[*member].push(name);
+    }
+    let needle = query.contains.as_deref();
+    let matching = |member: &rampage_loaders::ar::Member| match needle {
+        None => true,
+        Some(needle) => {
+            member.name.contains(needle) || defined[member.index].iter().any(|symbol| symbol.contains(needle))
+        }
+    };
+    let matched: Vec<&rampage_loaders::ar::Member> = archive.members.iter().filter(|member| matching(member)).collect();
+    let offset = query.offset.unwrap_or(0);
+    let display = path.to_string_lossy();
+    let mut page = StaticArchivePage {
+        file_path: path.to_owned(),
+        format: "ar",
+        kind: archive.kind,
+        members_total: archive.members.len(),
+        index_symbols: archive.symbols.len(),
+        matched: matched.len(),
+        returned: 0,
+        offset,
+        limit,
+        more: true,
+        next_offset: Some(usize::MAX),
+        members: Vec::new(),
+        next: "Pass a row's `open` as the path of any binary tool (binary_info, list_functions, decompile, ...) to \
+               analyze that member; `name#N` picks member N where names repeat.",
+    };
+    let mut used = json_size(&page)?;
+    for member in matched.iter().skip(offset).take(limit) {
+        let start = usize::try_from(member.offset).unwrap_or(usize::MAX);
+        let end = start.saturating_add(usize::try_from(member.size).unwrap_or(usize::MAX));
+        let format = data.get(start..end).map_or_else(|| "truncated".to_owned(), rampage_loaders::ar::member_format);
+        let mut symbols = defined[member.index].clone();
+        if let Some(needle) = needle {
+            symbols.sort_by_key(|symbol| !symbol.contains(needle));
+        }
+        let row = StaticMemberRow {
+            open: format!("{display}({})", member.selector()),
+            format,
+            symbols_total: symbols.len(),
+            symbols: symbols.into_iter().take(MAX_MEMBER_SYMBOLS).map(str::to_owned).collect(),
+            member: (*member).clone(),
+        };
+        let bytes = json_size(&row)? + 1;
+        if used + bytes > MAX_ARCHIVE_RESULT_BYTES {
+            break;
+        }
+        used += bytes;
+        page.members.push(row);
+    }
+    page.returned = page.members.len();
+    let consumed = offset.saturating_add(page.returned);
+    page.more = consumed < page.matched;
+    page.next_offset = page.more.then_some(consumed);
+    if page.more && page.returned == 0 {
+        return Err(ApiError::Invalid("archive receipt cannot fit one member record".to_owned()));
+    }
+    Ok(page)
+}

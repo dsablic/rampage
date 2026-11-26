@@ -171,7 +171,8 @@ pub(crate) struct ArchiveInventoryArgs {
     /// Records per page (1..=100), additionally bounded to 60000 JSON bytes
     #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..=100))]
     pub(crate) limit: u64,
-    /// Case-sensitive UTF-8 byte substring of the full raw member name, before display truncation
+    /// Case-sensitive UTF-8 byte substring of the full raw member name, before display truncation (for a static
+    /// library, also of a symbol its index gives the member)
     #[arg(long)]
     pub(crate) contains: Option<String>,
 }

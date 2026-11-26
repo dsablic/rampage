@@ -35,6 +35,10 @@ pub struct XrefRow {
     /// literal-pool or MOVW/MOVT base): where the base came from. Absent on direct references.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<BaseEvidence>,
+    /// In a relocatable object, the relocation applied in the referencing instruction (or data word): its type,
+    /// symbol and addend, as the object file records them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relocation: Option<rampage_loaders::relocatable::RelocationSite>,
 }
 
 /// How a load or store reached its target through a base register.
@@ -162,6 +166,7 @@ impl Project {
         selected.dedup_by_key(|(xref, _)| *xref);
         let page = Page::of(selected, offset, limit);
         let mut rows = Vec::with_capacity(page.items.len());
+        let mut decoder = self.binary.relocated().and_then(|_| self.binary.decoder().ok());
         for (xref, send) in &page.items {
             let field = analysis
                 .program
@@ -182,9 +187,26 @@ impl Project {
                     None
                 },
                 base: field.map(BaseEvidence::of),
+                relocation: self.relocation_at(xref.from, &mut decoder),
             });
         }
         Ok(Page { total: page.total, offset: page.offset, items: rows })
+    }
+
+    /// The relocation applied in the instruction at `from` (or, outside code, the pointer-sized word there), in a
+    /// relocatable object.
+    fn relocation_at(
+        &self,
+        from: u64,
+        decoder: &mut Option<Box<dyn rampage_arch::Disassembler>>,
+    ) -> Option<rampage_loaders::relocatable::RelocationSite> {
+        let relocated = self.binary.relocated()?;
+        let width = u64::from(self.binary.arch.default_pointer_size().unwrap_or(4));
+        let length = match (self.binary.code_from(from), decoder.as_mut()) {
+            (Some(bytes), Some(decoder)) => u64::from(decoder.decode(bytes, from).len.max(1)),
+            _ => width,
+        };
+        relocated.sites_in(from..from.saturating_add(length)).first().cloned()
     }
 
     /// Why `xrefs` to `address` found nothing, and where to look instead: the start of the string `address` lies

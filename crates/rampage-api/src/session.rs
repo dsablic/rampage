@@ -380,6 +380,19 @@ impl Session {
         checked: bool,
         admission: Option<SourceAdmission<'_>>,
     ) -> Result<Arc<Project>, ApiError> {
+        // A static archive's member (`libfoo.a(member.o)`) is the image at the member's location in the archive, so
+        // it is cached, identified and annotated as that embedded image.
+        let load = |source| ApiError::Load { path: path.to_owned(), source };
+        let (archive, image) = match rampage_loaders::ar::resolve(path).map_err(load)? {
+            None => (path.to_owned(), image),
+            Some(_) if image.is_some_and(|image| !image.is_whole_file()) => {
+                return Err(ApiError::Invalid(
+                    "a path naming an archive member selects the image itself; give no image offset with it".to_owned(),
+                ));
+            }
+            Some((archive, member, _)) => (archive, Some(member)),
+        };
+        let path = archive.as_path();
         let image = image.filter(|image| !image.is_whole_file());
         let held_source = checked.then(|| crate::project_workspace::open_source(path)).transpose()?;
         let executable = if checked {

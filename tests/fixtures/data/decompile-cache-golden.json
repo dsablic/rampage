@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "digests": {
     "macos": {
       "bin/eval-types-x86_64.elf@0x1001830": "34fd643cb4941d0e06534d10d3d867bdd3d2a86004d07882bc7bca57d4bdc0d0",

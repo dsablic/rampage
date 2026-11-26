@@ -37,10 +37,10 @@ pub struct RelocationSite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     pub addend: i64,
-    /// The address the relocation resolves to: the symbol's address plus the addend, or the GOT entry for a GOT
-    /// reference.
+    /// `S + A`, the symbol's address plus the addend (so `printf - 4` for an x86 call's PC-relative field), or the
+    /// GOT entry's address for a reference through the GOT.
     #[serde(serialize_with = "rampage_arch::hex::address")]
-    pub target: u64,
+    pub value: u64,
 }
 
 /// A relocation type the loader does not apply, reported once per type with how many sites use it.
@@ -70,6 +70,8 @@ pub struct Relocated {
     /// The loaded image: the file's bytes with every applied relocation written in, followed by the synthetic GOT.
     pub(crate) bytes: Vec<u8>,
     pub(crate) segments: Vec<Segment>,
+    /// Where the segments the layout adds (common symbols, externs, the GOT) start in `segments`.
+    synthetic: usize,
     /// Each section's address by section index; `None` for one that is not allocated.
     section_addresses: Vec<Option<u64>>,
     pub externs: Vec<Extern>,
@@ -122,23 +124,20 @@ impl Relocated {
     /// The segments the layout adds beyond the file's sections (`COMMON`, `extern`, `.got`), as sections, so an
     /// address in one names it and the GOT is found by name as a linked image's is.
     pub(crate) fn synthetic_sections(&self) -> impl Iterator<Item = crate::model::Section> + '_ {
-        self.segments.iter().filter_map(|segment| {
+        self.segments[self.synthetic..].iter().map(|segment| {
             let kind = match segment.name.as_str() {
-                "COMMON" if segment.file_size == 0 => crate::model::SectionKind::UninitializedData,
-                ".got" if self.got.as_ref().is_some_and(|(address, _)| *address == segment.address) => {
-                    crate::model::SectionKind::Data
-                }
-                "extern" if segment.file_size == 0 => crate::model::SectionKind::Other,
-                _ => return None,
+                ".got" => crate::model::SectionKind::Data,
+                "extern" => crate::model::SectionKind::Other,
+                _ => crate::model::SectionKind::UninitializedData,
             };
-            Some(crate::model::Section {
+            crate::model::Section {
                 name: segment.name.clone(),
                 address: segment.address,
                 size: segment.size,
                 kind,
                 file_offset: None,
                 file_size: 0,
-            })
+            }
         })
     }
 
@@ -326,7 +325,8 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         }
     }
 
-    // Common symbols, then externs.
+    // Common symbols, then externs, then the GOT: the segments the layout adds, after the file's own.
+    let synthetic = segments.len();
     let mut commons = HashMap::new();
     let common: Vec<&object::Symbol> =
         symbols.iter().filter(|symbol| symbol.section() == SymbolSection::Common).collect();
@@ -339,8 +339,10 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
             end = address.saturating_add(symbol.size().max(1));
             commons.insert(symbol.index().0, address);
         }
+        // LLVM may emit an empty `COMMON` section of its own; the synthetic one then takes another name.
+        let taken = parsed.sections().any(|section| section.name() == Ok("COMMON"));
         segments.push(Segment {
-            name: "COMMON".to_owned(),
+            name: if taken { ".common" } else { "COMMON" }.to_owned(),
             address: start,
             size: end - start,
             file_offset: 0,
@@ -547,7 +549,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
                         kind: machine.type_name(r_type),
                         symbol,
                         addend,
-                        target,
+                        value: target,
                     });
                 }
             }
@@ -571,7 +573,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         .collect();
     for item in &unsupported {
         warnings.push(format!(
-            "relocation type {} is not applied ({} site{}, first at {:#x}): those fields hold the file's bytes",
+            "{} relocations are not applied ({} site{}, first at {:#x}): those fields hold the file's bytes",
             item.kind,
             item.count,
             if item.count == 1 { "" } else { "s" },
@@ -587,6 +589,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
     Some(Relocated {
         bytes,
         segments,
+        synthetic,
         section_addresses,
         externs,
         commons,

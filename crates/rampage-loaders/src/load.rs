@@ -172,6 +172,9 @@ pub struct Binary {
     /// A relocatable object's layout: the loaded bytes [`Binary::read`] serves, with relocations applied.
     #[serde(skip)]
     relocated: Option<Box<crate::relocatable::Relocated>>,
+    /// The archive member this image is, when it was opened from a static archive (see [`crate::ar`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive_member: Option<crate::ar::Member>,
 }
 
 #[derive(Debug)]
@@ -341,6 +344,7 @@ impl Binary {
             raw: Some(raw),
             image: 0..len,
             relocated: None,
+            archive_member: None,
         };
         // An ESP image states its chip; other Raw Xtensa code is judged by its prologues.
         if arch == Arch::Xtensa && binary.raw.as_ref().is_some_and(|raw| raw.esp().is_none()) {
@@ -622,6 +626,7 @@ impl Binary {
             mips16_ranges: Vec::new(),
             raw: None,
             relocated: None,
+            archive_member: None,
         })
     }
 
@@ -642,6 +647,9 @@ impl Binary {
 
     /// Opens a binary, requiring the given architecture when one is requested.
     pub fn open_with(path: impl AsRef<Path>, wanted: Option<Arch>) -> Result<Self, LoadError> {
+        if let (archive, Some(image)) = member_image(path.as_ref(), None)? {
+            return Self::open_at_with(archive, image.offset, image.length, wanted);
+        }
         let data = map_executable(path.as_ref())?;
         Self::open_mapped(data, wanted)
     }
@@ -669,6 +677,10 @@ impl Binary {
         let (slices, image) = match kind {
             object::FileKind::MachOFat32 => select_universal::<FatArch32>(&data, wanted)?,
             object::FileKind::MachOFat64 => select_universal::<FatArch64>(&data, wanted)?,
+            object::FileKind::Archive => {
+                let archive = crate::ar::read(&data)?;
+                return Err(crate::ar::whole_archive_error(Some(&data.path), &archive));
+            }
             _ => (Vec::new(), 0..data.len()),
         };
         Self::load_recovery(data, image, slices, wanted, recover)
@@ -689,6 +701,7 @@ impl Binary {
     /// that [is the whole file](ImageAt::is_whole_file) opens it as [`Binary::open_with`] does, so that one image
     /// has one identity.
     pub fn open_image(path: impl AsRef<Path>, image: Option<ImageAt>, wanted: Option<Arch>) -> Result<Self, LoadError> {
+        let (path, image) = member_image(path.as_ref(), image)?;
         match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_at_with(path, image.offset, image.length, wanted),
             None => Self::open_with(path, wanted),
@@ -702,7 +715,8 @@ impl Binary {
         image: Option<ImageAt>,
         wanted: Option<Arch>,
     ) -> Result<Self, LoadError> {
-        let data = map_executable(path.as_ref())?;
+        let (path, image) = member_image(path.as_ref(), image)?;
+        let data = map_executable(&path)?;
         match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_mapped_at_recovery(data, image.offset, image.length, wanted, false),
             None => Self::open_mapped_recovery(data, wanted, false),
@@ -734,7 +748,8 @@ impl Binary {
         max_source_bytes: usize,
         admit: impl FnOnce(&[u8]) -> Result<(), LoadError>,
     ) -> Result<Self, LoadError> {
-        let data = map_executable_checked(path.as_ref(), max_source_bytes.min(128 * 1024 * 1024))?;
+        let (path, image) = member_image(path.as_ref(), image)?;
+        let data = map_executable_checked(&path, max_source_bytes.min(128 * 1024 * 1024))?;
         consume_admitted_source(data, admit, |data| match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_mapped_at(data, image.offset, image.length, wanted),
             None => {
@@ -760,7 +775,8 @@ impl Binary {
     /// Enumerates supported universal-header architectures without requiring any individual slice to load.
     /// Thin images and snapshots use ordinary loading. Ambiguous duplicate architectures are rejected.
     pub fn architecture_slices(path: impl AsRef<Path>, image: Option<ImageAt>) -> Result<Vec<Arch>, LoadError> {
-        let path = path.as_ref();
+        let (path, image) = member_image(path.as_ref(), image)?;
+        let path = path.as_path();
         let data = map_executable(path)?;
         let view = match image.filter(|image| !image.is_whole_file()) {
             Some(image) => {
@@ -878,8 +894,12 @@ impl Binary {
             }
             _ => (Vec::new(), image),
         };
+        // An image at a member's offset in a static archive is that member.
+        let member =
+            crate::ar::is_archive(&data).then(|| crate::ar::read(&data).ok()?.member_at(offset).cloned()).flatten();
         let mut binary = Self::load_recovery(data, image, slices, wanted, recover)?;
         binary.embedded = Some(Embedded { offset, size, file_size, trailing: available - size });
+        binary.archive_member = member;
         Ok(binary)
     }
 
@@ -992,7 +1012,8 @@ impl Binary {
         let mut symbols: Vec<Symbol> = parsed
             .symbols()
             .chain(parsed.dynamic_symbols())
-            .filter(|symbol| symbol.is_definition())
+            // A relocatable object's common symbols are definitions too, placed in its `COMMON` segment.
+            .filter(|symbol| symbol.is_definition() || (relocated.is_some() && symbol.is_common()))
             .filter_map(|symbol| {
                 let name = symbol.name().ok().filter(|name| !name.is_empty())?;
                 if matches!(arch, Arch::Arm | Arch::Aarch64) && arm_mapping_symbol(name).is_some() {
@@ -1261,6 +1282,7 @@ impl Binary {
             raw: None,
             image,
             relocated,
+            archive_member: None,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
         if arch == Arch::Xtensa && xtensa_abi_note.is_none() {
@@ -1704,6 +1726,18 @@ fn go_pointer_size(width: Option<u8>) -> Result<u8, &'static str> {
 }
 
 /// Maps the file at `path`, or the executable inside the bundle directory it names.
+/// `path` and `image`, or for a path naming a static archive's member (`libfoo.a(member.o)`), the archive and the
+/// member's location in it. A member path given with an image location as well is refused.
+fn member_image(path: &Path, image: Option<ImageAt>) -> Result<(PathBuf, Option<ImageAt>), LoadError> {
+    match crate::ar::resolve(path)? {
+        None => Ok((path.to_owned(), image)),
+        Some(_) if image.is_some() => Err(LoadError::Location(
+            "a path naming an archive member selects the image itself; give no image offset with it".to_owned(),
+        )),
+        Some((archive, member, _)) => Ok((archive, Some(member))),
+    }
+}
+
 fn map_executable(path: &Path) -> Result<MappedSource, LoadError> {
     let resolved = crate::container::resolve_executable(path)?;
     let path = resolved.as_path();

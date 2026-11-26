@@ -824,6 +824,8 @@ fn validate_native_shape(value: &Value, kind: ToolViewKind) -> Result<(), ApiErr
                 &[
                     ("entry", String),
                     ("embedded", Object),
+                    ("archive_member", Object),
+                    ("relocatable", Object),
                     ("provenance", String),
                     ("snapshot_modules", Array),
                     ("snapshot_registers", Array),
@@ -1586,6 +1588,7 @@ mod tests {
                 objc: None,
                 access: None,
                 base: None,
+                relocation: None,
             })
             .collect();
         let mut summary: Value = native_function_summary();
@@ -1834,6 +1837,8 @@ mod tests {
             arch: Arch::Aarch64,
             slices: &[Arch::Aarch64],
             embedded: Some(rampage_loaders::Embedded { offset: 64, size: 128, file_size: 256, trailing: 64 }),
+            archive_member: None,
+            relocatable: None,
             entry: Some(0x1000),
             segments: &segments,
             sections: &sections,

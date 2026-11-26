@@ -69,7 +69,10 @@ impl Machine {
     }
 
     pub fn type_name(self, r_type: object::elf::RelocationType) -> String {
-        object::elf::machine_names(self.em()).r.name(r_type).map_or_else(|| format!("type {}", r_type.0), str::to_owned)
+        object::elf::machine_names(self.em())
+            .r
+            .name(r_type)
+            .map_or_else(|| format!("{self:?} type {}", r_type.0), str::to_owned)
     }
 
     pub fn is_mips(self) -> bool {
@@ -596,6 +599,8 @@ fn mips(image: &mut Image, reloc: &Reloc, state: &mut State) -> Applied {
         1 => data(image, reloc, 2, false),
         2 | 3 => data(image, reloc, 4, false),
         18 => data(image, reloc, 8, false),
+        // R_MIPS_PC32 (exception tables): S + A - P.
+        248 => data(image, reloc, 4, true),
         // R_MIPS_26: `j`/`jal` within the 256 MiB region of the delay slot.
         4 => {
             let insn = get(image, p, 4)?;

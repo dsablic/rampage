@@ -20,6 +20,7 @@ mod load;
 mod m_profile;
 mod msvc_cpp;
 mod objc;
+mod objects;
 mod pdb;
 mod pdb_types;
 mod raw;

@@ -146,7 +146,7 @@ fn group_summary(group: Group) -> &'static str {
         Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
         Group::Android => "APK/DEX: dex_metadata, dex_code.",
         Group::Carve => {
-            "files inside files: carve (embedded files), archive_inventory (ZIP), fs_list/fs_extract \
+            "files inside files: carve (embedded files), archive_inventory (ZIP, ar libraries), fs_list/fs_extract \
              (filesystems), privacy_surface."
         }
         Group::Formats => {
@@ -224,6 +224,9 @@ architecture/mode/orders/base, without native-image admission or target followin
 native bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
 Given a folder, list_dir lists it (kind, size and sniffed format per entry). \
+An object file (.o) is laid out from 0x10000 with relocations applied and its undefined symbols in an extern \
+segment; a static library member opens as path `lib.a(member.o)` (`member.o#N` where names repeat); \
+archive_inventory lists the members. \
 file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware; \
 its compressed_component_candidate hints give a payload range and decoded-size words for probe_compression, whose \
 ranked decode_arguments go to decode_file_range unchanged; both return open_as_raw, which with a profile and \
