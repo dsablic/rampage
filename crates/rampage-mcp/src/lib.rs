@@ -136,7 +136,7 @@ fn group_summary(group: Group) -> &'static str {
             "struct layouts by name, member path or offset: get_type and list_types read DWARF, PDB and Go runtime \
              types (stripped Go too), so never decode type descriptors by hand; declare_types, set_signature, \
              set_types, edit_variable and function_frame (locals), apply_data_type, import_debug_types, \
-             import_pdb_names; firmware: import_svd (CMSIS-SVD register names) and peripheral_access."
+             import_pdb_names; firmware: import_svd (CMSIS-SVD register names), peripheral_access and peripheral_map (no SVD)."
         }
         Group::Runtime => {
             "memory snapshots: observe_pointer, compare_runtime_bytes, observe_indirect_branch; query_debugger \
@@ -498,7 +498,7 @@ const GROUP_ALIASES: [(&str, Group); 8] = [
 /// Where the firmware tools are, for a guessed `firmware` group: no one group holds them.
 const FIRMWARE_GROUPS: &str = "No single group holds the firmware tools: headerless images, Intel HEX and \
     S-records open in core (`raw` on any raw-capable tool), CMSIS-SVD peripheral maps (import_svd, \
-    peripheral_access) are in types, integrity_checks and export_image in formats, and carve, fs_list and \
+    peripheral_access, peripheral_map) are in types, integrity_checks and export_image in formats, and carve, fs_list and \
     diff_firmware in carve";
 
 /// Parses the operator's debug endpoints: each `--debug-endpoint` value, then the comma-separated `env` list.

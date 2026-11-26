@@ -2661,6 +2661,89 @@ pub fn identify(
     Ok(())
 }
 
+pub(crate) fn peripheral_map(
+    out: &mut impl Write,
+    args: &crate::args::PeripheralMapArgs,
+    options: &Options,
+) -> Result<()> {
+    let project = open(&args.file, options)?;
+    let address = |text: &Option<String>| text.as_deref().map(|text| project.resolve(text)).transpose();
+    let query = rampage_api::PeripheralMapQuery {
+        function: address(&args.function)?.map(|at| project.thumb_code_address(at).0),
+        start: address(&args.start)?,
+        end: address(&args.end)?,
+        by_function: args.by_function,
+        offset: args.offset,
+        limit: usize::try_from(args.limit).unwrap_or(usize::MAX),
+    };
+    let map = project.map_peripherals(&query)?;
+    if options.json {
+        return write_json(out, &map);
+    }
+    let counts = &map.counts;
+    writeln!(
+        out,
+        "{} accesses ({} reads, {} writes) in {} peripheral blocks from {} functions; rows {}-{} of {}",
+        counts.accesses,
+        counts.reads,
+        counts.writes,
+        counts.blocks,
+        counts.functions,
+        map.offset + usize::from(map.total > 0),
+        map.offset + map.blocks.len() + map.functions.len(),
+        map.total
+    )?;
+    for block in &map.blocks {
+        writeln!(
+            out,
+            "{:#010x} {} [{}]  {} reads, {} writes, {} functions: {}",
+            block.base,
+            block.name,
+            block.source,
+            block.reads,
+            block.writes,
+            block.functions,
+            block.accessed_by.join(", ")
+        )?;
+        for register in &block.registers {
+            let name = register.name.as_deref().map(|name| format!(" {name}")).unwrap_or_default();
+            let width = if register.width > 0 { format!(" {}B", register.width) } else { String::new() };
+            let more =
+                if register.more_functions > 0 { format!(" +{}", register.more_functions) } else { String::new() };
+            writeln!(
+                out,
+                "  +{:#x}{name} {}{width}  {}",
+                register.offset,
+                register.access,
+                register.functions.join(", ") + &more
+            )?;
+        }
+        if block.more_registers > 0 {
+            writeln!(out, "  ... {} more registers", block.more_registers)?;
+        }
+    }
+    for function in &map.functions {
+        writeln!(
+            out,
+            "{:#010x} {}  {} reads, {} writes",
+            function.address, function.function, function.reads, function.writes
+        )?;
+        for block in &function.blocks {
+            writeln!(out, "  {:#010x} {}: {}", block.base, block.name, block.offsets.join(", "))?;
+        }
+        if function.more_blocks > 0 {
+            writeln!(out, "  ... {} more blocks", function.more_blocks)?;
+        }
+    }
+    for note in &map.notes {
+        writeln!(out, "note: {note}")?;
+    }
+    if let Some(next) = &map.next {
+        writeln!(out, "next: {next}")?;
+    }
+    Ok(())
+}
+
 pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
     let capabilities = open(path, options)?.capabilities();
     render_capabilities(out, &capabilities, "no capabilities detected", options)

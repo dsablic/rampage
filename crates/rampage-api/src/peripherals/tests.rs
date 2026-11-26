@@ -198,12 +198,12 @@ fn conditionally_written_values_are_unknown() {
         op("COPY", Some(node(register, 4)), vec![node(constant, 0x4001_0100)]),
         op("COPY", Some(node(register, 0)), vec![node(constant, 0x4001_0200)]),
     ];
-    evaluator.step(&ops, &mut values, |_, _| {});
+    evaluator.step(&ops, &mut values, |_, _, _| {});
     assert_eq!(values.get(&(register, 0, 4)), None);
     assert_eq!(values.get(&(register, 4, 4)), None);
     // Without the branch both are known.
     let mut values = Values::new();
-    evaluator.step(&[ops[0].clone(), ops[2].clone()], &mut values, |_, _| {});
+    evaluator.step(&[ops[0].clone(), ops[2].clone()], &mut values, |_, _, _| {});
     assert_eq!(values.get(&(register, 0, 4)), Some(&0x4001_0000));
     assert_eq!(values.get(&(register, 4, 4)), Some(&0x4001_0100));
 }

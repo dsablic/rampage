@@ -39,6 +39,7 @@ pub(crate) const MCP_ROUTES: &[McpRoute] = &[
     route("pe_load_config", &["binary", "pe-load-config"]),
     route("detect_tools", &["binary", "detect"]),
     route("capabilities", &["binary", "capabilities"]),
+    route("peripheral_map", &["binary", "peripheral-map"]),
     route("build_info", &["binary", "build-info"]),
     route("analysis_diagnostics", &["binary", "audit"]),
     route("carve", &["binary", "carve"]),

@@ -66,6 +66,9 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   disassembly, xrefs and evaluation faults say `TIMER0.CR`, and `peripheral_access` lists the functions that read
   or write each register. Limits: accesses are found only through constants a function forms itself; bit fields
   are comments, not C bit-fields.
+- [A peripheral map without an SVD](raw-code.md#which-code-drives-which-peripheral) (`peripheral_map`): the
+  device-space blocks firmware's loads and stores reach, with offsets, read/write, widths and functions, Cortex-M
+  core blocks named, per block or per function.
 - [Firmware patching round trip](firmware-patching.md) (`integrity_checks`, `export_image`): finds the CRC,
   checksum and digest fields protecting an image and the ranges they cover (bounded brute force, CRC code and
   emulation of the image's own routine), reports which no longer hold after patches, writes corrected values as

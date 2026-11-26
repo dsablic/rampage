@@ -743,5 +743,7 @@ async fn contract_mcp_types_results() {
     exercise(c, o, "peripheral_access", json!({"path": firmware, "raw": raw})).await;
     let registers = json!({"path": firmware, "raw": raw, "peripheral": "TIMER0", "limit": 3});
     exercise(c, o, "peripheral_access", registers).await;
+    exercise(c, o, "peripheral_map", json!({"path": firmware, "raw": raw, "limit": 1})).await;
+    exercise(c, o, "peripheral_map", json!({"path": firmware, "raw": raw, "by_function": true, "limit": 1})).await;
     check_group(client, "types", &observed, &[]).await;
 }

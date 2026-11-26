@@ -2,7 +2,7 @@
 //! timers of tests/fixtures/svd/ARM_Example.svd through raw MMIO addresses (movw/movt), and
 //! raw-cortex-m-decompile.c reaches tests/fixtures/svd/edge-cases.svd's CTRL block through literal pools.
 
-use rampage_api::{ImportSvdRequest, PeripheralAccessQuery, Project, XrefQuery};
+use rampage_api::{ImportSvdRequest, PeripheralAccessQuery, PeripheralMapQuery, Project, XrefQuery};
 use rampage_loaders::{Binary, RawCodeOptions, RawProfile};
 
 const FIRMWARE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/");
@@ -190,4 +190,143 @@ fn a_name_shared_by_a_symbol_and_a_peripheral_is_ambiguous() {
         assert!(error.to_string().contains("ambiguous"), "{error}");
     }
     assert_eq!(project.resolve("TIMER0").unwrap(), 0x4001_0000);
+}
+
+// peripheral_map: tests/fixtures/firmware/raw-cortex-m-peripherals.c reaches an audio-like block, a GPIO-like block
+// and the Cortex-M core blocks through literal-pool bases; its `routing` table holds address-like words that are
+// never dereferenced.
+
+fn map(project: &Project, query: PeripheralMapQuery) -> rampage_api::PeripheralMapReport {
+    project.map_peripherals(&PeripheralMapQuery { limit: 100, ..query }).unwrap()
+}
+
+fn block(report: &rampage_api::PeripheralMapReport, base: u64) -> &rampage_api::PeripheralBlockRow {
+    report.blocks.iter().find(|block| block.base == base).unwrap_or_else(|| panic!("{base:#x}: {report:#?}"))
+}
+
+fn registers(block: &rampage_api::PeripheralBlockRow) -> Vec<(u64, Option<&str>, &str, u8)> {
+    block.registers.iter().map(|r| (r.offset, r.name.as_deref(), r.access, r.width)).collect()
+}
+
+#[test]
+fn peripheral_map_without_an_svd_groups_loads_and_stores_into_blocks() {
+    let project = project("raw-cortex-m-peripherals");
+    let truth = |symbol: &str| truth("raw-cortex-m-peripherals", symbol);
+    let report = map(&project, PeripheralMapQuery::default());
+    let bases: Vec<(u64, &str, &str)> =
+        report.blocks.iter().map(|block| (block.base, block.name.as_str(), block.source)).collect();
+    // The routing table's 0x40030000 and 0x4003ff00 are never dereferenced, so no block holds them.
+    assert_eq!(
+        bases,
+        [
+            (0x4001_5800, "periph_40015800", "address"),
+            (0x4002_0000, "periph_40020000", "address"),
+            (0xe000_e010, "SysTick", "core"),
+            (0xe000_e100, "NVIC", "core"),
+            (0xe000_ed00, "SCB", "core"),
+        ]
+    );
+    assert_eq!((report.counts.blocks, report.counts.functions), (5, 5));
+    // Bases 0x40015804 (offset -4) and 0x40015818 (loaded once, used in a loop) both land in one block.
+    let audio = block(&report, 0x4001_5800);
+    assert_eq!(
+        registers(audio),
+        [
+            (0x0, None, "w", 4),
+            (0x4, None, "rw", 4),
+            (0xc, None, "w", 4),
+            (0x10, None, "w", 4),
+            (0x14, None, "w", 4),
+            (0x18, None, "r", 4),
+            (0x20, None, "w", 4)
+        ]
+    );
+    let configure = project.function_name(truth("audio_configure"));
+    let write = project.function_name(truth("audio_write"));
+    assert_eq!(audio.registers[0].functions, std::slice::from_ref(&configure));
+    assert_eq!(audio.registers[6].functions, [write]);
+    let gpio = block(&report, 0x4002_0000);
+    assert_eq!(registers(gpio), [(0x10, None, "r", 1), (0x18, None, "w", 2)]);
+    assert_eq!(registers(block(&report, 0xe000_ed00)), [(0x8, Some("VTOR"), "w", 4)]);
+    assert_eq!(registers(block(&report, 0xe000_e100)), [(0x0, Some("ISER0"), "w", 4)]);
+    assert_eq!(registers(block(&report, 0xe000_e010)), [(0x0, Some("CTRL"), "w", 4), (0x4, Some("LOAD"), "w", 4)]);
+    // The function writing the most registers is the one to read first.
+    assert!(
+        report.next.as_deref().is_some_and(|next| next.starts_with(&format!("decompile {configure}"))),
+        "{report:?}"
+    );
+
+    // Per function: core_setup touches the three core blocks.
+    let by_function = map(&project, PeripheralMapQuery { by_function: true, ..PeripheralMapQuery::default() });
+    let core = by_function.functions.iter().find(|row| row.address == truth("core_setup")).unwrap();
+    let touched: Vec<(&str, Vec<&str>)> = core
+        .blocks
+        .iter()
+        .map(|block| (block.name.as_str(), block.offsets.iter().map(String::as_str).collect()))
+        .collect();
+    assert_eq!(
+        touched,
+        [("SysTick", vec!["0x0 CTRL w", "0x4 LOAD w"]), ("NVIC", vec!["0x0 ISER0 w"]), ("SCB", vec!["0x8 VTOR w"])]
+    );
+    assert_eq!((core.reads, core.writes), (0, 4));
+    assert_eq!(by_function.functions[0].address, truth("core_setup"), "most blocks first");
+
+    // Filters: one function, and an address range; then paging.
+    let one = map(&project, PeripheralMapQuery { function: Some(truth("gpio_set")), ..PeripheralMapQuery::default() });
+    assert_eq!((one.counts.accesses, one.counts.writes, one.blocks.len()), (1, 1, 1));
+    let range =
+        PeripheralMapQuery { start: Some(0xe000_0000), end: Some(0xe010_0000), ..PeripheralMapQuery::default() };
+    assert_eq!(map(&project, range).counts.blocks, 3);
+    let paged =
+        project.map_peripherals(&PeripheralMapQuery { offset: 1, limit: 2, ..PeripheralMapQuery::default() }).unwrap();
+    assert_eq!((paged.total, paged.offset, paged.blocks.len(), paged.blocks[0].base), (5, 1, 2, 0x4002_0000));
+}
+
+#[test]
+fn peripheral_map_takes_block_and_register_names_from_an_imported_svd() {
+    let project = project("raw-cortex-m-svd");
+    let before = map(&project, PeripheralMapQuery::default());
+    // Without the SVD the two timers 0x100 apart share one 1 KiB block.
+    let timers = block(&before, 0x4001_0000);
+    assert_eq!(timers.source, "address");
+    let offsets: Vec<u64> = timers.registers.iter().map(|register| register.offset).collect();
+    assert_eq!(offsets, [0x0, 0x4, 0x20, 0x24, 0x58, 0x120]);
+    import(&project, "ARM_Example.svd", true);
+    let after = map(&project, PeripheralMapQuery::default());
+    let names: Vec<(&str, &str)> = after.blocks.iter().map(|block| (block.name.as_str(), block.source)).collect();
+    assert_eq!(names, [("TIMER0", "svd"), ("TIMER1", "svd")]);
+    let timer0 = block(&after, 0x4001_0000);
+    assert_eq!(
+        registers(timer0),
+        [
+            (0x0, Some("CR"), "rw", 4),
+            (0x4, Some("SR"), "r", 2),
+            (0x20, Some("COUNT"), "r", 4),
+            (0x24, Some("MATCH"), "w", 4),
+            (0x58, Some("RELOAD[2]"), "w", 4)
+        ]
+    );
+    assert_eq!(timer0.registers[3].functions, [project.function_name(truth("raw-cortex-m-svd", "timer0_start"))]);
+    assert_eq!(registers(block(&after, 0x4001_0100)), [(0x20, Some("COUNT"), "r", 4)]);
+}
+
+#[test]
+fn peripheral_map_reads_an_elf_cortex_m_image() {
+    let project = Project::new(Binary::open(format!("{FIRMWARE}raw-cortex-m-peripherals.elf")).unwrap());
+    let report = map(&project, PeripheralMapQuery::default());
+    let names: Vec<&str> = report.blocks.iter().map(|block| block.name.as_str()).collect();
+    assert_eq!(names, ["periph_40015800", "periph_40020000", "SysTick", "NVIC", "SCB"]);
+    assert_eq!(block(&report, 0x4001_5800).accessed_by, ["audio_write", "audio_configure"]);
+}
+
+#[test]
+fn peripheral_map_on_a_hosted_binary_is_empty_with_a_note() {
+    for name in ["hello-arm.elf", "hello-x64.elf"] {
+        let path = format!("{}/../../tests/fixtures/bin/{name}", env!("CARGO_MANIFEST_DIR"));
+        let project = Project::new(Binary::open(path).unwrap());
+        let report = map(&project, PeripheralMapQuery::default());
+        assert_eq!((report.counts.accesses, report.total), (0, 0), "{name}");
+        assert!(report.blocks.is_empty() && report.next.is_none(), "{name}");
+        assert_eq!(report.notes.len(), 1, "{name}: {report:?}");
+    }
 }

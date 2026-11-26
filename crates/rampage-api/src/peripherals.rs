@@ -720,6 +720,8 @@ pub(crate) struct Access {
     pub function: u64,
     pub address: u64,
     pub write: bool,
+    /// Bytes accessed.
+    pub width: u8,
 }
 
 /// Every constant-address access outside read-only image memory, sorted by address, and their indices by
@@ -789,7 +791,7 @@ impl Evaluator<'_> {
         &self,
         ops: &[rampage_decompiler::sleigh_decode::PcodeOp],
         values: &mut Values,
-        mut record: impl FnMut(u64, bool),
+        mut record: impl FnMut(u64, bool, u8),
     ) {
         // After a CBRANCH inside the instruction (ARM conditional execution, IT blocks) the rest of its p-code may
         // not run, so what it writes is unknown.
@@ -805,7 +807,7 @@ impl Evaluator<'_> {
                     && let Some(at) = node.offset
                     && (write || self.binary.read_constant(at, u8::try_from(node.size).unwrap_or(0)).is_none())
                 {
-                    record(at, write);
+                    record(at, write, u8::try_from(node.size).unwrap_or(0));
                 }
             }
             let input = |index: usize| op.inputs.get(index).and_then(|node| self.value(node, values));
@@ -818,7 +820,7 @@ impl Evaluator<'_> {
                         let folded =
                             (!write).then(|| self.binary.read_constant(at, u8::try_from(bytes).unwrap_or(0))).flatten();
                         if folded.is_none() {
-                            record(at, write);
+                            record(at, write, u8::try_from(bytes).unwrap_or(0));
                         }
                         folded
                     })
@@ -978,7 +980,7 @@ impl Project {
                 budget -= 1;
                 let mut values = entry[index].clone().unwrap_or_default();
                 for (_, ops) in &blocks[index].instructions {
-                    evaluator.step(ops, &mut values, |_, _| {});
+                    evaluator.step(ops, &mut values, |_, _, _| {});
                 }
                 for &successor in &blocks[index].successors {
                     let Some(next) = index_of(successor) else { continue };
@@ -1000,8 +1002,14 @@ impl Project {
             for (index, block) in blocks.iter().enumerate() {
                 let mut values = entry[index].clone().unwrap_or_default();
                 for (address, ops) in &block.instructions {
-                    evaluator.step(ops, &mut values, |at, write| {
-                        found.push(Access { instruction: *address, function: function.address, address: at, write });
+                    evaluator.step(ops, &mut values, |at, write, width| {
+                        found.push(Access {
+                            instruction: *address,
+                            function: function.address,
+                            address: at,
+                            write,
+                            width,
+                        });
                     });
                 }
             }

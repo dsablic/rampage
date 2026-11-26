@@ -28,6 +28,7 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary pyinstaller-archive FILE [--offset N --limit N]` | — | PyInstaller cookie and TOC page; no extraction |
 | `binary wasm-module FILE [--list KIND --offset N]` | — | WebAssembly summary and one list page |
 | `binary audit FILE [--include-discovery]` | `audit` | Bounded decode coverage and unreliable-code evidence |
+| `binary peripheral-map FILE [--function AT --start A --end A --by-function --offset N --limit N]` | — | Firmware peripheral blocks the loads and stores reach, with offsets and functions ([peripheral map](raw-code.md#which-code-drives-which-peripheral)) |
 | `binary carve FILE [--max-candidates N]` | `carve` | Validated embedded headers; no extraction/decompression |
 | `binary inventory DIR` | `inventory` | Binaries in bundles/extracted packages; no execution |
 | `binary archive-inventory ARCHIVE` | — | Standalone ZIP32 directory metadata; no member opening or extraction |
@@ -302,7 +303,7 @@ rampage --raw-json '{"profile":"cortex-m3","format":"srec"}' function list tests
 ```
 
 The two options exclude each other, `--arch` and `--image-*`. They apply only to `binary inspect`, `binary audit`,
-`binary capabilities`, `binary search`, `function list`, `function disassemble`, `function graph`,
+`binary capabilities`, `binary peripheral-map`, `binary search`, `function list`, `function disassemble`, `function graph`,
 `function xrefs`, `function decompile`, `function evaluate` and `function identify` (without `--apply`); other
 commands refuse them.
 Raw annotations are memory-only and never written beside the source, so every annotation command is refused here:
@@ -341,6 +342,7 @@ which also checks that every entry names a real route. `rampage help binary_info
 | `pe_load_config` | `binary pe-load-config` |
 | `detect_tools` | `binary detect` |
 | `capabilities` | `binary capabilities` |
+| `peripheral_map` | `binary peripheral-map` |
 | `build_info` | `binary build-info` |
 | `analysis_diagnostics` | `binary audit` |
 | `carve` | `binary carve` |

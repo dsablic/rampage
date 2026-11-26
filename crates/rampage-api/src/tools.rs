@@ -1263,7 +1263,7 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 33] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 34] = [
     "binary_info",
     "list_functions",
     "disassemble",
@@ -1285,6 +1285,7 @@ pub const RAW_CAPABLE_TOOLS: [&str; 33] = [
     "check_claim",
     "import_svd",
     "peripheral_access",
+    "peripheral_map",
     "list_patches",
     "patch_bytes",
     "revert_patch",
@@ -2004,6 +2005,23 @@ struct PeripheralAccessArgs {
     /// A peripheral (name or address) whose registers to list; omit to list peripherals.
     peripheral: Option<String>,
     offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PeripheralMapArgs {
+    /// Only accesses made in this function (address or name).
+    function: Option<String>,
+    /// Only accesses at or above this address.
+    start: Option<String>,
+    /// Only accesses below this address.
+    end: Option<String>,
+    /// Rows per function instead of per peripheral block.
+    #[serde(default)]
+    by_function: bool,
+    offset: Option<usize>,
+    /// Rows per page (default 16).
     limit: Option<usize>,
 }
 
@@ -3802,6 +3820,23 @@ pub fn tools() -> Vec<Tool> {
                     peripheral: args.peripheral,
                     offset: args.offset.unwrap_or(0),
                     limit: page_limit(args.limit).unwrap_or(DEFAULT_PAGE),
+                })
+            },
+        ),
+        tool(
+            Group::Types,
+            "peripheral_map",
+            "Firmware peripheral map from loads/stores (no SVD needed): device-space blocks with the offsets read or \
+             written and the functions touching them, or by_function. Filter by function or start/end. Paginated.",
+            |project, args: PeripheralMapArgs| {
+                let address = |text: Option<String>| text.map(|text| project.resolve(&text)).transpose();
+                project.map_peripherals(&crate::PeripheralMapQuery {
+                    function: address(args.function)?.map(|at| project.thumb_code_address(at).0),
+                    start: address(args.start)?,
+                    end: address(args.end)?,
+                    by_function: args.by_function,
+                    offset: args.offset.unwrap_or(0),
+                    limit: page_limit(args.limit).unwrap_or(16),
                 })
             },
         ),

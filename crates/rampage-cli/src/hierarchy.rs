@@ -98,6 +98,7 @@ impl RootCommand {
             Self::Binary(BinaryCommand::Capabilities(args)) => Command::Capabilities(args),
             Self::Binary(BinaryCommand::BuildInfo(args)) => Command::BuildInfo(args),
             Self::Binary(BinaryCommand::Audit(args)) => Command::Audit(args),
+            Self::Binary(BinaryCommand::PeripheralMap(args)) => Command::PeripheralMap(args),
             Self::Binary(BinaryCommand::Carve(args)) => Command::Carve(args),
             Self::Binary(BinaryCommand::Inventory(args)) => Command::Inventory(args),
             Self::Binary(BinaryCommand::ArchiveInventory(args)) => Command::ArchiveInventory(args),
@@ -209,6 +210,8 @@ pub(crate) enum BinaryCommand {
     BuildInfo(crate::args::BuildInfoArgs),
     /// Decode coverage and evidence that static disassembly may be unreliable
     Audit(AuditArgs),
+    /// Firmware peripheral blocks the code loads from and stores to, with offsets and functions (no SVD needed)
+    PeripheralMap(crate::args::PeripheralMapArgs),
     /// Scan any file for embedded executables and containers by validated header, without extracting anything
     Carve(CarveArgs),
     /// Inventory binaries in a bundle or already-extracted package without executing it

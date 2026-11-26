@@ -71,6 +71,7 @@ pub mod pack_archive;
 pub mod packs;
 mod patches;
 mod pe_inspect;
+mod peripheral_map;
 mod peripherals;
 mod plugin_triage;
 mod pointer_compare;
@@ -234,6 +235,10 @@ pub use patches::{
 };
 pub use pe_inspect::{
     MAX_RESOURCE_DECODE_BYTES, PeResourcesQuery, PeResourcesSummary, ResourceEntry, ResourceTypeCount,
+};
+pub use peripheral_map::{
+    PeripheralBlockRow, PeripheralFunctionBlock, PeripheralFunctionRow, PeripheralMapCounts, PeripheralMapQuery,
+    PeripheralMapReport, PeripheralRegisterUse,
 };
 pub use peripherals::{
     ImportSvdReport, ImportSvdRequest, PeripheralAccess, PeripheralAccessQuery, PeripheralRow, RegisterRow,

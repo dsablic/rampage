@@ -1026,6 +1026,29 @@ pub(crate) struct ReportArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct PeripheralMapArgs {
+    pub(crate) file: PathBuf,
+    /// Only accesses made in this function (address or name)
+    #[arg(long)]
+    pub(crate) function: Option<String>,
+    /// Only accesses at or above this address
+    #[arg(long)]
+    pub(crate) start: Option<String>,
+    /// Only accesses below this address
+    #[arg(long)]
+    pub(crate) end: Option<String>,
+    /// One row per function, listing the peripheral blocks it touches
+    #[arg(long)]
+    pub(crate) by_function: bool,
+    /// Rows to skip, for paging
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Rows per page
+    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) limit: u64,
+}
+
+#[derive(Args)]
 pub(crate) struct BuildInfoArgs {
     pub(crate) file: PathBuf,
     /// Go dependency modules and Rust packages to skip, for paging (each list independently)

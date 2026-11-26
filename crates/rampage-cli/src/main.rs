@@ -287,6 +287,8 @@ enum Command {
     #[command(skip)]
     Evaluate(args::EvaluateArgs),
     #[command(skip)]
+    PeripheralMap(args::PeripheralMapArgs),
+    #[command(skip)]
     ImportDebugLayouts(ImportDebugLayoutsArgs),
     /// Run a guided investigation workflow and print its bounded, evidence-backed report
     #[command(hide = true)]
@@ -507,6 +509,7 @@ fn main() -> ExitCode {
             commands::audit(&mut out, &file, include_discovery, entries, at.as_deref(), &options)
         }
         Command::Metadata(FileArgs { file }) => commands::metadata(&mut out, &file, &options),
+        Command::PeripheralMap(args) => commands::peripheral_map(&mut out, &args, &options),
         Command::Inventory(DirectoryArgs { directory }) => commands::inventory(&mut out, &directory, &options),
         Command::Carve(CarveArgs { file, max_candidates }) => {
             commands::carve(&mut out, &file, max_candidates, &options)
@@ -711,9 +714,9 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
 const MAX_RAW_REQUEST_BYTES: u64 = 1024 * 1024;
 
 /// The commands [`raw_tool`] admits, as `--help` names them.
-const RAW_COMMANDS: &str = "binary inspect, binary audit, binary capabilities, binary search, function list, \
-                            function disassemble, function graph, function xrefs, function decompile, function \
-                            evaluate and function identify";
+const RAW_COMMANDS: &str = "binary inspect, binary audit, binary capabilities, binary peripheral-map, binary \
+                            search, function list, function disassemble, function graph, function xrefs, function \
+                            decompile, function evaluate and function identify";
 
 fn raw_request(json: Option<&str>, path: Option<&std::path::Path>) -> anyhow::Result<Option<RawProjectRequest>> {
     let text = match (json, path) {
@@ -744,6 +747,7 @@ fn raw_tool(command: &Command) -> Option<&'static str> {
         Command::Audit(args) if args.entries => "entry_diagnostics",
         Command::Audit(..) => "analysis_diagnostics",
         Command::Capabilities(..) => "capabilities",
+        Command::PeripheralMap(..) => "peripheral_map",
         Command::Decompile(..) => "decompile",
         Command::Evaluate(..) => "evaluate_function",
         Command::Identify(..) => "identify_functions",

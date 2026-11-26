@@ -279,6 +279,37 @@ give no reference. RAM, peripherals and the private peripheral bus (0x10000000 t
 a field there is listed when its base is mapped or lies in that space too. The rows show the structure's layout
 from the code: `xrefs` `from` a function lists each field it touches with its offset from the base.
 
+## Which code drives which peripheral
+
+`peripheral_map` (CLI: `binary peripheral-map`) answers it without an SVD, from loads and stores only, so the
+address-like words in literal pools and data tables that no instruction dereferences stay out. Each block is the
+1 KiB window holding a base register's value, or a Cortex-M core block (SCB, NVIC, SysTick, MPU, DWT and the other
+architectural ones, with register names); each row lists the offsets read and written with their widths and the
+functions touching them. On `tests/fixtures/firmware/raw-cortex-m-peripherals.bin`:
+
+```sh
+fw='{"profile":"cortex-m3","offset":0,"length":596,"base_address":"0x8000000","vector_table":true}'
+rampage --raw-json "$fw" binary peripheral-map tests/fixtures/firmware/raw-cortex-m-peripherals.bin
+```
+
+```text
+48 accesses (30 reads, 18 writes) in 5 peripheral blocks from 5 functions; rows 1-5 of 5
+0x40015800 periph_40015800 [address]  29 reads, 13 writes, 2 functions: sub_8000068, sub_8000040
+  +0x0 w 4B  sub_8000040
+  +0x4 rw 4B  sub_8000040
+  ...
+0xe000ed00 SCB [core]  0 reads, 1 writes, 1 functions: sub_80001b0
+  +0x8 VTOR w 4B  sub_80001b0
+next: decompile sub_8000040: it writes the most registers (5, in 1 peripheral block); ...
+```
+
+The function writing many registers of one block is usually its configuration routine; the one reading a status
+offset in a loop and writing a data offset is the transfer path. `by_function` (`--by-function`) turns the map
+around: each function with the blocks and offsets it touches (`0x8 VTOR w`). Filter with `function` or an address
+range (`start`, `end`). Once you know the part, `import_svd` names the blocks and registers on the same map. An ELF
+Cortex-M image works the same way; a hosted program gets an empty map with a note. See
+[`peripheral_map`](mcp.md#inputs-paging-and-decompiler-tokens) for the fields.
+
 ## Where to start reading
 
 Once discovery has run (a Cortex-M request with `pointer_tables` unset runs it at open), `binary_info` lists
@@ -321,7 +352,7 @@ These tools take the `raw` selector:
 | Data | `list_strings`, `inspect_data` (a file tool) |
 | Annotations | `rename`, `set_comment`, `annotate_batch`, `list_annotations`, `undo`, `redo` |
 | Execution | `evaluate_function` (processors the interpreter supports, Cortex-M, MIPS32 and Xtensa among them) |
-| Peripherals | `import_svd`, `peripheral_access` |
+| Peripherals | `import_svd`, `peripheral_access`, `peripheral_map` |
 | Patching | `patch_bytes`, `revert_patch`, `list_patches`, `integrity_checks`, `export_image` |
 | Detection | `identify_functions`, `find_crypto`, `lock_mechanisms` |
 

@@ -158,3 +158,19 @@ fn raw_rejects_malformed_and_unknown_field_requests() {
     }
     assert_eq!(fixture.names(), [OsString::from("code.bin")]);
 }
+
+#[test]
+fn binary_peripheral_map_lists_blocks_and_functions() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware/raw-cortex-m-peripherals.bin");
+    let raw = r#"{"profile":"cortex-m3","offset":0,"length":596,"base_address":"0x8000000","vector_table":true}"#;
+    let map = json_output(&mut rampage(&["--json", "--raw-json", raw, "binary", "peripheral-map"], &fixture));
+    assert_eq!(map["counts"]["blocks"], 5, "{map}");
+    assert_eq!(map["blocks"][0]["base"], "0x40015800", "{map}");
+    let args = ["--raw-json", raw, "peripheral_map", "--by-function", "--function", "0x80001b0"];
+    rampage(&args, &fixture)
+        .assert()
+        .success()
+        .stdout(contains("0xe000ed00 SCB: 0x8 VTOR w"))
+        .stdout(contains("next: decompile"));
+}

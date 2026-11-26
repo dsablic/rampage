@@ -115,7 +115,7 @@ A default session lists 48 tools: the 47 in `core` plus `enable_tools`. Enabling
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_debug_layouts`,
   `import_pdb_names`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`, `apply_data_type`,
   `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`, `import_debug_types`,
-  `import_svd`, `peripheral_access`.
+  `import_svd`, `peripheral_access`, `peripheral_map`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
@@ -290,6 +290,22 @@ bit-field comment (`/* CR: EN|MODE=Single_MATCH */`); disassembly, xref rows and
 and `evaluate_function` takes `mmio` values for polled registers. `peripheral_access` pages peripherals with
 access counts, or one peripheral's registers with bit fields and accessing functions. Limits: accesses are found
 only through constants a function forms itself. See [peripheral maps](peripheral-maps.md).
+
+`peripheral_map` (group `types`, Raw-capable, no SVD needed) maps which code touches which peripheral, from load and
+store instructions only: literal-pool words and data tables that nothing dereferences never reach it. It takes the
+base-plus-offset field references (with read or write and width) and the constant-address access scan, keeps the
+accesses whose address lies in device space (32-bit ARM: 0x40000000-0x5fffffff, 0xa0000000-0xdfffffff and the
+private peripheral bus 0xe0000000-0xe00fffff; MIPS32: kseg1 below 0xbfc00000; Xtensa: 0x3ff00000-0x3ff7ffff and
+0x60000000-0x600fffff; anywhere an imported SVD puts a peripheral) and groups them into blocks: the SVD peripheral
+(`source: svd`), a Cortex-M core block (`core`: SCB, NVIC, SysTick, MPU, DWT, ITM, FPB, CoreDebug, FPU, STIR, with
+their register names) or the 1 KiB-aligned window holding the base register's value (`address`, named
+`periph_40015800`); vendor peripherals are never guessed from their address. The result starts with `counts`
+(accesses, reads, writes, blocks, functions), then one row per block with each offset's `access` (`r`, `w`, `rw`),
+widest `width`, counts and functions, or with `by_function: true` one row per function (most blocks first) listing
+each block's offsets (`0x8 VTOR w`). `function`, `start` and `end` (an address range) filter; `offset` and `limit`
+(default 16) page. `next` names the function writing the most registers to decompile first. A hosted Linux, macOS
+or Windows binary gets an empty map with a note. Limits: a base passed in an argument or loaded from memory is not
+resolved, and a block of more than 1 KiB reached through bases with no base register in common splits into windows.
 
 `integrity_checks` (group `formats`) finds checksum, CRC and digest fields and the ranges they cover in the
 original image, by bounded brute force, CRC code evidence and, with `emulate` (default), the image's own routine

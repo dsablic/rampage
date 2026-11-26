@@ -6,6 +6,16 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `peripheral_map` (MCP group `types`, Raw-capable; CLI `binary peripheral-map`) maps which code touches which
+  memory-mapped peripheral without an SVD, from load and store instructions only (base-plus-offset field references
+  and the constant-address access scan), so literal-pool words and tables never dereferenced stay out. Accesses in
+  device space (Cortex-M peripheral, external device and private peripheral bus regions; MIPS32 kseg1; Xtensa ESP
+  peripheral windows; any imported SVD peripheral) are grouped into blocks: the SVD peripheral, an architectural
+  Cortex-M core block (SCB, NVIC, SysTick, MPU, DWT, ...) with register names, or the 1 KiB window of the base
+  register's value. Counts first, then per block the offsets with read/write, width and functions, or with
+  `by_function` per function the blocks and offsets it touches; filters by function and address range, paging, and
+  a `next` naming the function writing the most registers. Raw and ELF Cortex-M images; a hosted binary gets an
+  empty map with a note. New fixture `tests/fixtures/firmware/raw-cortex-m-peripherals.bin`.
 - `xrefs` and `search` `references` find loads and stores that reach a structure field through a base register plus
   an immediate offset (`ldr r1, =0x20001234` then `ldrb r0, [r1, #11]`, a MOVW/MOVT base, a Thumb `adds` on the
   base), with evidence on each row: `base` (the instruction that set the base, the base address, the offset and the

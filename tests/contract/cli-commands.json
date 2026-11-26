@@ -2325,6 +2325,81 @@
       },
       "subcommand_required": false
     },
+    "rampage binary peripheral-map": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--by-function": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--end": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--function": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--start": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
     "rampage binary probe-compression": {
       "arguments": {
         "--arch": {
