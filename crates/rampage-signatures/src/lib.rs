@@ -69,7 +69,10 @@ pub use diagnostics::{
 };
 use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
 pub use operands::{OperandClass, operand_classes};
-pub use pat::{PatError, PatErrorKind, PatternByte, PatternDb, PatternMatch, PatternName, PatternRecord};
+pub use pat::{
+    MAX_PAT_BYTES, MAX_PAT_LINES, PatError, PatErrorKind, PatternByte, PatternDb, PatternMatch, PatternName,
+    PatternRecord, pat_record,
+};
 use rampage_arch::{Arch, Target};
 use rampage_loaders::{Binary, Symbol, SymbolKind};
 use serde::{Deserialize, Serialize};

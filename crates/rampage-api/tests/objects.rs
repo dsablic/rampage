@@ -170,3 +170,64 @@ fn archive_members_are_projects_of_their_own() {
     let opened = session.open(Path::new(&page.members[0].open), None).unwrap();
     assert!(opened.binary.symbol_by_name("ext_counter").is_some());
 }
+
+/// A symbol's address under its plain or underscored (COFF i386, Mach-O) spelling.
+fn either(project: &Project, name: &str) -> u64 {
+    let binary = &project.binary;
+    binary
+        .symbol_by_name(name)
+        .or_else(|| binary.symbol_by_name(&format!("_{name}")))
+        .unwrap_or_else(|| panic!("no {name}"))
+        .address
+}
+
+#[test]
+fn coff_and_macho_objects_decompile_with_their_callees_named() {
+    for name in [
+        "objects-coff-x86_64.obj",
+        "objects-coff-x86.obj",
+        "objects-coff-aarch64.obj",
+        "objects-coff-thumb.obj",
+        "objects-macho-x86_64.o",
+        "objects-macho-arm64.o",
+    ] {
+        let project = project(name);
+        let main = project.decompile(either(&project, "main")).unwrap_or_else(|error| panic!("{name}: {error}"));
+        for callee in ["hal_init(", "printf(", "sum("] {
+            assert!(main.code.contains(callee), "{name}: no {callee} in\n{}", main.code);
+        }
+        if name.contains("coff") {
+            // A call through an import pointer is a call to the import.
+            let imports = project.decompile(either(&project, "uses_imports")).unwrap();
+            assert!(imports.code.contains("GetTickCount("), "{name}: {}", imports.code);
+        }
+    }
+}
+
+/// Signatures built from a static library name its functions in a program linked against it, where the objects'
+/// masked hashes alone miss the functions whose MIPS `%hi`/`%lo` pairs the linker filled in.
+#[test]
+fn library_signatures_name_the_functions_of_a_program_linked_against_the_library() {
+    let library = Path::new(DIR).join("libobjects-mipsel.a");
+    let built = rampage_api::build_library_signatures(&library, None).unwrap();
+    assert_eq!((built.report.members, built.report.members_used), (2, 2));
+    assert!(built.report.pat_records >= 6, "{:?}", built.report);
+    let program = project("linked-mipsel");
+    let found = program.apply_signatures(&built.database, false).unwrap();
+    let mut names: Vec<&str> = found.matches.iter().map(|item| item.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["dispatch", "hal_init", "main", "scale", "sum", "thrice", "twice"]);
+    // Each one is where the linker put it: the program's entry calls main.
+    let entry = program.binary.entry.unwrap();
+    let main = found.matches.iter().find(|item| item.name == "main").unwrap().address;
+    let calls = program.xrefs(XrefQuery::From(entry), None, Some(50)).unwrap().items;
+    assert!(calls.iter().any(|xref| xref.to == main), "{calls:?}");
+
+    // The same objects' hashes, without the relocation-exact patterns, name only what has no relocations.
+    let hashes = project("objects-mipsel.o").build_signatures();
+    let only = program.apply_signatures(&hashes, false).unwrap();
+    assert!(only.matched < 4, "{:?}", only.matches);
+    // Building is deterministic.
+    let again = rampage_api::build_library_signatures(&library, None).unwrap();
+    assert_eq!(again.database.to_json(), built.database.to_json());
+}

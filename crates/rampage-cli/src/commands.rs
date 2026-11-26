@@ -2643,6 +2643,41 @@ pub fn signatures(
     fuzzy_request: Option<&Path>,
     options: &Options,
 ) -> Result<()> {
+    // A static library builds from its objects, with relocation-exact patterns.
+    if fuzzy_request.is_none()
+        && options.image.is_none()
+        && options.raw.is_none()
+        && rampage_api::is_static_archive(path)
+    {
+        let built = rampage_api::build_library_signatures(path, options.arch)?;
+        let json = built.database.to_json();
+        match output {
+            Some(output) => {
+                std::fs::write(output, &json)?;
+                if options.json {
+                    let mut report = serde_json::to_value(&built.report)?;
+                    report["output"] = serde_json::json!(output);
+                    return write_json(out, &report);
+                }
+                let report = &built.report;
+                writeln!(
+                    out,
+                    "wrote {} signatures ({} relocation-exact patterns) and {} callee keys from {} of {} members to {}",
+                    report.signatures,
+                    report.pat_records,
+                    report.callee_keys,
+                    report.members_used,
+                    report.members,
+                    output.display()
+                )?;
+                for (reason, count) in &report.skipped {
+                    writeln!(out, "  skipped {count}: {reason}")?;
+                }
+            }
+            None => writeln!(out, "{json}")?,
+        }
+        return Ok(());
+    }
     let project = open(path, options)?;
     if let Some(request) = fuzzy_request {
         let report = project.build_fuzzy_signature_file(request)?;

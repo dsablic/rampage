@@ -248,3 +248,46 @@ async fn static_library_members_are_listed_and_open_as_lib_member_paths() {
     assert!(text(&whole).contains("objects.o#0"), "{}", text(&whole));
     client.cancel().await.unwrap();
 }
+
+/// build_signatures takes a static library as its path, and the database it writes names the functions of a
+/// program linked against that library; an MSVC import library's members are listed as imports.
+#[tokio::test]
+async fn signatures_build_from_a_static_library_and_import_libraries_list_imports() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/objects");
+    let client = connect(RampageServer::with_groups([Group::Carve, Group::Detection])).await;
+    let output = std::env::temp_dir().join(format!(
+        "rampage-mcp-library-signatures-{}-{}.json",
+        std::process::id(),
+        SERIAL.fetch_add(1, Ordering::Relaxed)
+    ));
+    let built = page(
+        &call(&client, "build_signatures", json!({ "path": fixtures.join("libobjects-mipsel.a"), "output": output }))
+            .await,
+    );
+    assert_eq!((built["members"].as_u64(), built["members_used"].as_u64()), (Some(2), Some(2)), "{built}");
+    assert!(built["pat_records"].as_u64().unwrap() > 0, "{built}");
+    let found = page(
+        &call(
+            &client,
+            "identify_functions",
+            json!({ "path": fixtures.join("linked-mipsel"), "database": output, "no_bundled": true }),
+        )
+        .await,
+    );
+    std::fs::remove_file(&output).unwrap();
+    for name in ["\"sum\"", "\"dispatch\"", "\"hal_init\"", "\"main\""] {
+        assert!(found.to_string().contains(name), "{name}: {found}");
+    }
+
+    let imports = page(&call(&client, "archive_inventory", json!({ "path": fixtures.join("imports-coff.lib") })).await);
+    let rows = imports["members"].as_array().unwrap();
+    let ordinal = rows.iter().find(|row| row["import"]["symbol"] == "by_ordinal").unwrap();
+    assert_eq!(
+        (ordinal["import"]["by"].as_str(), ordinal["import"]["ordinal_or_hint"].as_u64()),
+        (Some("ordinal"), Some(7))
+    );
+    let opened = call(&client, "binary_info", json!({ "path": ordinal["open"] })).await;
+    assert_eq!(opened.is_error, Some(true));
+    assert!(text(&opened).contains("short import object"), "{}", text(&opened));
+    client.cancel().await.unwrap();
+}

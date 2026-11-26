@@ -53,6 +53,17 @@ rm -f "$out/libobjects-gnu.a" "$out/libobjects-bsd.a"
 (cd "$work" && "$zig" ar --format=bsd rcs libobjects-bsd.a objects.o helper.o)
 cp "$work/libobjects-gnu.a" "$work/libobjects-bsd.a" "$out/"
 
+# A MIPS library and a stripped program statically linked against it (no C library: src/objects-link-stubs.c),
+# for signatures built from the library: its `%hi`/`%lo` pairs differ between the objects and the program.
+mkdir "$work/mips"
+cp "$out/objects-mipsel.o" "$work/mips/objects.o"
+"$zig" cc -target mipsel-linux-musleabi "${flags[@]}" -fno-pic -o "$work/mips/helper.o" src/objects-helper.c
+rm -f "$out/libobjects-mipsel.a"
+(cd "$work/mips" && "$zig" ar rcs libobjects-mipsel.a objects.o helper.o)
+cp "$work/mips/libobjects-mipsel.a" "$out/"
+"$zig" cc -target mipsel-linux-musleabi -O1 -g0 -fno-inline -fno-pic -no-pie -static -nostdlib -Wl,-e,_start -s \
+    -ffile-prefix-map="$PWD"=. -o "$out/linked-mipsel" src/objects-link-stubs.c "$out/libobjects-mipsel.a"
+
 # COFF: the objects, a big-object copy, a .lib holding the x64 object and the helper, and an import library.
 llvm=${LLVM:-/opt/homebrew/opt/llvm/bin}
 coff() { # target, output
@@ -81,7 +92,7 @@ for arch in x86_64 arm64; do
         -o "$out/objects-macho-$arch.o" src/objects-macho.c
     mkdir -p "$work/macho-$arch"
     cp "$out/objects-macho-$arch.o" "$work/macho-$arch/objects.o"
-    (cd "$work/macho-$arch" && libtool -static -o "lib-$arch.a" objects.o)
+    (cd "$work/macho-$arch" && ZERO_AR_DATE=1 libtool -static -o "lib-$arch.a" objects.o)
 done
 rm -f "$out/libobjects-macho.a"
 lipo -create -output "$out/libobjects-macho.a" "$work/macho-x86_64/lib-x86_64.a" "$work/macho-arm64/lib-arm64.a"

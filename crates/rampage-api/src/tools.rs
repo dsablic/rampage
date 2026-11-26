@@ -879,8 +879,9 @@ pub fn file_tools() -> Vec<FileTool> {
                 member: nothing is decompressed, extracted or verified. ZIP64, multi-disk and SFX archives are \
                 unsupported, and an archive past the size limits is refused whole. Filter with contains \
                 (case-sensitive), page with offset/limit. fs_list and fs_extract read ZIP/APK members. A static \
-                library (`ar`: .a, GNU or BSD) lists its members with the symbols its index gives each, and the \
-                path that opens one in any binary tool, `lib.a(member.o)`; contains also matches those symbols.",
+                library (`ar`: .a, GNU or BSD, MSVC .lib, Mach-O universal) lists its members with the symbols its \
+                index gives each, and the path that opens one in any binary tool, `lib.a(member.o)` (`arch` picks a \
+                universal slice); import-library members list their import. contains also matches those symbols.",
             input_schema: schema::<ArchiveInventoryArgs>(),
             handler: |_, input| {
                 (|| -> Result<Value, String> {
@@ -3364,8 +3365,9 @@ pub fn tools() -> Vec<Tool> {
             "build_signatures",
             "Build a library-function signature database from this binary's named functions and write it to `output`: \
              run it on a binary with symbols, then identify_functions on a stripped one. Functions whose masked bodies \
-             collide also get callee keys. fuzzy_request builds a separate fuzzy database instead, for \
-             identify_functions' fuzzy_database.",
+             collide also get callee keys. A static library as path (.a, MSVC .lib, a universal .a with arch) \
+             builds from all its objects, adding patterns that leave out exactly the bytes relocations patch. \
+             fuzzy_request builds a separate fuzzy database instead, for identify_functions' fuzzy_database.",
             |project, arguments: SignatureBuildArgs| {
                 if let Some(request) = &arguments.fuzzy_request {
                     let report = project.build_fuzzy_signature_file(std::path::Path::new(request))?;

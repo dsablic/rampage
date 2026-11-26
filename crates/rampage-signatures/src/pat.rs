@@ -399,6 +399,47 @@ impl PatternDb {
     }
 }
 
+/// The most tail bytes a generated record carries (a PAT field is at most [`MAX_PAT_FIELDS`] characters).
+const MAX_TAIL_BYTES: usize = MAX_PAT_FIELDS / 2;
+
+/// One PAT record for the function `name` whose bytes are `body`, `None` marking a byte to leave out (a
+/// relocated field, so a linked copy may hold anything there): the 32-byte prefix, a CRC over the fixed bytes that
+/// follow up to the first wildcard, and the rest as the tail (bounded). `None` when the name cannot be spelled in
+/// PAT, or when the record would not pass the matcher's own content gate
+/// ([`PatternRecord::has_discriminating_pattern`]): a weak record would only withhold names.
+pub fn pat_record(name: &str, body: &[Option<u8>]) -> Option<String> {
+    if name.is_empty() || name.contains(char::is_whitespace) || name.starts_with([':', '^', '(', '#']) || name == "?" {
+        return None;
+    }
+    if body.is_empty() || body.len() > 0xffff_ffff {
+        return None;
+    }
+    let mut text = String::new();
+    let byte = |text: &mut String, value: Option<u8>| match value {
+        Some(value) => write!(text, "{value:02X}").unwrap(),
+        None => text.push_str(".."),
+    };
+    for index in 0..PREFIX_BYTES {
+        byte(&mut text, body.get(index).copied().flatten());
+    }
+    let rest = body.get(PREFIX_BYTES..).unwrap_or_default();
+    let crc_len = rest.iter().take(255).take_while(|value| value.is_some()).count();
+    let crc_bytes: Vec<u8> = rest[..crc_len].iter().map(|value| value.unwrap()).collect();
+    let crc = if crc_len == 0 { 0 } else { flirt_crc16(&crc_bytes) };
+    write!(text, " {crc_len:02X} {crc:04X} {:04X} :0000 {name}", body.len()).unwrap();
+    let tail = &rest[crc_len..];
+    let tail = &tail[..tail.len().min(MAX_TAIL_BYTES)];
+    if !tail.is_empty() {
+        text.push(' ');
+        for &value in tail {
+            byte(&mut text, value);
+        }
+    }
+    let positions = body.len().min(PREFIX_BYTES) + tail.len();
+    let fixed = body.iter().take(PREFIX_BYTES).chain(tail).filter(|value| value.is_some()).count();
+    (fixed >= MIN_CONTENT_BYTES && fixed * 2 >= positions).then_some(text)
+}
+
 fn parse_record(raw: &str, line: usize) -> Result<PatternRecord, PatError> {
     let mut fields = Vec::new();
     for field in raw.split([' ', '\t']).filter(|field| !field.is_empty()) {

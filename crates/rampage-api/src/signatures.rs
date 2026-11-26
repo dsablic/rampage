@@ -383,3 +383,209 @@ mod call_graph_tests {
         assert!(total > 0, "propagation named nothing");
     }
 }
+
+/// The most members of a static library a signature database is built from; later ones are left out, counted.
+pub const MAX_LIBRARY_MEMBERS: usize = 16_384;
+
+/// What building signatures from a static library did.
+#[derive(Debug, Serialize)]
+pub struct LibrarySignatureReport {
+    pub arch: Option<String>,
+    pub members: usize,
+    /// Members whose functions went into the database.
+    pub members_used: usize,
+    /// Members left out, counted by why (an import object, another architecture, not an object file, ...).
+    pub skipped: BTreeMap<String, usize>,
+    /// Named functions read from the members.
+    pub functions: usize,
+    /// Hash answers, callee keys and relocation-exact pattern records in the database.
+    pub signatures: usize,
+    pub callee_keys: usize,
+    pub pat_records: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+/// A database built from a static library, and the report of how.
+pub struct LibrarySignatures {
+    pub database: SignatureDb,
+    pub report: LibrarySignatureReport,
+}
+
+/// The bytes of a relocation's field within a function body that a pattern leaves out: what the relocation patched,
+/// narrowed to a MIPS instruction's 16-bit immediate for the `%hi`/`%lo`/GOT and GP-relative types.
+fn relocated_bytes(site: &rampage_loaders::relocatable::RelocationSite, big_endian: bool) -> std::ops::Range<u64> {
+    let mips_immediate = matches!(
+        site.kind.as_str(),
+        "R_MIPS_HI16"
+            | "R_MIPS_LO16"
+            | "R_MIPS_GOT16"
+            | "R_MIPS_CALL16"
+            | "R_MIPS_GPREL16"
+            | "R_MIPS_GOT_DISP"
+            | "R_MIPS_GOT_PAGE"
+            | "R_MIPS_GOT_OFST"
+            | "R_MIPS_GOT_HI16"
+            | "R_MIPS_GOT_LO16"
+            | "R_MIPS_CALL_HI16"
+            | "R_MIPS_CALL_LO16"
+            | "R_MIPS_PC16"
+    );
+    if mips_immediate {
+        let start = if big_endian { site.address + 2 } else { site.address };
+        return start..start + 2;
+    }
+    let width = if site.field == 0 { 4 } else { u64::from(site.field) };
+    site.address..site.address.saturating_add(width)
+}
+
+/// Relocation-exact pattern records for the named functions of `binary`, a relocatable object: each function's
+/// bytes with the relocated fields left out, over its symbol size and over the extent discovery found for it.
+fn object_patterns(binary: &Binary, extents: &BTreeMap<u64, u64>, lines: &mut Vec<String>) -> usize {
+    let Some(relocated) = binary.relocated() else { return 0 };
+    let functions = rampage_signatures::canonical_functions(binary);
+    let big_endian = binary.target().big_endian;
+    for symbol in functions.values() {
+        let end = symbol.address.saturating_add(symbol.size);
+        let discovered = extents.get(&symbol.address).copied().filter(|&found| found != end);
+        for end in std::iter::once(end).chain(discovered) {
+            let Some(length) = end.checked_sub(symbol.address).filter(|&length| length > 0) else { continue };
+            let Some(bytes) = binary.read(symbol.address, length) else { continue };
+            let mut body: Vec<Option<u8>> = bytes.iter().copied().map(Some).collect();
+            for site in relocated.sites_in(symbol.address.saturating_sub(8)..end) {
+                for address in relocated_bytes(site, big_endian) {
+                    if let Some(index) = address.checked_sub(symbol.address).filter(|&index| index < length) {
+                        body[index as usize] = None;
+                    }
+                }
+            }
+            // A field left unapplied holds the object's bytes, which a linked copy does not.
+            for &address in &relocated.unapplied {
+                for byte in address..address.saturating_add(4) {
+                    if let Some(index) = byte.checked_sub(symbol.address).filter(|&index| index < length) {
+                        body[index as usize] = None;
+                    }
+                }
+            }
+            lines.extend(rampage_signatures::pat_record(&symbol.name, &body));
+        }
+    }
+    functions.len()
+}
+
+/// Builds a signature database from every relocatable object in the static library at `path` (an `ar` archive,
+/// an MSVC `.lib`, or the `arch` slice of a universal library): masked-hash signatures as for a binary, plus
+/// relocation-exact patterns, which leave out exactly the bytes a relocation patched, where the hashes can only
+/// mask what an instruction's form says may move (MIPS `%hi`/`%lo` pairs they keep). Members are read in archive
+/// order and the result is the same for the same library.
+pub fn build_library_signatures(
+    path: &std::path::Path,
+    arch: Option<rampage_arch::Arch>,
+) -> Result<LibrarySignatures, ApiError> {
+    let load = |source| ApiError::Load { path: path.to_owned(), source };
+    let data = rampage_loaders::ar::map(path).map_err(load)?;
+    let library = rampage_loaders::ar::read_library(&data, arch).map_err(load)?;
+    drop(data);
+    let mut report = LibrarySignatureReport {
+        arch: None,
+        members: library.archive.members.len(),
+        members_used: 0,
+        skipped: BTreeMap::new(),
+        functions: 0,
+        signatures: 0,
+        callee_keys: 0,
+        pat_records: 0,
+        warnings: Vec::new(),
+    };
+    let mut skip = |reason: &str| *report.skipped.entry(reason.to_owned()).or_insert(0) += 1;
+    let mut database: Option<SignatureDb> = None;
+    let mut lines = Vec::new();
+    let mut functions = 0;
+    let wanted = arch.or(library.arch);
+    for member in library.archive.members.iter().take(MAX_LIBRARY_MEMBERS) {
+        let binary = match Binary::open_member(path, member.clone(), wanted) {
+            Ok(binary) => binary,
+            Err(error) => {
+                let text = error.to_string();
+                skip(if text.contains("short import object") {
+                    "short import object"
+                } else if text.contains("slice; the file contains") {
+                    "another architecture"
+                } else {
+                    "not a loadable object"
+                });
+                continue;
+            }
+        };
+        if binary.relocated().is_none() {
+            skip("not a relocatable object");
+            continue;
+        }
+        if database.as_ref().is_some_and(|database| database.arch() != binary.arch) {
+            skip("another architecture");
+            continue;
+        }
+        let project = Project::new(binary);
+        let extents: BTreeMap<u64, u64> = match project.analysis() {
+            Ok(analysis) => {
+                analysis.program.functions.iter().map(|function| (function.address, function.end())).collect()
+            }
+            Err(_) => BTreeMap::new(),
+        };
+        match &mut database {
+            Some(database) => database
+                .try_extend_from_binary_with_extents(&project.binary, &extents)
+                .map_err(|error| ApiError::Invalid(error.to_string()))?,
+            None => database = Some(SignatureDb::from_binary_with_extents(&project.binary, &extents)),
+        }
+        functions += object_patterns(&project.binary, &extents, &mut lines);
+        report.members_used += 1;
+    }
+    if library.archive.members.len() > MAX_LIBRARY_MEMBERS {
+        report.warnings.push(format!(
+            "{} members past the first {MAX_LIBRARY_MEMBERS} were left out",
+            library.archive.members.len() - MAX_LIBRARY_MEMBERS
+        ));
+    }
+    let Some(mut database) = database else {
+        return Err(ApiError::Invalid(format!(
+            "no member of {} is a relocatable object rampage loads, so no signatures were built ({} members: {})",
+            path.display(),
+            report.members,
+            report.skipped.iter().map(|(reason, count)| format!("{count} {reason}")).collect::<Vec<_>>().join(", ")
+        )));
+    };
+    // Patterns within the PAT namespace's own bounds, in archive order.
+    let mut text = String::new();
+    let mut kept = 0;
+    for line in &lines {
+        if text.len() + line.len() + 8 > rampage_signatures::MAX_PAT_BYTES
+            || kept + 2 > rampage_signatures::MAX_PAT_LINES
+        {
+            report
+                .warnings
+                .push(format!("{} pattern records past the PAT size bounds were left out", lines.len() - kept));
+            break;
+        }
+        text.push_str(line);
+        text.push('\n');
+        kept += 1;
+    }
+    if kept > 0 {
+        text.push_str("---\n");
+        match rampage_signatures::PatternDb::parse(database.arch(), text.as_bytes()) {
+            Ok(patterns) => {
+                if let Err(error) = database.set_patterns(Some(patterns)) {
+                    report.warnings.push(format!("pattern records not kept: {error}"));
+                }
+            }
+            Err(error) => report.warnings.push(format!("pattern records not kept: {error}")),
+        }
+    }
+    report.arch = Some(database.arch().to_string());
+    report.functions = functions;
+    report.signatures = database.len();
+    report.callee_keys = database.callee_keys();
+    report.pat_records = database.pat_records();
+    Ok(LibrarySignatures { database, report })
+}

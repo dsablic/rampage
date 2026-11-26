@@ -613,6 +613,29 @@ const SESSION_PATH_FILE_TOOLS: [&str; 15] = [
 ];
 
 /// A file tool's listed schema: `path` is optional on the tools where it defaults to the session's target.
+/// `build_signatures` on a static library: every relocatable member's functions, written to `output`.
+fn library_signatures(path: &Path, arguments: &Map<String, Value>) -> Result<Value, String> {
+    if arguments.get("fuzzy_request").is_some_and(|value| !value.is_null()) {
+        return Err("fuzzy_request builds from a binary, not a static library; open one member as the path".to_owned());
+    }
+    for key in ["image_offset", "image_length"] {
+        if arguments.get(key).is_some_and(|value| !value.is_null()) {
+            return Err(format!("`{key}` selects an image in a binary; a static library is read whole"));
+        }
+    }
+    let output = arguments.get("output").and_then(Value::as_str).ok_or("`output` is required")?;
+    let arch = match arguments.get("arch") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(arch)) => Some(arch.parse::<Arch>()?),
+        Some(_) => return Err("`arch` must be an architecture string or null".to_owned()),
+    };
+    let built = rampage_api::build_library_signatures(path, arch).map_err(|error| error.to_string())?;
+    std::fs::write(output, built.database.to_json()).map_err(|error| format!("cannot write {output}: {error}"))?;
+    let mut report = serde_json::to_value(&built.report).map_err(|error| error.to_string())?;
+    report["output"] = Value::String(output.to_owned());
+    Ok(report)
+}
+
 fn file_tool_schema(tool: &FileTool) -> Map<String, Value> {
     let mut schema = tool.input_schema.as_object().cloned().unwrap_or_default();
     if SESSION_PATH_FILE_TOOLS.contains(&tool.name)
@@ -1141,6 +1164,17 @@ impl RampageServer {
             && let Some(result) = rampage_api::privacy_surface_input(Path::new(path), &Value::Object(arguments.clone()))
         {
             return match result {
+                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
+                Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            };
+        }
+        // A static library is no binary: build_signatures reads its objects, with relocation-exact patterns.
+        if name == "build_signatures"
+            && raw.is_none()
+            && let Some(path) = arguments.get("path").and_then(Value::as_str)
+            && rampage_api::is_static_archive(Path::new(path))
+        {
+            return match library_signatures(Path::new(path), &arguments) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };
