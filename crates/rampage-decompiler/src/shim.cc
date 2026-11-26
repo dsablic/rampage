@@ -316,6 +316,9 @@ struct Handle {
     std::set<uintb> effectsApplied;
     std::map<uintb, std::vector<EffectRecord>> effectOverrides;
     std::map<uintb, FlowFacts> flowFacts;
+    // Direct jumps that are calls to another function whose code is not in the image (a relocatable object's
+    // externs): each becomes a call followed by a return, rather than flow into the target.
+    std::set<uintb> tailCalls;
     // Callee prototypes: committed from each callee's own decompilation, bottom-up, before its callers'.
     bool deriveCalleePrototypes = false;
     std::set<uintb> underivablePrototypes;
@@ -2318,6 +2321,19 @@ const char *rampage_decomp_noreturn(void *h, uint64_t addr, uint8_t indirect) no
     });
 }
 
+// Marks the direct jump at `site` as a call to its target followed by a return (a tail call), for targets with no
+// code in the image to flow into.
+const char *rampage_decomp_tail_call(void *h, uint64_t site) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        if (site > handle->arch->getDefaultCodeSpace()->getHighest())
+            throw LowlevelError("Tail call site exceeds the code space");
+        if (handle->tailCalls.size() >= 65536) throw LowlevelError("Tail call sites exceed 65536");
+        nativeMutation = true;
+        handle->tailCalls.insert(site);
+    });
+}
+
 // Names the global at a data address that has no typed symbol, without locking its type or size.
 const char *rampage_decomp_data_name(void *h, uint64_t addr, const char *name) noexcept {
     Handle *handle = static_cast<Handle *>(h);
@@ -2783,6 +2799,8 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         // The entry is not a lower flow bound: cold blocks and tail targets can precede it.
         Address low(arch->getDefaultCodeSpace(), 0);
         Address high(arch->getDefaultCodeSpace(), arch->getDefaultCodeSpace()->getHighest());
+        for (uintb site : handle->tailCalls)
+            fd->getOverride().insertFlowOverride(Address(arch->getDefaultCodeSpace(), site), Override::CALL_RETURN);
         fd->followFlow(low, high);
         if (handle->inferCalleeEffects) inferCalleeEffects(handle, fd);
         CalleeView view;

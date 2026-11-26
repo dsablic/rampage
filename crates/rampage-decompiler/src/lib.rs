@@ -334,6 +334,7 @@ unsafe extern "C" {
     ) -> *const c_char;
     fn rampage_decomp_prototype(handle: *mut Opaque, addr: u64, indirect: u8, text: *const c_char) -> *const c_char;
     fn rampage_decomp_noreturn(handle: *mut Opaque, addr: u64, indirect: u8) -> *const c_char;
+    fn rampage_decomp_tail_call(handle: *mut Opaque, site: u64) -> *const c_char;
     fn rampage_decomp_data_name(handle: *mut Opaque, addr: u64, name: *const c_char) -> *const c_char;
     fn rampage_decomp_data_region(handle: *mut Opaque, first: u64, last: u64, prefix: *const c_char) -> *const c_char;
     fn rampage_decomp_volatile_range(handle: *mut Opaque, first: u64, last: u64) -> *const c_char;
@@ -629,6 +630,15 @@ impl Decompiler {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid serialized handle and a checked address; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_noreturn(self.handle, address, u8::from(indirect)) })
+    }
+
+    /// Treats the direct jump at `site` as a tail call (a call to its target, then a return) instead of flow into
+    /// the target, for a target with no code in the image, such as a relocatable object's extern.
+    pub fn add_tail_call(&mut self, site: u64) -> Result<(), Error> {
+        self.valid_address(site)?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and a checked address; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_tail_call(self.handle, site) })
     }
 
     /// Names the global at a data address that has no typed symbol, so its uses print `name` rather than Ghidra's

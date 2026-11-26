@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -389,6 +389,10 @@ pub enum WorkerOperation {
     NoReturn {
         address: u64,
         indirect: bool,
+    },
+    /// Treat the direct jump at `site` as a tail call (see `Decompiler::add_tail_call`).
+    TailCall {
+        site: u64,
     },
     /// Name the untyped global at a data address (see `Decompiler::set_data_name`).
     DataName {
@@ -1352,6 +1356,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 }
             }
             WorkerOperation::NoReturn { address, indirect } => engine.set_noreturn(address, indirect),
+            WorkerOperation::TailCall { site } => engine.add_tail_call(site),
             WorkerOperation::DataName { address, name } => engine.set_data_name(address, &name),
             WorkerOperation::DataRegion { first, last, prefix } => engine.add_data_region(first, last, &prefix),
             WorkerOperation::VolatileRange { first, last } => engine.add_volatile_range(first, last),

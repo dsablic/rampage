@@ -103,6 +103,22 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
         })
         .collect();
     identities.extend(stubs.iter().map(|(&address, name)| (address, name.clone())));
+    // A relocatable object's externs are functions of their own: calls and tail jumps to their slots are calls
+    // to the named import, never code to follow.
+    if let Some(relocated) = binary.relocated() {
+        let externs: BTreeMap<u64, &str> = relocated
+            .externs
+            .iter()
+            .filter(|item| item.function)
+            .map(|item| (item.address, item.name.as_str()))
+            .collect();
+        identities.extend(externs.iter().map(|(&address, &name)| (address, name.to_owned())));
+        let jumps =
+            analysis.program.xrefs.iter().filter(|xref| xref.kind == rampage_analysis::discover::XrefKind::Jump);
+        let sites: std::collections::BTreeSet<u64> =
+            jumps.filter(|xref| externs.contains_key(&xref.to)).map(|xref| xref.from).collect();
+        operations.extend(sites.into_iter().map(|site| WorkerOperation::TailCall { site }));
+    }
     for (&address, identity) in &identities {
         let display = project.function_name_in(annotations, address);
         operations.push(WorkerOperation::Symbol { address, name: display });
@@ -147,6 +163,11 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
     operations.extend(got_functions);
     operations.extend(cortex_m_operations(project));
     operations.extend(mips_pic_operations(&project.binary));
+    // A relocatable object's read-only data holds its link-time values once relocations are applied (its GOT, literal
+    // pools and pointer tables point at the layout's addresses), as a statically linked image's does: it folds.
+    if project.binary.relocated().is_some() {
+        operations.push(WorkerOperation::FoldReadOnly { enabled: true });
+    }
     operations.extend(xtensa_operations(&project.binary));
     operations.extend(virtual_tables(project, annotations));
     Ok(operations)
@@ -198,7 +219,9 @@ fn mips_got_functions(
     imports: &std::collections::BTreeSet<u64>,
 ) -> Vec<WorkerOperation> {
     let binary = &project.binary;
-    if !matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
+    // A relocatable object's synthetic GOT entries are bound by the loader that filled them, on every architecture.
+    let relocatable = binary.relocated().is_some();
+    if !relocatable && !matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
         return Vec::new();
     }
     let Some(got) = binary.target().got else { return Vec::new() };
@@ -207,7 +230,7 @@ fn mips_got_functions(
         .got_functions
         .iter()
         .filter(|entry| !imports.contains(&entry.slot) && functions.contains_key(&entry.address))
-        .filter(|entry| got.entry(entry.slot, width) == Some(entry.address))
+        .filter(|entry| relocatable || got.entry(entry.slot, width) == Some(entry.address))
         .map(|entry| WorkerOperation::Import {
             slot: entry.slot,
             target: Some(entry.address),
@@ -836,6 +859,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
                 .map_err(|error| failure(address, "apply signature", error))?,
             WorkerOperation::NoReturn { address, indirect } => {
                 engine.set_noreturn(address, indirect).map_err(|error| failure(address, "mark noreturn", error))?
+            }
+            WorkerOperation::TailCall { site } => {
+                engine.add_tail_call(site).map_err(|error| failure(site, "mark tail call", error))?
             }
             WorkerOperation::DataName { address, name } => {
                 engine.set_data_name(address, &name).map_err(|error| failure(address, "name data", error))?

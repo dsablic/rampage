@@ -169,6 +169,9 @@ pub struct Binary {
     /// The MIPS16e code ranges its symbols mark ([`Binary::mips16_ranges`]).
     #[serde(skip)]
     mips16_ranges: Vec<Range<u64>>,
+    /// A relocatable object's layout: the loaded bytes [`Binary::read`] serves, with relocations applied.
+    #[serde(skip)]
+    relocated: Option<Box<crate::relocatable::Relocated>>,
 }
 
 #[derive(Debug)]
@@ -337,6 +340,7 @@ impl Binary {
             mips16_ranges: Vec::new(),
             raw: Some(raw),
             image: 0..len,
+            relocated: None,
         };
         // An ESP image states its chip; other Raw Xtensa code is judged by its prologues.
         if arch == Arch::Xtensa && binary.raw.as_ref().is_some_and(|raw| raw.esp().is_none()) {
@@ -617,6 +621,7 @@ impl Binary {
             mips16: false,
             mips16_ranges: Vec::new(),
             raw: None,
+            relocated: None,
         })
     }
 
@@ -933,8 +938,18 @@ impl Binary {
         let mips16 = arch == Arch::Mips && compressed_isa == Some("MIPS16e");
         // ARM marks Thumb code addresses with the low bit, MIPS its MIPS16e ones; code lives at the even address.
         let code_address = |address: u64| if arch == Arch::Arm || mips16 { address & !1 } else { address };
+        // A relocatable object is laid out at synthetic addresses with its relocations applied.
+        let relocated = crate::relocatable::load(&parsed, image_bytes, arch, !parsed.is_little_endian());
+        // Where a symbol of the file lies: its value, or for a relocatable object its placed address (`None` for one
+        // in a section that is not loaded).
+        let place = |symbol: &object::Symbol| -> Option<u64> {
+            match &relocated {
+                Some(relocated) => relocated.symbol_address(symbol),
+                None => Some(symbol.address()),
+            }
+        };
 
-        let segments: Vec<Segment> = parsed
+        let mut segments: Vec<Segment> = parsed
             .segments()
             .enumerate()
             .map(|(index, segment)| {
@@ -950,14 +965,18 @@ impl Binary {
                 }
             })
             .collect();
+        if let Some(relocated) = &relocated {
+            segments.extend(relocated.segments.iter().cloned());
+        }
 
-        let sections: Vec<Section> = parsed
+        let mut sections: Vec<Section> = parsed
             .sections()
             .map(|section| {
                 let file_range = section.file_range();
+                let placed = relocated.as_ref().and_then(|relocated| relocated.section_address(section.index()));
                 Section {
                     name: section.name().unwrap_or_default().to_owned(),
-                    address: section.address(),
+                    address: placed.unwrap_or_else(|| section.address()),
                     size: section.size(),
                     kind: section_kind_of(section.kind()),
                     file_offset: file_range.map(|(offset, _)| offset),
@@ -965,6 +984,10 @@ impl Binary {
                 }
             })
             .collect();
+        // The segments a relocatable object's layout adds are sections too, so an address in them names one.
+        if let Some(relocated) = &relocated {
+            sections.extend(relocated.synthetic_sections());
+        }
 
         let mut symbols: Vec<Symbol> = parsed
             .symbols()
@@ -976,9 +999,10 @@ impl Binary {
                     return None;
                 }
                 let code = symbol.kind() == object::SymbolKind::Text;
+                let address = place(&symbol)?;
                 Some(Symbol {
                     name: name.to_owned(),
-                    address: if code { code_address(symbol.address()) } else { symbol.address() },
+                    address: if code { code_address(address) } else { address },
                     size: symbol.size(),
                     kind: symbol_kind_of(symbol.kind()),
                 })
@@ -1006,6 +1030,14 @@ impl Binary {
                 }
             },
         ));
+        if let Some(relocated) = &relocated {
+            symbols.extend(relocated.externs.iter().map(|item| Symbol {
+                name: item.name.clone(),
+                address: item.address,
+                size: 0,
+                kind: if item.function { SymbolKind::Function } else { SymbolKind::Data },
+            }));
+        }
         symbols.sort_by(|a, b| (a.address, &a.name).cmp(&(b.address, &b.name)));
         symbols.dedup();
 
@@ -1049,6 +1081,21 @@ impl Binary {
                 Vec::new()
             });
 
+        if let Some(relocated) = &relocated {
+            // Undefined symbols are what an object imports; its global definitions are what it exports.
+            imports.extend(relocated.externs.iter().map(|item| Import { library: None, name: item.name.clone() }));
+            let executable = |address| segments.iter().any(|s: &Segment| s.perms.execute && s.contains(address));
+            exports = parsed
+                .symbols()
+                .filter(|symbol| symbol.is_definition() && symbol.is_global())
+                .filter_map(|symbol| {
+                    let name = symbol.name().ok().filter(|name| !name.is_empty())?;
+                    let address = place(&symbol)?;
+                    let address = if executable(code_address(address)) { code_address(address) } else { address };
+                    Some(Export { name: name.to_owned(), address })
+                })
+                .collect();
+        }
         if sectionless && let Some(dynamic) = &dynamic {
             let executable = |address| segments.iter().any(|s: &Segment| s.perms.execute && s.contains(address));
             imports.extend(
@@ -1096,7 +1143,7 @@ impl Binary {
         let marked_starts: Vec<u64> =
             macho_starts.iter().copied().chain(dynamic_functions.map(marked)).chain(arm_constructors).collect();
         let thumb = match arch {
-            Arch::Arm => thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts),
+            Arch::Arm => thumb_ranges(&parsed, &place, raw_entry, &segments, &sections, &marked_starts),
             _ => Vec::new(),
         };
         // A MIPS16e pointer with no size names only where a function starts: its range is its first instruction, and
@@ -1105,7 +1152,7 @@ impl Binary {
             let unsized_starts = marked_constructors.iter().chain(&pointer_tables).filter(|&&pointer| pointer & 1 == 1);
             let starts = unsized_starts.map(|&pointer| (pointer & !1)..(pointer & !1).saturating_add(2));
             merged(
-                thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts)
+                thumb_ranges(&parsed, &place, raw_entry, &segments, &sections, &marked_starts)
                     .into_iter()
                     .chain(starts)
                     .collect(),
@@ -1136,11 +1183,19 @@ impl Binary {
         if let Some(dynamic) = &mut dynamic {
             dynamic.mips_got = mips_got;
         }
-        let import_slots = crate::slots::collect(&parsed, image_bytes, dynamic.as_ref(), &mut warnings);
+        let mut import_slots = crate::slots::collect(&parsed, image_bytes, dynamic.as_ref(), &mut warnings);
+        if let Some(relocated) = &relocated {
+            import_slots.extend(relocated.got_imports());
+            import_slots.sort_by_key(|slot| slot.address);
+            warnings.extend(relocated.warnings.iter().cloned());
+        }
         let rebases = crate::slots::chained_rebases(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
         let elf_m_profile = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut warnings);
-        let got_functions = crate::slots::mips_got_functions(&parsed, dynamic.as_ref());
+        let mut got_functions = crate::slots::mips_got_functions(&parsed, dynamic.as_ref());
+        if let Some(relocated) = &relocated {
+            got_functions.extend(relocated.got_functions.iter().cloned());
+        }
         // Constructors and destructors run from the dynamic section, so nothing else may call them.
         let constructors = dynamic.as_ref().map_or(&[][..], |dynamic| dynamic.constructors.as_slice());
         // MIPS32 code is 4-byte aligned and MIPS16e code pointers are odd; anything else is not a function.
@@ -1159,6 +1214,7 @@ impl Binary {
             None
         });
         drop(parsed);
+        let relocated = relocated.map(Box::new);
 
         let mut binary = Self {
             format,
@@ -1204,6 +1260,7 @@ impl Binary {
             mips16_ranges,
             raw: None,
             image,
+            relocated,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
         if arch == Arch::Xtensa && xtensa_abi_note.is_none() {
@@ -1410,7 +1467,20 @@ impl Binary {
         }
         let start = usize::try_from(segment.file_offset.checked_add(offset)?).ok()?;
         let end = start.checked_add(usize::try_from(len).ok()?)?;
-        self.image_bytes().get(start..end)
+        self.loaded_bytes().get(start..end)
+    }
+
+    /// The bytes segments map: the image's, or a relocatable object's loaded copy with its relocations applied.
+    fn loaded_bytes(&self) -> &[u8] {
+        match &self.relocated {
+            Some(relocated) => &relocated.bytes,
+            None => self.image_bytes(),
+        }
+    }
+
+    /// A relocatable object's layout: its relocation sites, externs and the relocation types left unapplied.
+    pub fn relocated(&self) -> Option<&crate::relocatable::Relocated> {
+        self.relocated.as_deref()
     }
 
     /// Reads a pointer only from readable, non-writable memory; captures do not imply future load invariance.
@@ -1451,7 +1521,7 @@ impl Binary {
         let offset = address - segment.address;
         let in_segment = segment.file_size.checked_sub(offset)?;
         let file_position = segment.file_offset.checked_add(offset)?;
-        let in_file = (self.image.len() as u64).checked_sub(file_position)?;
+        let in_file = (self.loaded_bytes().len() as u64).checked_sub(file_position)?;
         self.read(address, in_segment.min(in_file)).filter(|bytes| !bytes.is_empty())
     }
 
@@ -2192,6 +2262,7 @@ fn elf_m_profile(parsed: &object::File, warnings: &mut Vec<String>) -> bool {
 /// Without any of these, a Thumb entry point makes all code Thumb.
 fn thumb_ranges(
     parsed: &object::File,
+    place: &dyn Fn(&object::Symbol) -> Option<u64>,
     entry: Option<u64>,
     segments: &[Segment],
     sections: &[Section],
@@ -2208,7 +2279,7 @@ fn thumb_ranges(
     let mut ranges = Vec::new();
     let mut mapping: Vec<(u64, char)> = parsed
         .symbols()
-        .filter_map(|symbol| Some((symbol.address(), arm_mapping_symbol(symbol.name().ok()?)?)))
+        .filter_map(|symbol| Some((place(&symbol)?, arm_mapping_symbol(symbol.name().ok()?)?)))
         .collect();
     mapping.sort_unstable();
     for (index, &(address, kind)) in mapping.iter().enumerate() {
@@ -2229,7 +2300,10 @@ fn thumb_ranges(
         .symbols()
         .chain(parsed.dynamic_symbols())
         .filter(|symbol| symbol.kind() == object::SymbolKind::Text)
-        .map(|symbol| (symbol.address() & !1, symbol.size(), symbol.address() & 1 == 1 || thumb_def(symbol.flags())))
+        .filter_map(|symbol| {
+            let address = place(&symbol)?;
+            Some((address & !1, symbol.size(), address & 1 == 1 || thumb_def(symbol.flags())))
+        })
         .chain(function_starts.iter().map(|&start| (start & !1, 0, start & 1 == 1)))
         .collect();
     functions.sort_unstable();

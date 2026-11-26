@@ -17,6 +17,7 @@ pub mod raw_pointers;
 pub mod raw_records;
 pub mod raw_scatter;
 pub mod raw_vectors;
+pub mod relocatable;
 mod slots;
 pub use slots::GotFunction;
 pub mod snapshot;
