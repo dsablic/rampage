@@ -510,13 +510,15 @@ fixture for each item. Start with 0.1 and 0.2.
       blocks over 1 KiB without a shared base split into windows, MCP cancel flag for ordinary tools) 0.4 **A peripheral map without an SVD.** Identifying which code configures which peripheral (here, serial
       audio) meant histogramming address-like words, and data tables swamped the signal. Build the map from
       load/store instructions only: the bases and offsets each function touches, by function and by block.
-- [ ] 0.5 **Vector tables:**
+- [x] (2026-11-26, tables the program fills in RAM are read at VTOR install; `entry` hint on refusal. The private
+      image's 0x1000000 table has no bytes in the image and is not filled during the startup follow: it stays refused,
+      with a clearer reason) 0.5 **Vector tables:**
       - A table installed through VTOR just below a mapped scatter copy (VTOR 0x1000000, copy at 0x1000300) is
         refused, so the handlers it names are never seeded. Accept a table that overlaps a mapped region or
         backed bytes.
       - When an image starts with code rather than a vector table, the check refuses every word without saying
         to set `entry` (and drop vector seeding). Add that hint.
-- [ ] 0.6 **Decompiler call names:** calls render as `func_0x…` while everything else uses `sub_…`. Use one
+- [x] (2026-11-26, `sub_<hex>` in C and `calls[].name`; DECOMPILE_CACHE_VERSION 2) 0.6 **Decompiler call names:** calls render as `func_0x…` while everything else uses `sub_…`. Use one
       naming scheme so names round-trip between tools.
 - [x] (2026-11-26, MCP tool names route to their CLI command; unknown subcommands suggest one) 0.7 **CLI and docs naming:** the docs say `binary_info`, the CLI says `binary inspect`. Add aliases for
       the MCP tool names, or an error that suggests the right subcommand.
