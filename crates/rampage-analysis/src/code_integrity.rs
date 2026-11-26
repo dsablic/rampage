@@ -330,11 +330,68 @@ impl<M: Memory> Memory for ExcludingMemory<'_, M> {
         self.inner.may_point_to_code(address)
     }
 
+    fn code_pointer_mode(&self, address: u64) -> Option<bool> {
+        self.inner.code_pointer_mode(address)
+    }
+
+    fn holds_unmapped_data(&self, address: u64) -> bool {
+        self.inner.holds_unmapped_data(address)
+    }
+
     fn read_pointer(&self, address: u64, size: u8) -> Option<u64> {
         self.inner.read_pointer(address, size)
     }
 
     fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
         self.inner.read_constant(address, size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discover::{XrefKind, discover};
+    use crate::memory::FlatMemory;
+
+    /// Flat Thumb code that, like a Raw Cortex-M image, keeps unmapped SRAM at 0x20000000.
+    struct WithSram(FlatMemory);
+
+    impl Memory for WithSram {
+        fn code_from(&self, address: u64) -> Option<&[u8]> {
+            self.0.code_from(address)
+        }
+        fn is_mapped(&self, address: u64) -> bool {
+            self.0.is_mapped(address)
+        }
+        fn is_executable(&self, address: u64) -> bool {
+            self.0.is_executable(address)
+        }
+        fn immediates_may_be_addresses(&self) -> bool {
+            true
+        }
+        fn code_address(&self, address: u64) -> u64 {
+            address & !1
+        }
+        fn code_pointer_mode(&self, address: u64) -> Option<bool> {
+            Some(address & 1 == 1)
+        }
+        fn holds_unmapped_data(&self, address: u64) -> bool {
+            (0x2000_0000..0x2001_0000).contains(&address)
+        }
+    }
+
+    #[test]
+    fn an_excluding_view_keeps_field_references_into_unmapped_ram_and_code_pointer_modes() {
+        // ldr r1, [pc, #4] (0x20000100); ldrb r0, [r1, #11]; bx lr; nop; .word 0x20000100
+        let bytes = [0x01, 0x49, 0xc8, 0x7a, 0x70, 0x47, 0x00, 0xbf, 0x00, 0x01, 0x00, 0x20];
+        let inner = WithSram(FlatMemory { base: 0x0800_0000, bytes: bytes.to_vec() });
+        let excluded = vec![Range { start: 0x0900_0000, end: 0x0900_0100 }];
+        let memory = ExcludingMemory { inner: &inner, excluded: &excluded };
+        assert_eq!(memory.code_pointer_mode(0x0800_0001), Some(true));
+        let target = rampage_arch::Target { m_profile: true, ..rampage_arch::Target::new(rampage_arch::Arch::Arm) };
+        let program = discover(&memory, || rampage_arch::decoder(&target).unwrap(), &[0x0800_0000]);
+        assert_eq!(program.xrefs_to(0x2000_010b).iter().map(|xref| xref.kind).collect::<Vec<_>>(), [XrefKind::Data]);
+        let field = program.field_ref(0x0800_0002, 0x2000_010b).unwrap();
+        assert_eq!((field.base_site, field.base, field.write, field.width), (0x0800_0000, 0x2000_0100, false, 1));
     }
 }

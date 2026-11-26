@@ -588,9 +588,9 @@ fn thumb_memory_offsets_scale_by_the_access_size() {
         assert_eq!(results[1].1, Some(0x100 + offset), "{hex}");
     }
     for hex in ["0398", "0390"] {
-        // movw r2, #0x100; mov sp, r2; access through sp
+        // movw r2, #0x100; mov sp, r2; access through sp: SP is never known, so a stack slot is no address.
         let results = run(thumb(), &format!("40f200129546{hex}"), &[4, 2, 2]);
-        assert_eq!(results[2].1, Some(0x10c), "{hex}");
+        assert_eq!(results[2].1, None, "{hex}");
     }
 }
 
@@ -844,4 +844,79 @@ fn loads_and_stores_through_a_pool_base_name_the_base_and_its_origin() {
     // RISC-V: auipc a0, 1; addi a0, a0, 16; ld a1, 8(a0).
     let results = base_accesses(Target::new(Arch::Riscv64), "171500001305050183358500", &[4, 4, 4]);
     assert_eq!(results[2], Some(BaseAccess { site: AT + 4, base: 0x2010, write: false, width: 8 }));
+}
+
+/// A load from the pool base 0x20000100 that the literal-pool load at `site` set, `width` bytes.
+fn pool_read(site: u64, width: u8) -> Option<rampage_arch::BaseAccess> {
+    Some(rampage_arch::BaseAccess { site, base: 0x2000_0100, write: false, width })
+}
+
+#[test]
+fn writeback_and_post_indexed_accesses_through_a_base() {
+    // T32: ldr r1, =0x20000100; ldr r0, [r1, #4]! (accesses base+4, then the base moves); ldrb r2, [r1, #11]
+    let results = base_accesses(thumb(), "014951f8040dca7a00010020", &[2, 4, 2]);
+    assert_eq!(results, [None, pool_read(AT, 4), None]);
+    // T32 post-indexed: ldr r0, [r1], #4 reads the base itself, not base+4, and moves it.
+    assert_eq!(base_accesses(thumb(), "014951f8040bca7a00010020", &[2, 4, 2]), [None, None, None]);
+    // A32: ldr r1, [pc, #4]; ldr r0, [r1, #4]!; ldrb r2, [r1, #11]; .word 0x20000100
+    let results = base_accesses(Target::new(Arch::Arm), "04109fe50400b1e50b20d1e500010020", &[4, 4, 4]);
+    assert_eq!(results, [None, pool_read(AT, 4), None]);
+}
+
+#[test]
+fn a_call_keeps_callee_saved_bases_and_forgets_the_others() {
+    // ldr r4, =0x20000100; ldr r0, =0x20000200; bl; ldrb r2, [r4, #11]; ldrb r2, [r0, #11]
+    let code = "024c034800f000f8e27ac27a0001002000020020";
+    let results = base_accesses(thumb(), code, &[2, 2, 4, 2, 2]);
+    assert_eq!(results[3..], [pool_read(AT, 1), None]);
+}
+
+#[test]
+fn bases_a_conditional_load_or_a_register_list_sets_are_not_known() {
+    // it eq; ldreq r1, =0x20000100; ldrb r0, [r1, #11]
+    assert_eq!(base_accesses(thumb(), "08bf0149c87a00bf00010020", &[2, 2, 2])[2], None);
+    // ldr r1, =0x20000100; pop {r1} / ldm r2!, {r1}; ldrb r0, [r1, #11]
+    for list in ["02bc", "02ca"] {
+        let results = base_accesses(thumb(), &format!("0149{list}c87a00bf00010020"), &[2, 2, 2]);
+        assert_eq!(results[2], None, "{list}");
+    }
+}
+
+#[test]
+fn negative_offsets_reach_below_the_base() {
+    // T32: ldr r1, =0x20000100; ldrb.w r0, [r1, #-4]
+    let code = "014911f8040c00bf00010020";
+    assert_eq!(base_accesses(thumb(), code, &[2, 4])[1], pool_read(AT, 1));
+    assert_eq!(accesses(thumb(), code, &[2, 4])[1], (Some(0x2000_00fc), true));
+    // A32: ldr r1, [pc, #0]; ldrb r0, [r1, #-4] (U=0); .word 0x20000100
+    let code = "00109fe5040051e500010020";
+    assert_eq!(base_accesses(Target::new(Arch::Arm), code, &[4, 4])[1], pool_read(AT, 1));
+    assert_eq!(accesses(Target::new(Arch::Arm), code, &[4, 4])[1], (Some(0x2000_00fc), true));
+}
+
+#[test]
+fn doubleword_and_exclusive_accesses_have_their_widths() {
+    use rampage_arch::BaseAccess;
+    // ldr r1, =0x20000100; ldrd r2, r3, [r1, #8]; strd r2, r3, [r1, #8]; ldrex r0, [r1, #4]; strex r2, r0, [r1, #4]
+    let code = "0449d1e90223c1e9022351e8010f41e8010200bf00010020";
+    let results = base_accesses(thumb(), code, &[2, 4, 4, 4, 4]);
+    let at = |write, width| Some(BaseAccess { site: AT, base: 0x2000_0100, write, width });
+    assert_eq!(results[1..], [at(false, 8), at(true, 8), at(false, 4), at(true, 4)]);
+    let addresses: Vec<Option<u64>> =
+        accesses(thumb(), code, &[2, 4, 4, 4, 4])[1..].iter().map(|(address, _)| *address).collect();
+    assert_eq!(addresses, [Some(0x2000_0108), Some(0x2000_0108), Some(0x2000_0104), Some(0x2000_0104)]);
+}
+
+#[test]
+fn the_stack_pointer_is_never_a_base() {
+    // ldr r0, =0x20001000; mov sp, r0; mov r1, sp; ldrb r2, [r1, #11]; ldrb r2, [sp, #12] (T32)
+    let code = "024885466946ca7a9df80c2000100020";
+    assert_eq!(base_accesses(thumb(), code, &[2, 2, 2, 2, 4]), [None, None, None, None, None]);
+    assert_eq!(accesses(thumb(), code, &[2, 2, 2, 2, 4])[3..], [(None, false), (None, false)]);
+}
+
+#[test]
+fn thumb_sums_of_plain_constants_are_not_kept() {
+    // movs r1, #64; adds r1, #8; ldrb r0, [r1, #3]: no base, and no address either.
+    assert_eq!(accesses(thumb(), "40210831c878", &[2, 2, 2])[2], (None, false));
 }

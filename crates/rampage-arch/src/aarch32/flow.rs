@@ -192,23 +192,35 @@ struct Found {
 }
 
 impl Registers {
-    /// What holds on both of two paths that join: the values they agree on.
+    /// What holds on both of two paths that join: the values they agree on. Two paths that load the same base
+    /// (an `if`/`else` that each `ldr r4, =X`) agree on it; its origin is then the lower of their sites.
     pub(crate) fn meet(&self, other: &Self) -> Self {
         let mut values = self.values;
         for (value, other) in values.iter_mut().zip(other.values) {
-            if *value != other {
-                *value = None;
-            }
+            *value = match (*value, other) {
+                (Some(mine), Some(theirs)) if (mine.value, mine.address) == (theirs.value, theirs.address) => {
+                    let site = mine.site.zip(theirs.site).map(|(mine, theirs)| mine.min(theirs));
+                    Some(Value { site, ..mine })
+                }
+                _ => None,
+            };
         }
         Registers { values }
+    }
+
+    /// Whether any register holds a base: a whole address with the site that set it.
+    pub(crate) fn has_bases(&self) -> bool {
+        self.values.iter().flatten().any(|value| value.site.is_some())
     }
 
     fn get(&self, register: u64) -> Option<Value> {
         self.values[register as usize & 15]
     }
 
+    /// Records `register`'s new value. SP is never known: a stack address is no structure at a fixed address.
     fn set(&mut self, register: u64, value: Option<Value>) {
         if register < 15 {
+            let value = value.filter(|_| register != SP);
             self.values[register as usize] = value.map(|value| Value { value: value.value & 0xffff_ffff, ..value });
         }
     }
@@ -226,16 +238,16 @@ pub struct Aarch32Disassembler {
     sequential_mode: Option<(u64, bool)>,
     /// The base-relative access the instruction last decoded made, if any.
     base_access: Option<BaseAccess>,
-    /// The registers known after the instruction last decoded, on the paths it continues on, before a transfer
-    /// that does not fall through forgets them for the next instruction.
-    exit_registers: Registers,
+    /// When the instruction last decoded does not fall through: the registers known after it, which the next
+    /// instruction decoded does not see. `None` when they are still in `registers`.
+    exit_registers: Option<Registers>,
 }
 
 impl Aarch32Disassembler {
     pub fn new(target: &Target) -> Self {
         Self {
             base_access: None,
-            exit_registers: Registers::default(),
+            exit_registers: None,
             target: target.clone(),
             it: None,
             decoded_in: None,
@@ -414,7 +426,9 @@ impl Aarch32Disassembler {
                 Set::T16 => f("imm3").or_else(|| f("imm8")),
                 Set::T32 => thumb_imm(!name.ends_with("_T4")),
             };
-            let value = read(&self.registers, rn).zip(imm).map(|(base, imm)| {
+            // Thumb sums are kept only from a base with an origin, not from plain constants.
+            let base = read(&self.registers, rn).filter(|base| decoded.set == Set::A32 || base.site.is_some());
+            let value = base.zip(imm).map(|(base, imm)| {
                 let value = if add { base.value.wrapping_add(imm) } else { base.value.wrapping_sub(imm) };
                 // An offset from PC is formed here; from another base, it keeps that base's origin. A Thumb sum
                 // is only taken as a base for loads and stores, never reported as an address formed.
@@ -623,6 +637,7 @@ impl Disassembler for Aarch32Disassembler {
     fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
         self.switches.clear();
         self.base_access = None;
+        self.exit_registers = None;
         let invalid = Insn {
             address,
             len: self.unit(address),
@@ -642,7 +657,6 @@ impl Disassembler for Aarch32Disassembler {
             self.it = advanced.in_block().then_some((next, advanced));
             self.sequential_mode = Some((next, thumb));
             self.registers = Registers::default();
-            self.exit_registers = Registers::default();
             return invalid;
         };
         let next = address.wrapping_add(u64::from(decoded.size()));
@@ -691,11 +705,10 @@ impl Disassembler for Aarch32Disassembler {
         self.sequential_mode =
             matches!(flow, Flow::Next | Flow::Call(_) | Flow::IndirectCall | Flow::ConditionalJump(_))
                 .then_some((next, thumb));
-        self.exit_registers = self.registers.clone();
         if self.sequential_mode.is_none() {
             // Nothing falls through to the next instruction, which is reached (if at all) from elsewhere with other
             // register values: a `movs r4, #0; b ...` must not make the next block's `str r5, [r4]` store to 0.
-            self.registers = Registers::default();
+            self.exit_registers = Some(std::mem::take(&mut self.registers));
         }
         Insn {
             address,
@@ -726,7 +739,8 @@ impl Disassembler for Aarch32Disassembler {
     }
 
     fn facts(&self) -> Option<crate::RegisterFacts> {
-        Some(crate::RegisterFacts::aarch32(self.exit_registers.clone()))
+        let registers = self.exit_registers.as_ref().unwrap_or(&self.registers);
+        Some(crate::RegisterFacts::aarch32(registers.clone()))
     }
 
     fn taken_facts(&self) -> Option<crate::RegisterFacts> {
@@ -741,7 +755,7 @@ impl Disassembler for Aarch32Disassembler {
         self.it = None;
         self.decoded_in = None;
         self.registers = Registers::default();
-        self.exit_registers = Registers::default();
+        self.exit_registers = None;
         self.sequential_mode = None;
     }
 

@@ -699,8 +699,8 @@ out. The feature guide linked for each tool is the full reference.
   `base`. ARM and Thumb bases are followed across a function's branches when every path sets the same one; MIPS and
   RISC-V bases (a completed `lui`/`addiu` pair, a GOT load) within a straight-line run. A redefined register, a base
   set on some paths only, and the stack pointer give none. In a Raw Cortex-M project a field in unmapped RAM or
-  peripheral space (0x10000000 to 0xe0100000) is listed when its base lies there too. `search` `references` hits
-  carry the same `base`. See [Raw code](raw-code.md#who-reads-a-structure-field).
+  peripheral space (0x10000000 to 0xe0100000) is listed when its base is mapped or lies in that space too.
+  `search` `references` hits carry the same `base`. See [Raw code](raw-code.md#who-reads-a-structure-field).
 - `xrefs` `to` that finds nothing adds `notes`: the start of the string the address lies inside, when that start is
   referenced and NUL-terminated; on M-profile images and the Thumb ranges of other little-endian ARM images, up to
   eight Thumb `bl` encodings outside every discovered function that target it (code discovery did not reach, to

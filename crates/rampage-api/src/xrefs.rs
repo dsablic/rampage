@@ -118,7 +118,9 @@ impl Project {
                 xrefs.iter().filter(|xref| (start..end).contains(&xref.to)).map(|&xref| (xref, None)).collect()
             }
         };
-        // Loads and stores at constant addresses inside imported peripherals, which discovery does not record.
+        // Loads and stores at constant addresses inside imported peripherals, from the p-code access scan.
+        // Discovery records only those it resolves itself (literal-pool and MOVW/MOVT bases, and on Raw Cortex-M
+        // unmapped peripheral space); rows both find are merged below.
         let registers = match query {
             XrefQuery::To(address) => self.register_xrefs(address, address.saturating_add(1))?,
             XrefQuery::ToRange(start, end) => self.register_xrefs(start, end)?,

@@ -13,6 +13,7 @@ use crate::memory::Memory;
 mod exits;
 mod field_flow;
 mod joined_switches;
+mod register_flow;
 
 use exits::{Exits, never_returning};
 
@@ -123,9 +124,14 @@ pub struct FieldRef {
 }
 
 impl FieldRef {
-    /// How far past the base the access is; negative below it.
+    /// How far past the base the access is; negative below it. When both addresses are 32-bit the distance is
+    /// taken in 32 bits, as a 32-bit target computes it, so an offset that wraps reads small, not as 4 GiB.
     pub fn offset(&self) -> i64 {
-        self.to.wrapping_sub(self.base) as i64
+        if self.to <= u64::from(u32::MAX) && self.base <= u64::from(u32::MAX) {
+            i64::from((self.to as u32).wrapping_sub(self.base as u32) as i32)
+        } else {
+            self.to.wrapping_sub(self.base) as i64
+        }
     }
 }
 
@@ -1077,6 +1083,7 @@ fn split_block(blocks: &mut BTreeMap<u64, u64>, address: u64) {
 mod tests {
     mod a64_switch;
     mod factory_gate;
+    mod field_flow;
     mod joined_switch;
     mod literal_pools;
     mod x86_switch;

@@ -13,7 +13,7 @@ see the [stability policy](docs/stability.md) for what the version promises.
   branches and loops when every path into the access sets the same base; MIPS and RISC-V bases (a completed
   address pair or a GOT load) within a straight-line run. In a Raw Cortex-M project a field in unmapped RAM or
   peripheral space is listed too. The CLI's `function xrefs` prints the evidence. New fixture
-  `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` is 11.
+  `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` is 12.
 
 ## 1.11.0 (2026-11-22)
 

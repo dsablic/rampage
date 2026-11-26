@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 12,
   "digests": {
     "bin/Microsoft.Bcl.HashCode.dll": "c59e4b889e12bdf098892d09583c80800359852241feb8efb30a0ed9f945d42a",
     "bin/auditable-arm64.macho": "57a5ac1991367cc9c9c189bc26f97bfe3af9c61523098fea787c1135d9948f85",
@@ -76,7 +76,7 @@
     "firmware/cortex-m3.elf": "76a1e6d31d21e1e393d254c016cd24025a361d399e0d2dbc70117ef314d2293f",
     "firmware/elf-cortex-m-crc16.elf": "212aad6ceb85be4982546dfec5a05e9caafc2c6c7d388459b150d3056226bf2f",
     "firmware/elf-cortex-m-crc32.elf": "4bb5d4fa5be04e39d1b2cf7fd51e90f1d72224a659dedef3b6d537a01f8f93de",
-    "firmware/embedded-libs-m0.elf": "81edce8927d2b80f8fcb8067308110d01ae0303118f6be0f55b903107cbc4adf",
+    "firmware/embedded-libs-m0.elf": "f318484e0dca52cbc994b353f57543b61637761d8f6a492d734027abb64a0802",
     "firmware/embedded-libs-m4f.elf": "f2c3c4eaa4630492df099bd1c8c33e72a12225423deda1a0d6aa33fea0ede939",
     "firmware/locks-negative-x64-sym.elf": "a98c199086ea00207483e5b567f33e662d9bad4dabfa886543eff79de17673ed",
     "firmware/locks-negative-x64.elf": "d91b8f7ce508a1277a25c82a356ef1649d039ae11811d72f95a3e992738bd87e",

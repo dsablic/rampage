@@ -480,6 +480,16 @@ impl RegisterFacts {
         matches!(self.0, Facts::Aarch32(_))
     }
 
+    /// Whether these facts carry switch bounds, indices and table bases ([`Disassembler::jump_table`]).
+    pub fn resolves_switches(&self) -> bool {
+        matches!(self.0, Facts::X86(_) | Facts::A64(_) | Facts::Xtensa(_))
+    }
+
+    /// Whether any register holds a base that loads and stores can reach fields through.
+    pub fn has_bases(&self) -> bool {
+        self.aarch32_registers().is_some_and(aarch32::Aarch32Registers::has_bases)
+    }
+
     fn xtensa_registers(&self) -> Option<xtensa::Registers> {
         match &self.0 {
             Facts::Xtensa(registers) => Some(**registers),

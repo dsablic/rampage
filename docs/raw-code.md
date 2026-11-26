@@ -254,8 +254,8 @@ The base is followed through the function: along each straight-line run, and acr
 path into the access sets the same base (a structure pointer loaded once into a callee-saved register and read in
 a loop counts). A register written in between, a base set on only some paths, and stack-pointer-relative slots
 give no reference. RAM, peripherals and the private peripheral bus (0x10000000 to 0xe0100000) need not be mapped:
-a field there is listed when its base lies there too. The rows show the structure's layout from the code: `xrefs`
-`from` a function lists each field it touches with its offset from the base.
+a field there is listed when its base is mapped or lies in that space too. The rows show the structure's layout
+from the code: `xrefs` `from` a function lists each field it touches with its offset from the base.
 
 ## Where to start reading
 
