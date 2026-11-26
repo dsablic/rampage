@@ -376,9 +376,10 @@ fn class_type_names(name: &str) -> Vec<String> {
 ///
 /// A Raw code region the program writes (an image that runs from RAM, [`rampage_loaders::RawRegionInfo::writable`],
 /// or a decoded primary region that [`CodeDataAccesses::stores_writable`] shows code storing into) is writable for the
-/// decompiler, so its globals stay reads and stores; only the literal-pool words its code loads PC-relative, and the
-/// strings they point at, that no formed address reaches are made read-only again, so pools still fold into the
-/// addresses and constants they hold and text still reads as string literals.
+/// decompiler, so its globals stay reads and stores. What the code does not write is made read-only again: discovered
+/// function bodies (with the switch tables and pools between their blocks), the literal-pool words the code loads
+/// PC-relative and the strings they or an `adr` point at, so pools still fold into the addresses and constants they
+/// hold, `tbb`/`tbh` switches are recovered and text still reads as string literals.
 pub(super) fn cortex_m_operations(project: &Project) -> Vec<WorkerOperation> {
     let binary = &project.binary;
     if !cortex_m_firmware(binary) {
@@ -434,8 +435,8 @@ pub(crate) struct CodeDataAccesses {
     /// Byte ranges (inclusive) of read-only mappings the code loads from or stores to through an address it forms
     /// itself, not relative to the PC as a literal-pool load is: at most [`MAX_FLASH_ACCESSES`].
     pub flash: Vec<(u64, u64)>,
-    /// Byte ranges (inclusive, adjacent ones merged) of writable Raw code regions that code loads PC-relative (its
-    /// literal pools), and the strings those words point at, that no formed address reaches.
+    /// Byte ranges (inclusive, adjacent ones merged) of writable Raw code regions the code does not write: function
+    /// bodies and strings no formed store reaches, and literal-pool words no formed address reaches.
     pub literals: Vec<(u64, u64)>,
     /// The primary Raw region, when admission left it read-only but it holds decoded bytes and code stores into at
     /// least [`MIN_PRIMARY_STORES`] of its words: the image was decoded into the memory it runs from.
@@ -486,6 +487,8 @@ pub(crate) fn code_data_accesses(project: &Project) -> CodeDataAccesses {
     alone.set_code_modes(&analysis.program.code_modes);
     let mut formed = std::collections::BTreeSet::new();
     let mut literals = std::collections::BTreeSet::new();
+    let mut texts = std::collections::BTreeSet::new();
+    let mut stored = std::collections::BTreeSet::new();
     let mut primary_stores = std::collections::BTreeSet::new();
     // Literal pools are collected only where a writable code region is, or may turn out to be.
     let pools = |address: u64| writable_code.iter().chain(candidate.iter()).any(|range| range.contains(&address));
@@ -500,6 +503,20 @@ pub(crate) fn code_data_accesses(project: &Project) -> CodeDataAccesses {
             let address = block.start + offset as u64;
             let insn = decoder.decode_with_memory(&code[offset..], address, &|at, size| binary.read_pointer(at, size));
             let length = usize::from(insn.len.max(1));
+            // An address formed PC-relative (`adr r0, text`) that names a string keeps it a string literal.
+            if collect_pools
+                && !insn.accesses
+                && let Some(target) = insn.data_ref.filter(|&target| pools(target))
+                && texts.len() < MAX_LITERAL_RANGES
+                && let Some(text) = pool_text(binary, target)
+            {
+                alone.reset();
+                let lone =
+                    alone.decode_with_memory(&code[offset..], address, &|at, size| binary.read_pointer(at, size));
+                if !lone.accesses && lone.data_ref == Some(target) {
+                    texts.insert(text);
+                }
+            }
             let Some(accessed) = insn.data_ref.filter(|&accessed| insn.accesses && read_only(accessed)) else {
                 offset += length;
                 continue;
@@ -527,8 +544,9 @@ pub(crate) fn code_data_accesses(project: &Project) -> CodeDataAccesses {
                     // Text a pool word points at stays a string literal rather than a writable char array.
                     if let Some(text) = binary.read_pointer(accessed, 4).and_then(|target| pool_text(binary, target))
                         && pools(text.0)
+                        && texts.len() < MAX_LITERAL_RANGES
                     {
-                        literals.insert(text);
+                        texts.insert(text);
                     }
                 }
                 continue;
@@ -536,6 +554,9 @@ pub(crate) fn code_data_accesses(project: &Project) -> CodeDataAccesses {
             let store = mnemonic.starts_with("str") || mnemonic.starts_with("vstr");
             if store && primary.as_ref().is_some_and(|primary| primary.contains(&accessed)) {
                 primary_stores.insert(accessed & !3);
+            }
+            if store {
+                stored.insert((accessed, accessed + size - 1));
             }
             formed.insert((accessed, accessed + size - 1));
             // With no writable code region the scan serves only `flash`, which is full.
@@ -555,8 +576,25 @@ pub(crate) fn code_data_accesses(project: &Project) -> CodeDataAccesses {
     let reached = |&(first, last): &(u64, u64)| {
         formed.range((first.saturating_sub(7), 0)..=(last, u64::MAX)).any(|&(start, end)| start <= last && first <= end)
     };
+    // Code reads strings through the pointers it forms (`ldrb r3, [r0]` in a copy loop), so only a store makes one
+    // a writable char array.
+    let written = |&(first, last): &(u64, u64)| {
+        stored.range((first.saturating_sub(7), 0)..=(last, u64::MAX)).any(|&(start, end)| start <= last && first <= end)
+    };
+    let pools = literals.into_iter().filter(|range| in_writable(range) && !reached(range));
+    let texts = texts.into_iter().filter(|range| in_writable(range) && !written(range));
+    // A discovered function's body (its instructions, and the switch tables and pools between its blocks) is not
+    // written either: Ghidra recovers a `tbb`/`tbh` table only from read-only bytes.
+    let bodies = analysis
+        .program
+        .functions
+        .iter()
+        .filter(|function| function.end() > function.address)
+        .map(|function| (function.address, function.end() - 1))
+        .filter(|range| in_writable(range) && !written(range));
+    let ranges: std::collections::BTreeSet<(u64, u64)> = pools.chain(texts).chain(bodies).collect();
     let mut merged: Vec<(u64, u64)> = Vec::new();
-    for range in literals.into_iter().filter(|range| in_writable(range) && !reached(range)) {
+    for range in ranges {
         let full = merged.len() == MAX_LITERAL_RANGES;
         match merged.last_mut() {
             Some(last) if range.0 <= last.1.saturating_add(1) => last.1 = last.1.max(range.1),

@@ -173,8 +173,8 @@ program writes is therefore writable for the decompiler:
 - `"writable": true` or `false` on the selector says so yourself, for any profile, such as for a plain dump of an
   image that runs from RAM at a non-SRAM address. A further `code` region takes `"writable": true` the same way.
 
-Its literal pools and the strings they point at still fold, so calls, strings and constants read as before; only
-its globals stop folding. Check
+Its function bodies, literal pools and strings stay read-only, so calls, switches, strings and constants read as
+before; only its globals stop folding. Check
 the verdict in `binary_info`: `raw.regions[0].writable` and `writable_reason` (`ram_address`, `stores` or
 `stated`). An image that runs from flash stays read-only, so its constants keep folding. See
 [writable code regions](mcp.md#writable-code-regions).

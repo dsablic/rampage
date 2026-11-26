@@ -1088,9 +1088,12 @@ A code region is `r-x` unless the program writes it. Code that runs from the mem
 keeps its globals in the same bytes, and on a read-only mapping the decompiler reports every store to one as
 `WARNING: Read-only address (ram,0x…) is written` and may fold a read of one into the value the image holds (`return
 3` for a mode the program changes). So a code region can be writable: the decompiler maps it `rwx`, its globals stay
-reads and stores, and only the literal-pool words its discovered code loads PC-relative, and the strings (up to 255
-printable bytes and a NUL) those words point at, are made read-only again when no address the code forms reaches
-them, so pools still fold into the constants, addresses and calls they hold and text reads as string literals.
+reads and stores, and what the code does not write is made read-only again: the body of every discovered function
+(its instructions and the switch tables and pools between its blocks), the literal-pool words its code loads
+PC-relative, and the strings (up to 255 printable bytes and a NUL) a pool word or an `adr` points at. A body or
+string the code stores into through an address it forms, and a pool word such an address reaches, stay writable.
+So pools still fold into the constants, addresses and calls they hold, `tbb`/`tbh` switches are still recovered and
+text reads as string literals.
 
 `writable` on the selector states it for the primary region, and on a `regions` entry for that region: `true` on a
 `code` region, or the kind's own default. `true` on `data` and `false` on `ram` are refused (use the other kind), as
