@@ -13,7 +13,7 @@ pub(crate) enum Machine {
     X86_64,
     Aarch64,
     Arm,
-    Mips { wide: bool },
+    Mips,
     Riscv,
 }
 
@@ -45,13 +45,13 @@ pub(crate) struct State {
 }
 
 impl Machine {
-    pub fn of(arch: Arch, wide: bool) -> Option<Self> {
+    pub fn of(arch: Arch) -> Option<Self> {
         Some(match arch {
             Arch::X86 => Self::X86,
             Arch::X86_64 => Self::X86_64,
             Arch::Aarch64 => Self::Aarch64,
             Arch::Arm => Self::Arm,
-            Arch::Mips | Arch::Mips64 => Self::Mips { wide },
+            Arch::Mips | Arch::Mips64 => Self::Mips,
             Arch::Riscv32 | Arch::Riscv64 => Self::Riscv,
             _ => return None,
         })
@@ -63,7 +63,7 @@ impl Machine {
             Self::X86_64 => object::elf::EM_X86_64,
             Self::Aarch64 => object::elf::EM_AARCH64,
             Self::Arm => object::elf::EM_ARM,
-            Self::Mips { .. } => object::elf::EM_MIPS,
+            Self::Mips => object::elf::EM_MIPS,
             Self::Riscv => object::elf::EM_RISCV,
         }
     }
@@ -72,18 +72,23 @@ impl Machine {
         object::elf::machine_names(self.em())
             .r
             .name(r_type)
-            .map_or_else(|| format!("{self:?} type {}", r_type.0), str::to_owned)
+            .or(match (self, r_type.0) {
+                // Types `object` has no name for.
+                (Self::Mips, 248) => Some("R_MIPS_PC32"),
+                _ => None,
+            })
+            .map_or_else(|| format!("type {}", r_type.0), str::to_owned)
     }
 
     pub fn is_mips(self) -> bool {
-        matches!(self, Self::Mips { .. })
+        matches!(self, Self::Mips)
     }
 
     pub fn special(self, name: &str) -> Option<Special> {
         match (self, name) {
             (_, "_GLOBAL_OFFSET_TABLE_") => Some(Special::GotBase),
-            (Self::Mips { .. }, "_gp" | "__gnu_local_gp") => Some(Special::GlobalPointer),
-            (Self::Mips { .. }, "_gp_disp") => Some(Special::GpDisp),
+            (Self::Mips, "_gp" | "__gnu_local_gp") => Some(Special::GlobalPointer),
+            (Self::Mips, "_gp_disp") => Some(Special::GpDisp),
             _ => None,
         }
     }
@@ -100,7 +105,7 @@ impl Machine {
             }
             Self::Aarch64 => matches!(r_type, 282 | 283 | 314),
             Self::Arm => matches!(r_type, 1 | 10 | 27 | 28 | 29 | 30),
-            Self::Mips { .. } => matches!(r_type & 0xff, 4 | 11 | 30 | 31),
+            Self::Mips => matches!(r_type & 0xff, 4 | 11 | 30 | 31),
             Self::Riscv => matches!(r_type, 17..=19),
         }
     }
@@ -113,7 +118,7 @@ impl Machine {
             Self::X86 => matches!(r_type, 3 | 43),
             Self::Aarch64 => matches!(r_type, 309 | 311 | 312 | 313),
             Self::Arm => matches!(r_type, 26 | 96),
-            Self::Mips { .. } => matches!(r_type & 0xff, 9 | 11 | 19 | 22 | 23 | 30 | 31),
+            Self::Mips => matches!(r_type & 0xff, 9 | 11 | 19 | 22 | 23 | 30 | 31),
             Self::Riscv => r_type == 20,
         }
     }
@@ -129,7 +134,7 @@ impl Machine {
             Self::X86 => x86(image, reloc),
             Self::Aarch64 => aarch64(image, reloc),
             Self::Arm => arm(image, reloc),
-            Self::Mips { .. } => mips(image, reloc, state),
+            Self::Mips => mips(image, reloc, state),
             Self::Riscv => riscv(image, reloc, state),
         }
     }
@@ -138,8 +143,8 @@ impl Machine {
 /// Applies what waits on a later relocation: MIPS HI16s with no LO16, RISC-V LO12s whose HI20 came after them.
 pub(crate) fn finish(image: &mut Image, state: &mut State, machine: &Machine) {
     if machine.is_mips() {
-        for (place, _, value, high, got16) in std::mem::take(&mut state.pending) {
-            let _ = mips_write_high(image, state, place, value, high, got16);
+        for (place, _, value, _, got16) in std::mem::take(&mut state.pending) {
+            let _ = mips_write_high(image, state, place, value, got16);
         }
     }
     for (place, auipc, store) in std::mem::take(&mut state.riscv_lo) {
@@ -301,8 +306,9 @@ fn aarch64(image: &mut Image, reloc: &Reloc) -> Applied {
         260 => data(image, reloc, 8, true),
         261 | 314 => data(image, reloc, 4, true),
         262 => data(image, reloc, 2, true),
-        // MOVW_UABS_G0..G3 (and _NC): a 16-bit chunk of S + A.
-        263..=270 => {
+        // MOVW_UABS_G0..G3 (and _NC): a 16-bit chunk of S + A. The signed MOVW_SABS types, which also switch
+        // MOVZ and MOVN, are not applied.
+        263..=269 => {
             let chunk = (reloc.r_type - 263) / 2;
             a64_field(image, p, (x >> (16 * chunk)) & 0xffff, 5, 16)?;
             applied
@@ -345,8 +351,13 @@ fn aarch64(image: &mut Image, reloc: &Reloc) -> Applied {
             applied
         }
         // GOT_LD_PREL19, ADR_GOT_PAGE, LD64_GOT_LO12_NC, LD64_GOTPAGE_LO15.
+        // GOT_LD_PREL19, ADR_GOT_PAGE, LD64_GOT_LO12_NC, LD64_GOTPAGE_LO15. A GOT entry holds a symbol's address,
+        // so one for S + A with A nonzero is not made.
         309 | 311 | 312 | 313 => {
-            let g = got(image, reloc)?.wrapping_add(a as u64);
+            if a != 0 {
+                return Err(Refused::Unsupported);
+            }
+            let g = got(image, reloc)?;
             match reloc.r_type {
                 309 => a64_field(image, p, g.wrapping_sub(p) >> 2, 5, 19)?,
                 311 => a64_adr(image, p, page(g).wrapping_sub(page(p)) >> 12)?,
@@ -405,12 +416,13 @@ fn mov_encode(insn: u64, thumb: bool, value: u64) -> u64 {
 
 /// Reads two Thumb halfwords as one value, the first in the high half.
 fn thumb_pair(image: &Image, place: u64) -> Result<u64, Refused> {
-    Ok((get(image, place, 2)? << 16) | get(image, place + 2, 2)?)
+    let second = place.checked_add(2).ok_or(Refused::OutOfRange)?;
+    Ok((get(image, place, 2)? << 16) | get(image, second, 2)?)
 }
 
 fn put_thumb_pair(image: &mut Image, place: u64, value: u64) -> Result<(), Refused> {
     put(image, place, 2, value >> 16)?;
-    put(image, place + 2, 2, value & 0xffff)
+    put(image, place.checked_add(2).ok_or(Refused::OutOfRange)?, 2, value & 0xffff)
 }
 
 fn arm(image: &mut Image, reloc: &Reloc) -> Applied {
@@ -450,13 +462,15 @@ fn arm(image: &mut Image, reloc: &Reloc) -> Applied {
             let (high, low) = (pair >> 16, pair & 0xffff);
             let a = reloc.addend.unwrap_or_else(|| thumb_branch_offset(high, low));
             let target = (s & !1).wrapping_add(a as u64);
-            // A `bl` to an ARM function defined here becomes `blx`, whose offset is from the word-aligned PC.
-            let arm_target = reloc.r_type == 10 && symbol.defined && symbol.function && !thumb_target;
-            let (offset, low) = if arm_target {
-                (target.wrapping_sub(p & !3), low & !0x1000)
-            } else {
-                (target.wrapping_sub(p), if reloc.r_type == 10 { low | 0x1000 } else { low })
+            // A call to a function defined here takes the state it needs, as the linker makes it: `blx` (its offset
+            // from the word-aligned PC) to an ARM function, `bl` to a Thumb one. A call to an extern keeps its form.
+            let low = match (reloc.r_type, symbol.defined && symbol.function) {
+                (10, true) if thumb_target => low | 0x1000,
+                (10, true) => low & !0x1000,
+                _ => low,
             };
+            let exchange = reloc.r_type == 10 && low & 0x1000 == 0;
+            let offset = if exchange { target.wrapping_sub(p & !3) } else { target.wrapping_sub(p) };
             let (high, low) = thumb_branch_encode(high, low, offset);
             put_thumb_pair(image, p, (high << 16) | low)?;
             Ok(Some((a, target)))
@@ -551,15 +565,7 @@ fn arm(image: &mut Image, reloc: &Reloc) -> Applied {
 
 /// Writes the high half of a MIPS `%hi` (or a local `%got` page entry's offset from `$gp`) once its full value is
 /// known.
-fn mips_write_high(
-    image: &mut Image,
-    state: &mut State,
-    place: u64,
-    value: u64,
-    high: i64,
-    got16: bool,
-) -> Result<(), Refused> {
-    let _ = high;
+fn mips_write_high(image: &mut Image, state: &mut State, place: u64, value: u64, got16: bool) -> Result<(), Refused> {
     let insn = get(image, place, 4)?;
     let field = if got16 {
         let page = value.wrapping_add(0x8000) & !0xffff & 0xffff_ffff;
@@ -619,7 +625,7 @@ fn mips(image: &mut Image, reloc: &Reloc, state: &mut State) -> Applied {
             match reloc.addend {
                 Some(a) => {
                     let value = s.wrapping_add(a as u64);
-                    mips_write_high(image, state, p, value, a, got16)?;
+                    mips_write_high(image, state, p, value, got16)?;
                     Ok(Some((a, value)))
                 }
                 None => {
@@ -640,7 +646,7 @@ fn mips(image: &mut Image, reloc: &Reloc, state: &mut State) -> Applied {
                 let (place, index, value, high, got16) = item;
                 if index == reloc.symbol_index && reloc.addend.is_none() {
                     let ahl = high.wrapping_add(low);
-                    mips_write_high(image, state, place, value.wrapping_add(ahl as u64), high, got16)?;
+                    mips_write_high(image, state, place, value.wrapping_add(ahl as u64), got16)?;
                     matched = Some(ahl);
                 } else {
                     state.pending.push(item);
@@ -746,12 +752,15 @@ fn riscv(image: &mut Image, reloc: &Reloc, state: &mut State) -> Applied {
         18 | 19 => {
             let v = x.wrapping_sub(p);
             riscv_u(image, p, v)?;
-            riscv_i(image, p + 4, v)?;
+            riscv_i(image, p.checked_add(4).ok_or(Refused::OutOfRange)?, v)?;
             applied
         }
         // GOT_HI20, PCREL_HI20: the `auipc` half; its LO12 names this place.
         20 | 23 => {
-            let target = if reloc.r_type == 20 { got(image, reloc)?.wrapping_add(a as u64) } else { x };
+            if reloc.r_type == 20 && a != 0 {
+                return Err(Refused::Unsupported);
+            }
+            let target = if reloc.r_type == 20 { got(image, reloc)? } else { x };
             let v = target.wrapping_sub(p);
             riscv_u(image, p, v)?;
             state.riscv_hi.insert(p, v as i64);

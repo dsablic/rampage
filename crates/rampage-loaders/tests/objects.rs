@@ -63,7 +63,13 @@ fn undefined_symbols_get_named_extern_slots_and_are_imports() {
     for (name, _) in OBJECTS {
         let binary = open(name);
         let externs = binary.segments.iter().find(|segment| segment.name == "extern").expect(name);
-        assert_eq!((externs.file_size, externs.perms.execute), (0, false), "{name}");
+        // Writable (an extern variable never folds), and executable only for the function stubs: no code section.
+        assert!(externs.perms.write && externs.perms.execute, "{name}");
+        assert!(!binary.is_code(externs.address), "{name}: the extern segment is not code to discover");
+        // A function extern's slot branches to itself; a data extern's is zero.
+        let stub = binary.read(symbol(&binary, "printf"), 4).unwrap();
+        assert_ne!(stub, [0; 4], "{name}");
+        assert_eq!(binary.read(symbol(&binary, "ext_counter"), 4), Some(&[0u8; 4][..]), "{name}");
         for (import, kind) in [
             ("printf", SymbolKind::Function),
             ("hal_init", SymbolKind::Function),
@@ -238,4 +244,150 @@ fn an_image_offset_at_a_member_opens_that_member() {
     // A member path with an image offset as well is refused.
     let path = PathBuf::from(format!("{}(helper.o)", object("libobjects-gnu.a").display()));
     assert!(Binary::open_image(path, Some(ImageAt::new(8, None)), None).is_err());
+}
+
+/// The applied fields at relocation sites, each as ld.lld writes them when linking the object at the same
+/// addresses (the review's comparison: .text, .data and .rodata were byte-identical on every non-PIC fixture).
+#[test]
+fn applied_fields_match_what_lld_writes_at_the_same_layout() {
+    let expected: [(&str, &[(u64, &str)]); 7] = [
+        ("objects-x86_64.o", &[(0x100af, "40010100"), (0x100e3, "51000000"), (0x10110, "5c010000")]),
+        ("objects-x86.o", &[(0x100b5, "44010100"), (0x100e2, "40010100"), (0x10112, "4a010000")]),
+        (
+            "objects-aarch64.o",
+            &[(0x10098, "09000090"), (0x1009c, "29010591"), (0x100d8, "159d40f9"), (0x10104, "53000094")],
+        ),
+        ("objects-arm.o", &[(0x100a8, "842100e3"), (0x100b0, "012040e3"), (0x10114, "2d0000eb")]),
+        ("objects-thumb.o", &[(0x10078, "40f24012"), (0x10080, "c0f20102"), (0x100ca, "00f061f8")]),
+        (
+            "objects-mipsel.o",
+            &[(0x1013c, "0100013c"), (0x10140, "24022124"), (0x101a8, "2002328c"), (0x101d0, "d840000c")],
+        ),
+        (
+            "objects-riscv64.o",
+            &[(0x100b2, "37060100"), (0x100b6, "13068615"), (0x100ec, "83390515"), (0x10116, "97000000")],
+        ),
+    ];
+    for (name, words) in expected {
+        let binary = open(name);
+        for &(address, hex) in words {
+            let bytes: String = binary.read(address, 4).unwrap().iter().map(|byte| format!("{byte:02x}")).collect();
+            assert_eq!(bytes, hex, "{name} at {address:#x}");
+        }
+    }
+}
+
+#[test]
+fn unapplied_relocations_are_reported_once_per_type_with_their_fields() {
+    let binary = open("objects-tls-x86_64.o");
+    let relocated = binary.relocated().unwrap();
+    assert_eq!(relocated.unsupported.len(), 1);
+    let item = &relocated.unsupported[0];
+    assert_eq!((item.kind.as_str(), item.count), ("R_X86_64_TPOFF32", 2));
+    assert_eq!(relocated.unapplied.len(), 2);
+    assert_eq!(relocated.unapplied[0], item.first);
+    assert!(binary.warnings.iter().any(|warning| warning.starts_with("R_X86_64_TPOFF32 relocations are not applied")));
+}
+
+/// Rewrites the section headers of an ELF64 little-endian object: `edit` gets each section's name and its header
+/// fields (`sh_name`, `sh_type`, `sh_flags`, `sh_addr`, `sh_offset`, `sh_size`, `sh_link`, `sh_info`,
+/// `sh_addralign`, `sh_entsize`) and the whole file.
+fn crafted(name: &str, edit: impl Fn(&str, &mut [u64; 10], &mut Vec<u8>)) -> PathBuf {
+    let mut bytes = std::fs::read(object(name)).unwrap();
+    let u16_at = |bytes: &[u8], at: usize| u64::from(u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()));
+    let u64_at = |bytes: &[u8], at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+    let shoff = u64_at(&bytes, 0x28) as usize;
+    let (count, strings) = (u16_at(&bytes, 0x3c) as usize, u16_at(&bytes, 0x3e) as usize);
+    let header = |bytes: &[u8], index: usize| -> [u64; 10] {
+        let at = shoff + index * 64;
+        let u32_at =
+            |offset: usize| u64::from(u32::from_le_bytes(bytes[at + offset..at + offset + 4].try_into().unwrap()));
+        [
+            u32_at(0),
+            u32_at(4),
+            u64_at(bytes, at + 8),
+            u64_at(bytes, at + 16),
+            u64_at(bytes, at + 24),
+            u64_at(bytes, at + 32),
+            u32_at(40),
+            u32_at(44),
+            u64_at(bytes, at + 48),
+            u64_at(bytes, at + 56),
+        ]
+    };
+    let names = header(&bytes, strings)[4] as usize;
+    for index in 0..count {
+        let mut fields = header(&bytes, index);
+        let start = names + fields[0] as usize;
+        let end = start + bytes[start..].iter().position(|&byte| byte == 0).unwrap();
+        let section = String::from_utf8(bytes[start..end].to_vec()).unwrap();
+        edit(&section, &mut fields, &mut bytes);
+        let at = shoff + index * 64;
+        for (offset, width, value) in [
+            (0, 4, fields[0]),
+            (4, 4, fields[1]),
+            (8, 8, fields[2]),
+            (16, 8, fields[3]),
+            (24, 8, fields[4]),
+            (32, 8, fields[5]),
+            (40, 4, fields[6]),
+            (44, 4, fields[7]),
+            (48, 8, fields[8]),
+            (56, 8, fields[9]),
+        ] {
+            bytes[at + offset..at + offset + width].copy_from_slice(&value.to_le_bytes()[..width]);
+        }
+    }
+    let directory = std::env::temp_dir().join(format!("rampage-crafted-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = directory.join(format!("{serial}-{name}"));
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+#[test]
+fn malformed_objects_load_without_panicking() {
+    // A relocation whose offset lies far past the end of the file.
+    let past_end = crafted("objects-x86_64.o", |name, fields, bytes| {
+        if name == ".rela.text" {
+            let at = fields[4] as usize;
+            bytes[at..at + 8].copy_from_slice(&0x7fff_ffffu64.to_le_bytes());
+        }
+    });
+    let binary = Binary::open(&past_end).unwrap();
+    assert!(binary.warnings.iter().any(|warning| warning.contains("outside their section")), "{:?}", binary.warnings);
+    // A zero-fill section of nearly 2^64 bytes, and a section aligned to 2^63: neither is placed, the rest is.
+    let huge = crafted("objects-x86_64.o", |name, fields, _| {
+        if name == "COMMON" {
+            fields[5] = 0xffff_ffff_ffff_0000;
+        }
+    });
+    let binary = Binary::open(&huge).unwrap();
+    assert!(binary.warnings.iter().any(|warning| warning.starts_with("section COMMON")), "{:?}", binary.warnings);
+    assert!(binary.symbol_by_name("main").is_some());
+    let aligned = crafted("objects-x86_64.o", |name, fields, _| {
+        if name == ".text" {
+            fields[8] = 1 << 63;
+        }
+    });
+    let binary = Binary::open(&aligned).unwrap();
+    assert!(binary.warnings.iter().any(|warning| warning.starts_with("section .text")), "{:?}", binary.warnings);
+    assert!(binary.symbol_by_name("main").is_none(), "main lies in the unplaced .text");
+    for path in [past_end, huge, aligned] {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn a_missing_member_path_says_what_was_looked_for() {
+    let error = Binary::open(object("absent.a(member.o)")).unwrap_err().to_string();
+    let error = format!(
+        "{error}: {}",
+        std::error::Error::source(&Binary::open(object("absent.a(member.o)")).unwrap_err())
+            .map(ToString::to_string)
+            .unwrap_or_default()
+    );
+    assert!(error.contains("absent.a(member.o)") && error.contains("member `member.o`"), "{error}");
 }

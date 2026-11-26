@@ -36,7 +36,13 @@ fn is_zero(value: &usize) -> bool {
 impl Member {
     /// What a path names this member with: its name, or `#index` when another member shares the name.
     pub fn selector(&self) -> String {
-        if self.duplicates > 0 { format!("{}#{}", self.name, self.index) } else { self.name.clone() }
+        if self.name.contains(['(', ')', '#']) || self.name.is_empty() {
+            format!("#{}", self.index)
+        } else if self.duplicates > 0 {
+            format!("{}#{}", self.name, self.index)
+        } else {
+            self.name.clone()
+        }
     }
 }
 
@@ -191,6 +197,18 @@ pub fn split_member_path(path: &Path) -> Option<(PathBuf, String)> {
 /// names no member.
 pub fn resolve(path: &Path) -> Result<Option<(PathBuf, ImageAt, Member)>, LoadError> {
     let Some((archive_path, selector)) = split_member_path(path) else { return Ok(None) };
+    if !archive_path.exists() {
+        return Err(LoadError::Io {
+            path: path.to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "no such file, nor an archive `{}` with a member `{selector}` (a member path is `lib.a(member.o)`)",
+                    archive_path.display()
+                ),
+            ),
+        });
+    }
     let data = map(&archive_path)?;
     if !is_archive(&data) {
         return Err(LoadError::Unsupported(format!(
@@ -204,6 +222,22 @@ pub fn resolve(path: &Path) -> Result<Option<(PathBuf, ImageAt, Member)>, LoadEr
         return Err(LoadError::Malformed(format!("archive member `{}` is empty", member.name)));
     }
     Ok(Some((archive_path, ImageAt::new(member.offset, Some(member.size)), member)))
+}
+
+/// `path` and `image`, or for a path naming a static archive's member (`libfoo.a(member.o)`), the archive, the
+/// member's location in it and the member. A member path given with an image location other than the whole file
+/// as well is refused.
+pub fn member_image(
+    path: &Path,
+    image: Option<ImageAt>,
+) -> Result<(PathBuf, Option<ImageAt>, Option<Member>), LoadError> {
+    match resolve(path)? {
+        None => Ok((path.to_owned(), image, None)),
+        Some(_) if image.is_some_and(|image| !image.is_whole_file()) => Err(LoadError::Location(
+            "a path naming an archive member selects the image itself; give no image offset with it".to_owned(),
+        )),
+        Some((archive, location, member)) => Ok((archive, Some(location), Some(member))),
+    }
 }
 
 /// The file at `path`, mapped read-only.
@@ -222,5 +256,21 @@ pub fn member_format(bytes: &[u8]) -> String {
             format!("{:?} {:?} {:?}", parsed.format(), parsed.kind(), parsed.architecture()).to_ascii_lowercase()
         }
         Err(_) => "not an object file".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Member;
+
+    #[test]
+    fn names_a_path_cannot_spell_are_selected_by_index() {
+        let member =
+            |name: &str, duplicates| Member { index: 4, name: name.to_owned(), offset: 0, size: 1, duplicates };
+        assert_eq!(member("plain.o", 0).selector(), "plain.o");
+        assert_eq!(member("plain.o", 1).selector(), "plain.o#4");
+        for name in ["a(b).o", "x#1.o", ""] {
+            assert_eq!(member(name, 0).selector(), "#4", "{name}");
+        }
     }
 }

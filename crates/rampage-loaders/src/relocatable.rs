@@ -75,11 +75,9 @@ pub struct Relocated {
     pub(crate) segments: Vec<Segment>,
     /// Where the segments the layout adds (common symbols, externs, the GOT) start in `segments`.
     synthetic: usize,
-    /// Each section's address by section index; `None` for one that is not allocated.
-    section_addresses: Vec<Option<u64>>,
+    /// Where each symbol and section of the object lies.
+    places: Places,
     pub externs: Vec<Extern>,
-    /// Common symbols' addresses by symbol index.
-    commons: HashMap<usize, u64>,
     /// The synthetic GOT: its address and each entry's (address, value, extern name if the value is an extern).
     pub(crate) got: Option<(u64, Vec<GotEntry>)>,
     /// The GOT entries holding a function the object defines.
@@ -87,30 +85,54 @@ pub struct Relocated {
     pub sites: Vec<RelocationSite>,
     pub sites_total: usize,
     pub unsupported: Vec<UnsupportedRelocation>,
+    /// The fields of relocations left unapplied (at most [`MAX_UNAPPLIED_SITES`]): they hold the file's bytes, not
+    /// a value to fold.
+    pub unapplied: Vec<u64>,
     pub warnings: Vec<String>,
 }
 
-impl Relocated {
-    /// The address of a symbol of the object, with any Thumb bit its value carries; `None` for one in a section
-    /// that is not allocated.
-    pub(crate) fn symbol_address(&self, symbol: &object::Symbol) -> Option<u64> {
+/// The most unapplied relocation fields kept.
+pub const MAX_UNAPPLIED_SITES: usize = 4096;
+
+/// The layout stops placing sections where it would pass this address.
+pub const MAX_LAYOUT_ADDRESS: u64 = 1 << 48;
+
+/// Where the object's sections, common symbols and externs lie: one place that resolves a symbol to its address.
+#[derive(Debug, Default)]
+struct Places {
+    /// Each section's address by section index; `None` for one that is not placed.
+    sections: Vec<Option<u64>>,
+    /// Common symbols' and undefined symbols' addresses, by symbol index.
+    symbols: HashMap<usize, u64>,
+}
+
+impl Places {
+    /// The address of `symbol` (with the Thumb bit a Thumb function's value carries); `None` for one in a section
+    /// that is not placed.
+    fn of(&self, symbol: &object::Symbol) -> Option<u64> {
         match symbol.section() {
-            SymbolSection::Section(index) => {
-                let base = self.section_address(index)?;
-                Some(base.wrapping_add(raw_value(symbol)))
-            }
-            SymbolSection::Common => self.commons.get(&symbol.index().0).copied(),
-            SymbolSection::Undefined => {
-                let name = symbol.name().ok()?;
-                self.externs.iter().find(|item| item.name == name).map(|item| item.address)
-            }
-            SymbolSection::Absolute => Some(raw_value(symbol)),
+            // `object` gives a defined symbol's value as stored: its offset in its section.
+            SymbolSection::Section(index) => Some(self.section(index)?.wrapping_add(symbol.address())),
+            SymbolSection::Common | SymbolSection::Undefined => self.symbols.get(&symbol.index().0).copied(),
+            SymbolSection::Absolute => Some(symbol.address()),
             _ => None,
         }
     }
 
+    fn section(&self, index: SectionIndex) -> Option<u64> {
+        self.sections.get(index.0).copied().flatten()
+    }
+}
+
+impl Relocated {
+    /// The address of a symbol of the object, with any Thumb bit its value carries; `None` for one in a section
+    /// that is not placed.
+    pub(crate) fn symbol_address(&self, symbol: &object::Symbol) -> Option<u64> {
+        self.places.of(symbol)
+    }
+
     pub(crate) fn section_address(&self, index: SectionIndex) -> Option<u64> {
-        self.section_addresses.get(index.0).copied().flatten()
+        self.places.section(index)
     }
 
     /// The import slots of the synthetic GOT: each entry that holds an extern's address.
@@ -152,19 +174,44 @@ impl Relocated {
     }
 }
 
-/// A symbol's stored value. `object` reports a common symbol's value (its alignment) as 0, which is wanted here
-/// only for commons, so the value is read as the file stores it.
-fn raw_value(symbol: &object::Symbol) -> u64 {
-    symbol.address()
+/// `value` rounded up to `align`, or `None` past [`MAX_LAYOUT_ADDRESS`].
+fn align_up(value: u64, align: u64) -> Option<u64> {
+    let align = align.max(1);
+    let aligned = value.checked_next_multiple_of(align)?;
+    (aligned <= MAX_LAYOUT_ADDRESS).then_some(aligned)
 }
 
-fn align_up(value: u64, align: u64) -> u64 {
-    let align = align.max(1);
-    if !align.is_power_of_two() {
-        return value.div_ceil(align).saturating_mul(align);
-    }
-    value.saturating_add(align - 1) & !(align - 1)
+/// Where `size` bytes aligned to `align` go after `cursor`, and where they end; `None` when that passes
+/// [`MAX_LAYOUT_ADDRESS`].
+fn place(cursor: u64, align: u64, size: u64) -> Option<(u64, u64)> {
+    let address = align_up(cursor, align)?;
+    let end = address.checked_add(size).filter(|&end| end <= MAX_LAYOUT_ADDRESS)?;
+    Some((address, end))
 }
+
+/// The bytes of a function extern's slot: a branch to itself, which the decompiler turns into a call to the extern
+/// followed by a return wherever flow reaches it (a tail call, conditional or not). MIPS adds its delay slot.
+fn extern_stub(arch: Arch, thumb: bool, big_endian: bool) -> Vec<u8> {
+    let word = |value: u32| if big_endian { value.to_be_bytes() } else { value.to_le_bytes() }.to_vec();
+    match arch {
+        Arch::X86 | Arch::X86_64 => vec![0xeb, 0xfe],
+        Arch::Arm if thumb => {
+            if big_endian {
+                vec![0xe7, 0xfe]
+            } else {
+                vec![0xfe, 0xe7]
+            }
+        }
+        Arch::Arm => word(0xeaff_fffe),
+        Arch::Aarch64 => 0x1400_0000u32.to_le_bytes().to_vec(),
+        Arch::Mips | Arch::Mips64 => [word(0x1000_ffff), word(0)].concat(),
+        Arch::Riscv32 | Arch::Riscv64 => 0x0000_006fu32.to_le_bytes().to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+/// An extern's slot size: room for its stub and the pointer it stands for.
+const EXTERN_SLOT: u64 = 8;
 
 /// What a relocation needs from its symbol.
 #[derive(Debug, Clone, Copy)]
@@ -178,6 +225,10 @@ pub(crate) struct SymbolInfo {
     pub size: u64,
     /// MIPS `_gp_disp`, whose value depends on the instruction using it.
     pub gp_disp: bool,
+}
+
+impl SymbolInfo {
+    const NONE: Self = Self { value: 0, defined: false, local: true, function: false, size: 0, gp_disp: false };
 }
 
 /// A relocation as the per-format code applies it.
@@ -253,18 +304,19 @@ pub(crate) enum Refused {
 }
 
 /// Lays out `parsed`, a relocatable object, and applies its relocations into a copy of `file`. `None` when the
-/// format has no relocation support yet (only ELF does).
-pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: bool) -> Option<Relocated> {
+/// format has no relocation support yet (only ELF does). `thumb` says function externs are reached in Thumb state
+/// (an M-profile object), which their stubs are encoded for.
+pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: bool, thumb: bool) -> Option<Relocated> {
     if parsed.format() != object::BinaryFormat::Elf || parsed.kind() != object::ObjectKind::Relocatable {
         return None;
     }
     let pointer = u64::from(arch.default_pointer_size().unwrap_or(if parsed.is_64() { 8 } else { 4 }));
-    let machine = elf::Machine::of(arch, parsed.is_64())?;
+    let machine = elf::Machine::of(arch)?;
     let mut warnings = Vec::new();
 
     // Allocated sections, in file order.
     let section_count = parsed.sections().map(|section| section.index().0 + 1).max().unwrap_or(0);
-    let mut section_addresses = vec![None; section_count];
+    let mut places = Places { sections: vec![None; section_count], symbols: HashMap::new() };
     let mut segments = Vec::new();
     let mut placed = Vec::new();
     let mut cursor = OBJECT_BASE;
@@ -273,10 +325,17 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         if !sh_flags.contains(object::elf::SHF_ALLOC) || section.size() == 0 {
             continue;
         }
-        let address = align_up(cursor, section.align());
         let size = section.size();
-        cursor = address.saturating_add(size);
-        section_addresses[section.index().0] = Some(address);
+        let Some((address, end)) = place(cursor, section.align(), size) else {
+            warnings.push(format!(
+                "section {} ({size:#x} bytes, aligned to {:#x}) is not placed: the layout would pass {MAX_LAYOUT_ADDRESS:#x}",
+                section.name().unwrap_or_default(),
+                section.align()
+            ));
+            continue;
+        };
+        cursor = end;
+        places.sections[section.index().0] = Some(address);
         let file_range = section.file_range();
         let (file_offset, file_size) = file_range.unwrap_or((0, 0));
         if file_size > 0 {
@@ -301,7 +360,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
     let by_index: HashMap<usize, &object::Symbol> = symbols.iter().map(|symbol| (symbol.index().0, symbol)).collect();
     let relocations: Vec<(SectionIndex, u64, object::Relocation)> = parsed
         .sections()
-        .filter(|section| section_addresses.get(section.index().0).copied().flatten().is_some())
+        .filter(|section| places.section(section.index()).is_some())
         .flat_map(|section| {
             let index = section.index();
             section.relocations().map(move |(offset, relocation)| (index, offset, relocation))
@@ -314,11 +373,13 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
     for (section, offset, relocation) in &relocations {
         let object::RelocationFlags::Elf { r_type } = relocation.flags() else { continue };
         let RelocationTarget::Symbol(index) = relocation.target() else { continue };
-        // The bytes before the field, which tell an x86 call or jump from a data reference of the same type.
+        // The bytes before the field, which tell an x86 call or jump from a data reference of the same type. The
+        // offset is the file's to give, so it may lie anywhere.
         let before = file_offsets
             .get(&section.0)
             .and_then(|start| usize::try_from(start.checked_add(*offset)?).ok())
-            .map_or(&[][..], |at| &file[at.saturating_sub(2)..at.min(file.len())]);
+            .and_then(|at| file.get(at.saturating_sub(2)..at))
+            .unwrap_or_default();
         if machine.is_call(r_type.0, before) {
             called.insert(index.0);
         }
@@ -330,17 +391,22 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
 
     // Common symbols, then externs, then the GOT: the segments the layout adds, after the file's own.
     let synthetic = segments.len();
-    let mut commons = HashMap::new();
     let common: Vec<&object::Symbol> =
         symbols.iter().filter(|symbol| symbol.section() == SymbolSection::Common).collect();
-    if !common.is_empty() {
-        let start = align_up(cursor, 16);
+    if !common.is_empty()
+        && let Some(start) = align_up(cursor, 16)
+    {
         let mut end = start;
         for symbol in common {
-            let align = common_alignment(parsed, symbol).max(1);
-            let address = align_up(end, align);
-            end = address.saturating_add(symbol.size().max(1));
-            commons.insert(symbol.index().0, address);
+            let Some((address, next)) = place(end, common_alignment(parsed, symbol), symbol.size().max(1)) else {
+                warnings.push(format!(
+                    "common symbol {} is not placed: the layout would pass {MAX_LAYOUT_ADDRESS:#x}",
+                    symbol.name().unwrap_or_default()
+                ));
+                continue;
+            };
+            end = next;
+            places.symbols.insert(symbol.index().0, address);
         }
         // LLVM may emit an empty `COMMON` section of its own; the synthetic one then takes another name.
         let taken = parsed.sections().any(|section| section.name() == Ok("COMMON"));
@@ -355,20 +421,29 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         cursor = end;
     }
     let mut externs: Vec<Extern> = Vec::new();
-    let mut extern_by_name: HashMap<String, u64> = HashMap::new();
-    let extern_start = align_up(cursor, 16);
+    let mut extern_by_name: HashMap<&str, u64> = HashMap::new();
+    let extern_start = align_up(cursor, 16).unwrap_or(MAX_LAYOUT_ADDRESS);
     let mut extern_end = extern_start;
     for symbol in &symbols {
         if symbol.section() != SymbolSection::Undefined {
             continue;
         }
         let Ok(name) = symbol.name() else { continue };
-        if name.is_empty() || machine.special(name).is_some() || extern_by_name.contains_key(name) {
+        if name.is_empty() || machine.special(name).is_some() {
             continue;
         }
+        if let Some(&address) = extern_by_name.get(name) {
+            places.symbols.insert(symbol.index().0, address);
+            continue;
+        }
+        let Some(next) = extern_end.checked_add(EXTERN_SLOT).filter(|&next| next <= MAX_LAYOUT_ADDRESS) else {
+            warnings.push(format!("extern {name} has no slot: the layout would pass {MAX_LAYOUT_ADDRESS:#x}"));
+            continue;
+        };
         let address = extern_end;
-        extern_end += pointer;
-        extern_by_name.insert(name.to_owned(), address);
+        extern_end = next;
+        extern_by_name.insert(name, address);
+        places.symbols.insert(symbol.index().0, address);
         externs.push(Extern {
             name: name.to_owned(),
             address,
@@ -376,31 +451,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
             weak: symbol.is_weak(),
         });
     }
-    if extern_end > extern_start {
-        segments.push(Segment {
-            name: "extern".to_owned(),
-            address: extern_start,
-            size: extern_end - extern_start,
-            file_offset: 0,
-            file_size: 0,
-            // Writable: an extern variable's value is unknown here, so a read of it must never fold to the fill.
-            perms: Perms { read: true, write: true, execute: false },
-        });
-        cursor = extern_end;
-    }
-
-    let symbol_value = |index: usize| -> Option<u64> {
-        let symbol = by_index.get(&index)?;
-        match symbol.section() {
-            SymbolSection::Section(section) => {
-                Some(section_addresses.get(section.0).copied().flatten()?.wrapping_add(raw_value(symbol)))
-            }
-            SymbolSection::Common => commons.get(&index).copied(),
-            SymbolSection::Undefined => extern_by_name.get(symbol.name().ok()?).copied(),
-            SymbolSection::Absolute => Some(raw_value(symbol)),
-            _ => None,
-        }
-    };
+    let symbol_value = |index: usize| by_index.get(&index).and_then(|symbol| places.of(symbol));
 
     // MIPS GOT16 against a local symbol loads a 64 KiB page from the GOT; the pages are known only once each pairs
     // with its LO16, so one entry is reserved per such relocation and handed out as they are applied.
@@ -417,51 +468,79 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
     let needs_got = !got_symbols.is_empty()
         || local_pages > 0
         || symbols.iter().any(|symbol| symbol.name().is_ok_and(|name| machine.special(name).is_some()));
-    let got_base = align_up(cursor, pointer.max(16));
+    let entries = got_symbols.len() + local_pages;
+    let got_base = align_up(extern_end, pointer.max(16))
+        .filter(|&base| base.checked_add(pointer * entries.max(1) as u64).is_some_and(|end| end <= MAX_LAYOUT_ADDRESS));
+    if needs_got && got_base.is_none() {
+        warnings.push(format!("no GOT is laid out: it would pass {MAX_LAYOUT_ADDRESS:#x}"));
+    }
+    let got = got_base.filter(|_| needs_got);
     let mut got_entries: HashMap<GotKey, u64> = HashMap::new();
-    let mut got_values: Vec<(u64, u64, Option<String>)> = Vec::new();
-    let mut add_entry = |key: GotKey, value: u64, name: Option<String>| {
-        if let Some(&address) = got_entries.get(&key) {
-            return address;
-        }
-        let address = got_base + pointer * got_values.len() as u64;
-        got_entries.insert(key, address);
-        got_values.push((address, value, name));
-        address
-    };
+    let mut got_values: Vec<GotEntry> = Vec::new();
     let mut got_functions = Vec::new();
-    for &index in &got_symbols {
-        let value = symbol_value(index).unwrap_or(0);
-        let symbol = by_index.get(&index);
-        let name = symbol
-            .filter(|symbol| symbol.section() == SymbolSection::Undefined)
-            .and_then(|symbol| symbol.name().ok())
-            .map(str::to_owned);
-        let slot = add_entry(GotKey::Symbol(index), value, name);
-        // An entry holding a function this object defines: calls through it are calls to that function.
-        if let Some(symbol) = symbol.filter(|symbol| {
-            symbol.kind() == object::SymbolKind::Text && matches!(symbol.section(), SymbolSection::Section(_))
-        }) && let Ok(name) = symbol.name()
-        {
-            let address = if matches!(arch, Arch::Arm) { value & !1 } else { value };
-            got_functions.push(crate::slots::GotFunction { slot, name: name.to_owned(), address });
+    if let Some(base) = got {
+        let mut add_entry = |key: GotKey, value: u64, name: Option<String>| {
+            let address = base + pointer * got_values.len() as u64;
+            got_entries.insert(key, address);
+            got_values.push((address, value, name));
+            address
+        };
+        for &index in &got_symbols {
+            let value = symbol_value(index).unwrap_or(0);
+            let symbol = by_index.get(&index);
+            let name = symbol
+                .filter(|symbol| symbol.section() == SymbolSection::Undefined)
+                .and_then(|symbol| symbol.name().ok())
+                .map(str::to_owned);
+            let slot = add_entry(GotKey::Symbol(index), value, name);
+            // An entry holding a function this object defines: calls through it are calls to that function.
+            if let Some(symbol) = symbol.filter(|symbol| {
+                symbol.kind() == object::SymbolKind::Text && matches!(symbol.section(), SymbolSection::Section(_))
+            }) && let Ok(name) = symbol.name()
+            {
+                let address = if matches!(arch, Arch::Arm) { value & !1 } else { value };
+                got_functions.push(crate::slots::GotFunction { slot, name: name.to_owned(), address });
+            }
+        }
+        for page in 0..local_pages {
+            add_entry(GotKey::Page(page as u64), 0, None);
         }
     }
-    for page in 0..local_pages {
-        add_entry(GotKey::Page(page as u64), 0, None);
-    }
-    let got = needs_got.then_some(got_base);
-    let got_size = (got_values.len() as u64 * pointer).max(if needs_got { pointer } else { 0 });
+    let got_size = (got_values.len() as u64 * pointer).max(if got.is_some() { pointer } else { 0 });
 
-    // The loaded image: the file, then the GOT.
-    let mut bytes = Vec::with_capacity(file.len() + got_size as usize + 16);
+    // The loaded image: the file, the externs' stubs, then the GOT.
+    let stub = extern_stub(arch, thumb, big_endian);
+    let width = pointer as usize;
+    let mut bytes = Vec::with_capacity(file.len() + (extern_end - extern_start + got_size) as usize + 32);
     bytes.extend_from_slice(file);
-    let got_offset = align_up(bytes.len() as u64, pointer) as usize;
+    if extern_end > extern_start {
+        let offset = bytes.len().next_multiple_of(16);
+        bytes.resize(offset, 0);
+        for item in &externs {
+            let slot = bytes.len();
+            if item.function {
+                bytes.extend_from_slice(&stub);
+            }
+            bytes.resize(slot + EXTERN_SLOT as usize, 0);
+        }
+        let size = extern_end - extern_start;
+        placed.push((extern_start, size, offset as u64));
+        segments.push(Segment {
+            name: "extern".to_owned(),
+            address: extern_start,
+            size,
+            file_offset: offset as u64,
+            file_size: size,
+            // Writable, so an extern variable's slot never folds to its fill; executable for the stubs alone (the
+            // segment is no code section, so discovery never runs into it).
+            perms: Perms { read: true, write: true, execute: true },
+        });
+    }
+    let got_offset = bytes.len().next_multiple_of(width.max(1));
     bytes.resize(got_offset, 0);
     if let Some(got) = got {
         for (_, value, _) in &got_values {
             let encoded = value.to_le_bytes();
-            let width = pointer as usize;
             if big_endian {
                 bytes.extend(encoded[..width].iter().rev());
             } else {
@@ -493,16 +572,15 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         got: got.unwrap_or(0),
         got_entries: &got_entries,
         gp,
-        pointer: pointer as usize,
+        pointer: width,
     };
     let mut sites = Vec::new();
     let mut sites_total = 0;
     let mut unsupported: BTreeMap<u32, (usize, u64)> = BTreeMap::new();
+    let mut unapplied = Vec::new();
     let mut out_of_range = 0usize;
     let info = |index: Option<SymbolIndex>, place: u64| -> SymbolInfo {
-        let Some(index) = index else {
-            return SymbolInfo { value: 0, defined: false, local: true, function: false, size: 0, gp_disp: false };
-        };
+        let Some(index) = index else { return SymbolInfo::NONE };
         let symbol = by_index.get(&index.0);
         let special = symbol.and_then(|symbol| machine.special(symbol.name().ok()?));
         let value = match special {
@@ -523,8 +601,11 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
     let mut state = elf::State::default();
     for (section, offset, relocation) in &relocations {
         let object::RelocationFlags::Elf { r_type } = relocation.flags() else { continue };
-        let Some(base) = section_addresses[section.0] else { continue };
-        let place = base.wrapping_add(*offset);
+        let Some(base) = places.section(*section) else { continue };
+        let Some(place) = base.checked_add(*offset) else {
+            out_of_range += 1;
+            continue;
+        };
         let symbol_index = match relocation.target() {
             RelocationTarget::Symbol(index) => Some(index),
             _ => None,
@@ -561,12 +642,16 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
             Err(Refused::Unsupported) => {
                 let entry = unsupported.entry(r_type.0).or_insert((0, place));
                 entry.0 += 1;
+                if unapplied.len() < MAX_UNAPPLIED_SITES {
+                    unapplied.push(place);
+                }
             }
             Err(Refused::OutOfRange) => out_of_range += 1,
         }
     }
     elf::finish(&mut image, &mut state, &machine);
     sites.sort_by_key(|site| site.address);
+    unapplied.sort_unstable();
     let unsupported: Vec<UnsupportedRelocation> = unsupported
         .into_iter()
         .map(|(r_type, (count, first))| UnsupportedRelocation {
@@ -594,14 +679,14 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         bytes,
         segments,
         synthetic,
-        section_addresses,
+        places,
         externs,
-        commons,
         got: got.map(|got| (got, got_values)),
         got_functions,
         sites,
         sites_total,
         unsupported,
+        unapplied,
         warnings,
     })
 }

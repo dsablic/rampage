@@ -13,8 +13,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   pages, CALL16) and RISC-V (PCREL HI20/LO12 pairs, CALL, ADD/SUB/SET), REL and RELA alike. Unapplied types are
   reported once per type. Functions, xrefs, strings, disassembly and decompiled C now work on objects: `xrefs` rows
   carry the `relocation` (type, symbol, addend) applied at the referencing instruction, `binary_info` reports the
-  layout under `relocatable`, and the decompiler names externs, treats a jump to one as a tail call (worker
-  protocol 17), binds GOT entries of local functions and folds an object's read-only data. Before, an object listed
+  layout under `relocatable`, and the decompiler names externs, treats a jump to one (conditional or not) as a
+  call followed by a return (worker protocol 17), binds GOT entries of local functions and folds an object's
+  read-only data except fields whose relocation was left unapplied. Applied fields match `ld.lld`'s at the same
+  layout on the fixtures. Before, an object listed
   no functions and could not be disassembled or decompiled.
 - Static libraries: a member of a GNU or BSD `ar` archive opens in any tool as `lib.a(member.o)` (`member.o#N`
   where names repeat), as the embedded image at its location, with its own annotations and cache entry;

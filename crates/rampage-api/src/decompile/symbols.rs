@@ -103,21 +103,15 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
         })
         .collect();
     identities.extend(stubs.iter().map(|(&address, name)| (address, name.clone())));
-    // A relocatable object's externs are functions of their own: calls and tail jumps to their slots are calls
-    // to the named import, never code to follow.
+    // A relocatable object's function externs are functions of their own. Each slot holds a branch to itself that
+    // the decompiler takes as a call to the extern followed by a return, so a jump to one, conditional or not, reads
+    // as a tail call to the named import rather than code to follow.
     if let Some(relocated) = binary.relocated() {
-        let externs: BTreeMap<u64, &str> = relocated
-            .externs
-            .iter()
-            .filter(|item| item.function)
-            .map(|item| (item.address, item.name.as_str()))
-            .collect();
-        identities.extend(externs.iter().map(|(&address, &name)| (address, name.to_owned())));
-        let jumps =
-            analysis.program.xrefs.iter().filter(|xref| xref.kind == rampage_analysis::discover::XrefKind::Jump);
-        let sites: std::collections::BTreeSet<u64> =
-            jumps.filter(|xref| externs.contains_key(&xref.to)).map(|xref| xref.from).collect();
-        operations.extend(sites.into_iter().map(|site| WorkerOperation::TailCall { site }));
+        let externs = relocated.externs.iter().filter(|item| item.function);
+        for item in externs {
+            identities.insert(item.address, item.name.clone());
+            operations.push(WorkerOperation::TailCall { site: item.address });
+        }
     }
     for (&address, identity) in &identities {
         let display = project.function_name_in(annotations, address);
@@ -164,9 +158,15 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
     operations.extend(cortex_m_operations(project));
     operations.extend(mips_pic_operations(&project.binary));
     // A relocatable object's read-only data holds its link-time values once relocations are applied (its GOT, literal
-    // pools and pointer tables point at the layout's addresses), as a statically linked image's does: it folds.
-    if project.binary.relocated().is_some() {
+    // pools and pointer tables point at the layout's addresses), as a statically linked image's does: it folds. A
+    // field whose relocation was left unapplied holds the file's bytes instead, so it never folds.
+    if let Some(relocated) = project.binary.relocated() {
         operations.push(WorkerOperation::FoldReadOnly { enabled: true });
+        let width = u64::from(project.binary.arch.default_pointer_size().unwrap_or(4));
+        let data = relocated.unapplied.iter().filter(|&&site| !project.binary.is_code(site));
+        operations.extend(
+            data.map(|&site| WorkerOperation::VolatileRange { first: site, last: site.saturating_add(width - 1) }),
+        );
     }
     operations.extend(xtensa_operations(&project.binary));
     operations.extend(virtual_tables(project, annotations));
@@ -253,8 +253,9 @@ pub(super) fn xtensa_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerO
         return Vec::new();
     }
     let mut operations = Vec::new();
-    // Firmware only: a Raw image, or a statically linked executable. A relocatable object's literal pools hold
-    // zeros until it is linked, and a dynamic loader may rewrite another image's read-only data.
+    // Firmware only: a Raw image, or a statically linked executable, whose literal pools hold their run-time values
+    // (a dynamic loader may rewrite another image's read-only data). Xtensa relocations are not applied, so an
+    // Xtensa relocatable object's pools hold zeros and never fold.
     if binary.raw_code_image().is_some() || rampage_signatures::firmware_like(binary) {
         operations.push(WorkerOperation::FoldReadOnly { enabled: true });
     }
@@ -428,9 +429,10 @@ pub(super) fn cortex_m_operations(project: &Project) -> Vec<WorkerOperation> {
 
 /// An M-profile image whose read-only mappings are flash at their run addresses: a Cortex-M Raw image, or a
 /// statically linked M-profile ELF executable ([`rampage_signatures::firmware_like`]: `ET_EXEC`, no interpreter,
-/// no needed libraries, no `.dynamic`). An M-profile relocatable object is not (its literal pools hold
-/// unrelocated zeros and its sections all sit at address 0), nor is a dynamically linked one, whose loader can
-/// write its read-only pages.
+/// no needed libraries, no `.dynamic`). An M-profile relocatable object is not: it folds its relocated read-only
+/// data from `plan`, but its sections sit at the layout's addresses, not in flash, so the Cortex-M memory map's
+/// regions and peripheral ranges do not describe it. Nor is a dynamically linked one, whose loader can write its
+/// read-only pages.
 pub(super) fn cortex_m_firmware(binary: &rampage_loaders::Binary) -> bool {
     binary.m_profile() && rampage_signatures::firmware_like(binary)
 }

@@ -101,6 +101,35 @@ fn decompiled_c_names_externs_and_follows_tail_calls_into_them() {
     }
 }
 
+/// A conditional jump to an extern (a conditional sibling call: x86 `jne`, ARM `bne`) decompiles as a call to it.
+#[test]
+fn conditional_sibling_calls_to_externs_decompile_as_calls() {
+    for name in ["objects-sibcall-x86_64.o", "objects-sibcall-arm.o"] {
+        let project = project(name);
+        let decompiled =
+            project.decompile(address(&project, "sibling")).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(decompiled.code.contains("ext_a()"), "{name}:\n{}", decompiled.code);
+        assert!(decompiled.code.contains("return 1;"), "{name}:\n{}", decompiled.code);
+    }
+}
+
+/// Relocation evidence belongs to the instruction relocated: the `cbz` after a `bl ext_a` has none of its own.
+#[test]
+fn relocation_evidence_is_not_borrowed_from_a_neighbouring_instruction() {
+    let aarch64 = project("objects-call-cbz-aarch64.o");
+    let xrefs = aarch64.xrefs(XrefQuery::From(address(&aarch64, "sibling")), None, None).unwrap().items;
+    let call = xrefs.iter().find(|xref| xref.kind == XrefKind::Call).unwrap();
+    assert_eq!(call.relocation.as_ref().map(|site| site.kind.as_str()), Some("R_AARCH64_CALL26"));
+    let branch = xrefs.iter().find(|xref| xref.kind == XrefKind::Jump).unwrap();
+    assert!(branch.relocation.is_none(), "{branch:?}");
+    // A RISC-V `call` is relocated at its `auipc`; the reference recorded at the `jalr` carries that relocation.
+    let riscv = project("objects-riscv64.o");
+    let main = address(&riscv, "main");
+    let xrefs = riscv.xrefs(XrefQuery::From(main), None, Some(500)).unwrap().items;
+    let printf = xrefs.iter().find(|xref| xref.to_name.as_deref() == Some("printf")).unwrap();
+    assert_eq!(printf.relocation.as_ref().map(|site| site.kind.as_str()), Some("R_RISCV_CALL_PLT"));
+}
+
 fn member(archive: &str, selector: &str) -> PathBuf {
     PathBuf::from(format!("{DIR}{archive}({selector})"))
 }

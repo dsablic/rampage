@@ -187,7 +187,7 @@ impl Project {
                     None
                 },
                 base: field.map(BaseEvidence::of),
-                relocation: self.relocation_at(xref.from, &mut decoder),
+                relocation: self.relocation_at(xref.from, xref.to, &mut decoder),
             });
         }
         Ok(Page { total: page.total, offset: page.offset, items: rows })
@@ -198,6 +198,7 @@ impl Project {
     fn relocation_at(
         &self,
         from: u64,
+        to: u64,
         decoder: &mut Option<Box<dyn rampage_arch::Disassembler>>,
     ) -> Option<rampage_loaders::relocatable::RelocationSite> {
         let relocated = self.binary.relocated()?;
@@ -206,16 +207,17 @@ impl Project {
             (Some(bytes), Some(decoder)) => u64::from(decoder.decode(bytes, from).len.max(1)),
             _ => width,
         };
-        // A two-instruction sequence (RISC-V `auipc`+`jalr`, a MIPS `%hi` load) is relocated at its first
-        // instruction while the reference is recorded at the second.
-        let paired = |site: &&rampage_loaders::relocatable::RelocationSite| {
-            site.kind.contains("CALL") || site.kind.contains("HI20") || site.kind.contains("HI16")
+        let within = relocated.sites_in(from..from.saturating_add(length)).first();
+        // A RISC-V PCREL_LO12 names the `auipc` whose HI20 relocation carries the symbol and addend.
+        if let Some(site) = within.filter(|site| site.kind.starts_with("R_RISCV_PCREL_LO12")) {
+            let high = relocated.sites_in(site.value..site.value.saturating_add(1)).first();
+            return high.or(Some(site)).cloned();
+        }
+        // A RISC-V `call` is relocated at its `auipc` while the call is recorded at the `jalr` after it.
+        let call = |site: &&rampage_loaders::relocatable::RelocationSite| {
+            matches!(site.kind.as_str(), "R_RISCV_CALL" | "R_RISCV_CALL_PLT") && site.value == to
         };
-        relocated
-            .sites_in(from..from.saturating_add(length))
-            .first()
-            .or_else(|| relocated.sites_in(from.saturating_sub(8)..from).iter().rev().find(paired))
-            .cloned()
+        within.or_else(|| relocated.sites_in(from.saturating_sub(4)..from).iter().find(call)).cloned()
     }
 
     /// Why `xrefs` to `address` found nothing, and where to look instead: the start of the string `address` lies

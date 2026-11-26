@@ -30,6 +30,12 @@ object mipsel-linux-musleabi objects-mipsel.o -fno-pic
 object mipsel-linux-musleabi objects-mipsel-pic.o -fPIC
 object riscv64-linux-musl objects-riscv64.o -fno-pic
 object riscv64-linux-musl objects-riscv64-pic.o -fPIC
+"$zig" cc -target x86_64-linux-musl "${flags[@]}" -fno-pic -o "$out/objects-tls-x86_64.o" src/objects-tls.c
+# Hand-written: a conditional jump to an extern (a conditional sibling call), and an AArch64 call to an extern
+# followed by a `cbz` that has no relocation of its own.
+"$zig" cc -target x86_64-linux-musl -g0 -ffile-prefix-map="$PWD"=. -c -o "$out/objects-sibcall-x86_64.o" src/objects-sibcall-x86_64.s
+"$zig" cc -target arm-linux-musleabihf -g0 -ffile-prefix-map="$PWD"=. -c -o "$out/objects-sibcall-arm.o" src/objects-sibcall-arm.s
+"$zig" cc -target aarch64-linux-musl -g0 -ffile-prefix-map="$PWD"=. -c -o "$out/objects-call-cbz-aarch64.o" src/objects-call-cbz-aarch64.s
 
 # Archives: objects.o and helper.o, then a second, different objects.o (the PIC build) under the same name.
 work=$(mktemp -d)
