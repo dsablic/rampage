@@ -1,5 +1,9 @@
 # ZIP32 metadata inventory reference
 
+A static (`ar`) library given to the same tool is listed differently: its members, the symbols its index gives
+each and the path that opens one; see [object files](object-files.md#static-libraries). The rest of this page is
+about ZIP files.
+
 Archive inventory describes the central-directory declarations of an explicit standalone, single-disk ZIP32
 file. It does not load an image, discover functions, read annotation sidecars or open members.
 

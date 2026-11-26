@@ -29,6 +29,12 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 
 ## Formats and instruction decoding
 
+- [Object files](object-files.md): an ELF relocatable object (x86, x86-64, AArch64, ARM/Thumb, MIPS, RISC-V) is
+  laid out from 0x10000 with its relocations applied, undefined symbols named in an `extern` segment and GOT
+  references in a synthetic `.got`, so functions, xrefs (with the relocation as evidence), strings and decompiled C
+  work as in a linked image; a member of a GNU or BSD `ar` library opens as `lib.a(member.o)`. Limits: ELF only (no
+  COFF or Mach-O objects); one member per project; unsupported relocation types are reported, not applied.
+
 - `list_dir` lists a folder with each entry's kind, size and sniffed format, so work can start from a directory.
   See [MCP](mcp.md). Limits: one directory per call, 1,000,000 entries read; formats come from magic bytes only.
 - [File layout](file-layout.md) maps any file or range of up to 64 MiB in one call: padding and occupied
@@ -420,7 +426,8 @@ does not execute suggested next steps or annotation edits. See [CLI batch analys
 ## Archive metadata
 
 Standalone ZIP32 directory inventory is available through API, `binary archive-inventory` and the
-`archive_inventory` file tool. Member references retain directory ordinals, including duplicate names; flags,
+`archive_inventory` file tool, which also lists a static (`ar`) library's members with their index symbols and the
+path that opens each ([object files](object-files.md#static-libraries)). Member references retain directory ordinals, including duplicate names; flags,
 sizes, CRCs and local-header offsets remain unverified payload declarations. Metadata reads are bounded and
 revalidated but not atomic, and tail search may overlap member data. No member offset is followed, and no extraction,
 decompression, automatic member opening or execution occurs. See [archive inventory](archive-inventory.md).

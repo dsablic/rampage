@@ -31,7 +31,7 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary peripheral-map FILE [--function AT --start A --end A --by-function --offset N --limit N]` | — | Firmware peripheral blocks the loads and stores reach, with offsets and functions ([peripheral map](raw-code.md#which-code-drives-which-peripheral)) |
 | `binary carve FILE [--max-candidates N]` | `carve` | Validated embedded headers; no extraction/decompression |
 | `binary inventory DIR` | `inventory` | Binaries in bundles/extracted packages; no execution |
-| `binary archive-inventory ARCHIVE` | — | Standalone ZIP32 directory metadata; no member opening or extraction |
+| `binary archive-inventory ARCHIVE` | — | Standalone ZIP32 directory metadata, or a static (`ar`) library's members, index symbols and the path that opens each |
 | `binary search FILE --query REQUEST.json` | `search FILE --query-json JSON` | Address-sorted byte/text/code/reference evidence |
 | `binary list-imports FILE [--contains TEXT]` | `imports` | Imports, libraries and import slots |
 | `binary list-exports FILE [--contains TEXT]` | `exports` | Exported symbols |
@@ -257,6 +257,8 @@ See [data packs](data-packs.md), [MCP](mcp.md) and the [internal workflow regist
 
 - `--json`: machine-readable query output. MCP serving uses its protocol, not the CLI text/JSON renderer.
 - `--arch ARCH`: selects a universal Mach-O slice, e.g. `x86_64`, `aarch64` or `arm`.
+- `FILE` may name a static library member, `'lib.a(member.o)'` (quoted for the shell; `member.o#N` where names
+  repeat); see [object files](object-files.md).
 - `--image-offset OFFSET`: opens an embedded ELF/PE/Mach-O in place; hex `0x...` or decimal. For a universal
   Mach-O this is the fat header's offset; use `--arch` for its slice. Offset 0 without a length opens the file itself.
 - `--image-length N`: requires `--image-offset`. It selects the embedded extent; bytes after the executable's

@@ -162,7 +162,8 @@ Areas marked *experimental* may change in any release; see the [stability policy
 - **Search and patching:** byte, text, regex, immediate, instruction and reference search (on 32-bit ARM and
   Thumb, constants loaded from literal pools or built by MOVW/MOVT); an assembler for an x86/x64/AArch64 subset;
   checked byte patches kept in the annotation log and exported to a new file.
-- **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL,
+- **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), ELF object files and
+  static library members with relocations applied ([object files](docs/object-files.md)), .NET metadata and CIL,
   [Android APKs and DEX](docs/android.md) (manifest, permissions, components, JNI libraries, Dalvik bytecode and
   pseudocode, strings hidden behind decoder methods), Go build info, cargo-auditable data, PE resources and load
   config, PyInstaller archives, WebAssembly module summaries, ZIP inventory, ESP32/ESP8266 app images and flash

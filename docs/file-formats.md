@@ -172,8 +172,8 @@ Xtensa ELF files (`EM_XTENSA`, little-endian) load like other ELF executables. T
 toolchain writes says which ABI the code uses: `ABI=0` is the windowed ABI (ESP32), any other value call0
 (ESP8266's LX106). Without the note the prologues vote: call0 when 4-byte aligned `addi a1, a1, -N` frame
 allocations outnumber windowed `entry a1, N` prologues four to one, else windowed. Literal pools are folded in
-the decompiler only for statically linked executables, not relocatable objects (whose pools hold zeros until
-linked). The call0 ABI changes how the decompiler
+the decompiler for statically linked executables and for relocatable objects, whose pools hold their relocated
+values (see [object files](object-files.md)). The call0 ABI changes how the decompiler
 models calls (a12-a15 survive them) and which prologue discovery looks for.
 
 An ESP app image (the format the ROM and the second-stage bootloader load) starts with magic 0xE9, a segment

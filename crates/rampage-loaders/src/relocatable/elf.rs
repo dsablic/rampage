@@ -101,7 +101,7 @@ impl Machine {
             Self::Aarch64 => matches!(r_type, 282 | 283 | 314),
             Self::Arm => matches!(r_type, 1 | 10 | 27 | 28 | 29 | 30),
             Self::Mips { .. } => matches!(r_type & 0xff, 4 | 11 | 30 | 31),
-            Self::Riscv => matches!(r_type, 17 | 18 | 19),
+            Self::Riscv => matches!(r_type, 17..=19),
         }
     }
 

@@ -201,6 +201,9 @@ Errors from these tools are JSON objects: `{"error": kind, "message": text}`. `k
 ## Inputs, paging and decompiler tokens
 
 Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_length` to open an embedded view.
+A `path` of the form `lib.a(member.o)` opens one member of a static library (`member.o#N` picks member N where
+names repeat), as the embedded image at the member's location; a relocatable object is laid out with its
+relocations applied. See [object files](object-files.md).
 
 **The session target.** Over MCP, `path` is optional. Each successful call of a project tool records its target: the
 path with the selectors it was opened with (`raw`, or `arch`/`image_offset`/`image_length`), or an Intel HEX or
@@ -613,7 +616,8 @@ left out inside it; `fs_list` lists the image's files (not yet for JFFS2 or Cram
 MBR or GPT disk, FAT volume or UEFI volume or capsule, which `fs_list` does not read, it reports every candidate,
 each noting its container.
 `archive_inventory` similarly needs no image or sidecar, but inventories bounded standalone ZIP32 central-directory
-metadata. Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
+metadata, or a static (`ar`) library's members with their index symbols and an `open` path for each (see
+[object files](object-files.md#static-libraries)). Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
 JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive inventory](archive-inventory.md).
 `fs_list` and `fs_extract` list and extract firmware filesystem images (SquashFS, ext2/3/4, Android sparse, Android
 OTA payloads, cpio, tar, UBI volumes, UBIFS) and ZIP archives (APKs included) in any file, at an `image_offset` or nested through `inner`; `fs_extract` writes into a new

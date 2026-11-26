@@ -64,6 +64,9 @@ pub struct Extern {
     pub weak: bool,
 }
 
+/// A synthetic GOT entry: its address, the value it holds, and the extern it holds, if any.
+pub(crate) type GotEntry = (u64, u64, Option<String>);
+
 /// What a relocatable object's layout gives the loader.
 #[derive(Debug)]
 pub struct Relocated {
@@ -78,7 +81,7 @@ pub struct Relocated {
     /// Common symbols' addresses by symbol index.
     commons: HashMap<usize, u64>,
     /// The synthetic GOT: its address and each entry's (address, value, extern name if the value is an extern).
-    pub(crate) got: Option<(u64, Vec<(u64, u64, Option<String>)>)>,
+    pub(crate) got: Option<(u64, Vec<GotEntry>)>,
     /// The GOT entries holding a function the object defines.
     pub(crate) got_functions: Vec<crate::slots::GotFunction>,
     pub sites: Vec<RelocationSite>,
@@ -275,7 +278,7 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
         cursor = address.saturating_add(size);
         section_addresses[section.index().0] = Some(address);
         let file_range = section.file_range();
-        let (file_offset, file_size) = file_range.map_or((0, 0), |(offset, size)| (offset, size));
+        let (file_offset, file_size) = file_range.unwrap_or((0, 0));
         if file_size > 0 {
             placed.push((address, file_size.min(size), file_offset));
         }

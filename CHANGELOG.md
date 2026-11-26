@@ -6,6 +6,23 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- ELF relocatable objects (`.o`) load as IDA loads them: allocated sections are laid out from 0x10000, each aligned,
+  undefined symbols get named slots in an `extern` segment (imports; functions where a call reaches them), common
+  symbols a `COMMON` segment and GOT references a synthetic `.got`, and relocations are applied into a loaded copy
+  for x86, x86-64, AArch64, ARM/Thumb (with `bl`/`blx` interworking), MIPS (HI16/LO16 pairing, `_gp_disp`, GOT16
+  pages, CALL16) and RISC-V (PCREL HI20/LO12 pairs, CALL, ADD/SUB/SET), REL and RELA alike. Unapplied types are
+  reported once per type. Functions, xrefs, strings, disassembly and decompiled C now work on objects: `xrefs` rows
+  carry the `relocation` (type, symbol, addend) applied at the referencing instruction, `binary_info` reports the
+  layout under `relocatable`, and the decompiler names externs, treats a jump to one as a tail call (worker
+  protocol 17), binds GOT entries of local functions and folds an object's read-only data. Before, an object listed
+  no functions and could not be disassembled or decompiled.
+- Static libraries: a member of a GNU or BSD `ar` archive opens in any tool as `lib.a(member.o)` (`member.o#N`
+  where names repeat), as the embedded image at its location, with its own annotations and cache entry;
+  `binary_info` reports `archive_member`. Opening a whole library lists its members. `archive_inventory` (CLI
+  `binary archive-inventory`) lists a library's members with the symbols its index gives each and the `open` path,
+  and `contains` matches those symbols. `ANALYSIS_VERSION` is 14 and `DECOMPILE_CACHE_VERSION` 3. See
+  [object files](docs/object-files.md). New fixtures in `tests/fixtures/objects` (`build-objects.sh`).
+
 - `peripheral_map` (MCP group `types`, Raw-capable; CLI `binary peripheral-map`) maps which code touches which
   memory-mapped peripheral without an SVD, from load and store instructions only (base-plus-offset field references
   and the constant-address access scan), so literal-pool words and tables never dereferenced stay out. Accesses in
