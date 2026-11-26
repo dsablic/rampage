@@ -224,3 +224,27 @@ async fn deserialization_debug_expansion_returns_bounded_utf8_mcp_errors_without
     }
     client.cancel().await.unwrap();
 }
+
+/// A static library: archive_inventory lists its members with the path that opens each, and that path opens the
+/// member in an ordinary binary tool; the whole library names its members instead.
+#[tokio::test]
+async fn static_library_members_are_listed_and_open_as_lib_member_paths() {
+    let library = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/objects/libobjects-gnu.a");
+    let client = connect(RampageServer::with_groups([Group::Carve])).await;
+    let listing = page(&call(&client, "archive_inventory", json!({ "path": library })).await);
+    assert_eq!((listing["format"].as_str(), listing["members_total"].as_u64()), (Some("ar"), Some(3)));
+    let rows = listing["members"].as_array().unwrap();
+    let opens: Vec<&str> = rows.iter().map(|row| row["open"].as_str().unwrap()).collect();
+    assert!(opens[0].ends_with("(objects.o#0)") && opens[1].ends_with("(helper.o)"), "{opens:?}");
+    let functions = page(&call(&client, "list_functions", json!({ "path": opens[0] })).await);
+    assert!(functions.to_string().contains("\"dispatch\""), "{functions}");
+    let decompiled = page(&call(&client, "decompile", json!({ "path": opens[0], "at": "main" })).await);
+    assert!(decompiled.to_string().contains("printf("), "{decompiled}");
+    let info = page(&call(&client, "binary_info", json!({ "path": opens[1] })).await);
+    assert_eq!(info["archive_member"]["name"], "helper.o");
+    assert!(info["relocatable"]["relocations_applied"].as_u64().unwrap() > 0);
+    let whole = call(&client, "binary_info", json!({ "path": library })).await;
+    assert_eq!(whole.is_error, Some(true));
+    assert!(text(&whole).contains("objects.o#0"), "{}", text(&whole));
+    client.cancel().await.unwrap();
+}

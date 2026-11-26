@@ -62,6 +62,7 @@ mod lock_mechanisms;
 mod mips;
 mod mips16;
 mod module_references;
+mod objects;
 mod packs;
 mod patch_frontends;
 mod pdb;

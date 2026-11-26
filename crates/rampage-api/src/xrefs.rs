@@ -206,7 +206,16 @@ impl Project {
             (Some(bytes), Some(decoder)) => u64::from(decoder.decode(bytes, from).len.max(1)),
             _ => width,
         };
-        relocated.sites_in(from..from.saturating_add(length)).first().cloned()
+        // A two-instruction sequence (RISC-V `auipc`+`jalr`, a MIPS `%hi` load) is relocated at its first
+        // instruction while the reference is recorded at the second.
+        let paired = |site: &&rampage_loaders::relocatable::RelocationSite| {
+            site.kind.contains("CALL") || site.kind.contains("HI20") || site.kind.contains("HI16")
+        };
+        relocated
+            .sites_in(from..from.saturating_add(length))
+            .first()
+            .or_else(|| relocated.sites_in(from.saturating_sub(8)..from).iter().rev().find(paired))
+            .cloned()
     }
 
     /// Why `xrefs` to `address` found nothing, and where to look instead: the start of the string `address` lies

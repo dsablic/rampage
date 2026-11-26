@@ -380,7 +380,8 @@ pub(crate) fn load(parsed: &object::File, file: &[u8], arch: Arch, big_endian: b
             size: extern_end - extern_start,
             file_offset: 0,
             file_size: 0,
-            perms: Perms { read: true, write: false, execute: false },
+            // Writable: an extern variable's value is unknown here, so a read of it must never fold to the fill.
+            perms: Perms { read: true, write: true, execute: false },
         });
         cursor = extern_end;
     }
