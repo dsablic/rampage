@@ -496,7 +496,8 @@ fixture for each item. Start with 0.1 and 0.2.
       "read-only" globals into constants, so decompiled output can be silently wrong. Fix: map a decoded image
       whose load address is RAM (or that the code stores into) as writable, and let the `raw` selector state
       region permissions. Add a test that a global the decompiler reads is not constant-folded.
-- [ ] 0.2 **References to struct fields reached through base + offset.** Embedded code loads a base address from
+- [x] (2026-11-26, `xrefs`/`search` rows carry `base` and `access`; cross-block on ARM; open: MIPS/RISC-V across
+      branches, field annotations in `disassemble`) 0.2 **References to struct fields reached through base + offset.** Embedded code loads a base address from
       a literal pool and reads `ldrb rX, [rY, #11]`. Finding who reads one field (a link-state flag) took a
       Python scan. Xrefs and `binary search` references should resolve pool base plus immediate offset (and
       register-relative stores) to the field's address, with evidence.
