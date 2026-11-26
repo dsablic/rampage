@@ -501,7 +501,7 @@ fixture for each item. Start with 0.1 and 0.2.
       a literal pool and reads `ldrb rX, [rY, #11]`. Finding who reads one field (a link-state flag) took a
       Python scan. Xrefs and `binary search` references should resolve pool base plus immediate offset (and
       register-relative stores) to the field's address, with evidence.
-- [ ] 0.3 **Decoded bytes to a file from the CLI.** `write_decoded_range` is MCP-only and CLI `binary decode`
+- [x] (2026-11-26, `binary decode --output`) 0.3 **Decoded bytes to a file from the CLI.** `write_decoded_range` is MCP-only and CLI `binary decode`
       writes nothing, so CLI agents (and the hand analysis) re-implemented the LZSS decoder to get a file to
       scan. Add `--output` (new file only, same refusals as the MCP tool).
 - [ ] 0.4 **A peripheral map without an SVD.** Identifying which code configures which peripheral (here, serial
@@ -515,7 +515,7 @@ fixture for each item. Start with 0.1 and 0.2.
         to set `entry` (and drop vector seeding). Add that hint.
 - [ ] 0.6 **Decompiler call names:** calls render as `func_0x…` while everything else uses `sub_…`. Use one
       naming scheme so names round-trip between tools.
-- [ ] 0.7 **CLI and docs naming:** the docs say `binary_info`, the CLI says `binary inspect`. Add aliases for
+- [x] (2026-11-26, MCP tool names route to their CLI command; unknown subcommands suggest one) 0.7 **CLI and docs naming:** the docs say `binary_info`, the CLI says `binary inspect`. Add aliases for
       the MCP tool names, or an error that suggests the right subcommand.
 
 1. [x] (2026-11-20, open-source inputs: [report](docs/benchmarks/acceptance-2026-11-20.md); the maintainer has no
