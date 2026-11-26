@@ -310,7 +310,8 @@ Raw annotations are memory-only and never written beside the source, so every an
 each CLI run would discard edits and could only ever list nothing.
 
 Native addresses accept `0x` hex, decimal, symbols/exports/import stubs or `sub_<hex>`, except explicit runtime
-comparison slots/ranges and branch windows. JSON addresses are `"0x…"` strings: common consumers lose integer
+comparison slots/ranges and branch windows. `sub_<hex>` is how every command names code without a symbol, calls in
+`function decompile` output included, so a name copied from one command's output works in another. JSON addresses are `"0x…"` strings: common consumers lose integer
 precision above 2^53. Managed `--at` is an IL offset, not a native address.
 
 ## MCP tool names

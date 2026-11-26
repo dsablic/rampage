@@ -421,3 +421,34 @@ fn cortex_m_return_contexts_do_not_depend_on_history() {
     assert_eq!(code(&project, function), fresh, "{function:#x} after its callee and callers");
     assert_eq!(code(&project, function), fresh, "{function:#x} after itself");
 }
+
+/// A callee without a symbol, discovered or not, is named `sub_<hex>` in decompiled C, as listings, xrefs and the
+/// other tools name it, never Ghidra's `func_0x…`; the name read off the C resolves back to the callee's address.
+/// In the library-heavy image some calls land in code discovery did not reach as a function start.
+#[test]
+fn decompiled_callees_use_the_default_names_other_tools_resolve() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/embedded-libs-m0.elf");
+    let project = Project::new(Binary::open(path).unwrap());
+    let query = FunctionsQuery { limit: Some(usize::MAX), ..Default::default() };
+    let known: BTreeSet<u64> = project.functions(&query).unwrap().items.iter().map(|row| row.address).collect();
+    let call = regex::Regex::new(r"\bsub_([0-9a-f]+)\(").unwrap();
+    let (mut named, mut undiscovered) = (0, 0);
+    for &function in &known {
+        let Ok(decompilation) = project.decompile(function) else { continue };
+        assert!(!decompilation.code.contains("func_0x"), "{function:#x}: {}", decompilation.code);
+        for capture in call.captures_iter(&decompilation.code) {
+            let address = u64::from_str_radix(&capture[1], 16).unwrap();
+            let name = format!("sub_{}", &capture[1]);
+            assert_eq!(project.resolve(&name).unwrap(), address, "{name}");
+            assert_eq!(name, rampage_analysis::functions::default_name(address));
+            named += 1;
+            if !known.contains(&address) {
+                undiscovered += 1;
+                // The name works where any address does: disassembly starts at the callee.
+                let lines = project.disassemble(Some(&name), 1).unwrap();
+                assert_eq!(lines[0].address, address, "{name}");
+            }
+        }
+    }
+    assert!(named > 0 && undiscovered > 0, "{named} named calls, {undiscovered} to undiscovered code");
+}

@@ -338,10 +338,14 @@ fn distinct_raw_interpretations_never_share_cached_c() {
         high.set_decompiler_worker(worker.clone());
         let low_c = low.decompile(0x4400).unwrap().code;
         let high_c = high.decompile(0x8000).unwrap().code;
-        // `CALL #0x4410` is absolute: mapped callee at base 0x4400, an unmapped address at base 0x8000.
+        // `CALL #0x4410` is absolute: a discovered callee at base 0x4400, an unmapped address at base 0x8000. Both
+        // read `sub_4410`, the name every tool gives an address without a symbol, never Ghidra's `func_0x4410`.
         assert!(low_c.contains("sub_4410()"), "{low_c}");
-        assert!(high_c.contains("func_0x4410()") && !high_c.contains("sub_4410"), "{high_c}");
-        assert_ne!(low_c, high_c);
+        assert!(high_c.contains("sub_4410()") && !high_c.contains("func_0x"), "{high_c}");
+        let callee = |project: &Project| project.decompile(project.binary.entry.unwrap()).unwrap().structure.calls;
+        let names = |project: &Project| callee(project).into_iter().map(|call| call.name).collect::<Vec<_>>();
+        assert_eq!(names(&low), [Some("sub_4410".to_owned())]);
+        assert_eq!(names(&high), [None]);
 
         // Swapping a cached project's interpretation refuses instead of reusing its analysis, engine or C.
         let mut swapped = msp430(0x4400);

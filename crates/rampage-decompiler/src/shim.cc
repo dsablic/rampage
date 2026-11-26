@@ -1632,7 +1632,7 @@ std::string virtualComment(const Handle *handle, const VirtualSite &site, int4 w
         if (index != 0) text << ", ";
         auto name = handle->virtualNames.find(site.targets[index]);
         if (name != handle->virtualNames.end()) text << name->second;
-        else text << "FUN_" << std::hex << site.targets[index] << std::dec;
+        else text << "sub_" << std::hex << site.targets[index] << std::dec;
     }
     if (site.targets.size() > virtualCommentNames)
         text << " (" << site.targets.size() << " targets in all)";

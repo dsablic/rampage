@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: a function without a name is called sub_<hex byte offset>, as rampage names it.
 // Modified for rampage: a volatile access with no symbol is named by the global scope (pushAnnotation).
 #include "printc.hh"
 #include "funcdata.hh"
@@ -3504,8 +3505,7 @@ string PrintC::genericFunctionName(const Address &addr)
 {
   ostringstream s;
 
-  s << "func_";
-  addr.printRaw(s);
+  s << "sub_" << hex << addr.getOffset();
   return s.str();
 }
 

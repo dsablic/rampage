@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: a function without a name is called sub_<hex byte offset>, as rampage names it.
 // Set up decompiler for specific architectures
 
 #include "coreaction.hh"
@@ -539,8 +540,7 @@ void Architecture::nameFunction(const Address &addr,string &name) const
 
 {
   ostringstream defname;
-  defname << "func_";
-  addr.printRaw(defname);
+  defname << "sub_" << hex << addr.getOffset();
   name = defname.str();
 }
 

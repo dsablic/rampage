@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: a function without a name is called sub_<hex byte offset>, as rampage names it.
 #include "fspec.hh"
 #include "funcdata.hh"
 
@@ -2208,10 +2209,8 @@ void FspecSpace::printRaw(ostream &s,uintb offset) const
 
   if (fc->getName().size() != 0)
     s << fc->getName();
-  else {
-    s << "func_";
-    fc->getEntryAddress().printRaw(s);
-  }
+  else
+    s << "sub_" << hex << fc->getEntryAddress().getOffset() << dec;
 }
 
 void FspecSpace::decode(Decoder &decoder)
