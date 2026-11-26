@@ -548,7 +548,12 @@ fixture for each item. Start with 0.1 and 0.2.
    most remaining final misses differ in length, not operands ([embedded set](docs/signature-corpus.md#embedded-firmware-set)).
    Follow-up: the databases shipped before this name `xEventGroupSetBitsFromISR` on an inih function in the
    held-out negatives (6 false names), and `__getopt_r` on stubs in the tombstone half; look at why.
-5. **Object files and static archives** (roadmap 4.3).
+5. **Object files and static archives** (roadmap 4.3). Slice 1 done 2026-11-26: ELF `.o` and `ar` members
+   (`lib.a(member.o)`), relocations for x86-64/i386/AArch64/ARM/Thumb/MIPS/RISC-V (byte-identical to ld.lld at the
+   same layout), `extern` and GOT segments; libgcc.a 147 members, 249/253 symbol-table functions (the 4 are aliases).
+   Open: COFF `.obj`/`.lib`, Mach-O `MH_OBJECT`, signatures from archives (slice 2); whole-archive projects; TLS and
+   MIPS64 composite relocations; linker relaxation; DWARF in objects; thin archives; core dumps.
+   - [ ] The demangler reads a function named `f` as `float` (a bare one-letter name is not a mangled name).
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
    layout, `__CxxFrameHandler4`, Swift metadata.
 7. **Windows:** the flywheel's Windows corpus, then a Windows host build.
