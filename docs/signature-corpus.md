@@ -303,6 +303,11 @@ prebuilt runtime library's optimization level.
 
 ## Producers
 
+A user database can also be built straight from a static library: `build_signatures` with a `.a` or `.lib` as its
+path adds, beside the masked hashes, PAT rows whose wildcards are the bytes the objects' relocations patch
+([signatures from a library](object-files.md#signatures-from-a-library)). The bundled databases above are not
+rebuilt that way yet: the corpus producers below hash linked reference programs.
+
 `tools/signature-corpus.py` consumes an explicit offline cache of pinned source archives. It checks and extracts the
 same bounded regular-file snapshot, records actual commands and artifacts, freezes evaluator/collector executables,
 and never runs generated target programs. Configured host scripts run with a clean recorded environment and isolated

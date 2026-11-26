@@ -29,11 +29,14 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 
 ## Formats and instruction decoding
 
-- [Object files](object-files.md): an ELF relocatable object (x86, x86-64, AArch64, ARM/Thumb, MIPS, RISC-V) is
-  laid out from 0x10000 with its relocations applied, undefined symbols named in an `extern` segment and GOT
-  references in a synthetic `.got`, so functions, xrefs (with the relocation as evidence), strings and decompiled C
-  work as in a linked image; a member of a GNU or BSD `ar` library opens as `lib.a(member.o)`. Limits: ELF only (no
-  COFF or Mach-O objects); one member per project; unsupported relocation types are reported, not applied.
+- [Object files](object-files.md): an ELF relocatable object (x86, x86-64, AArch64, ARM/Thumb, MIPS, RISC-V), a
+  COFF `.obj` (x64, x86, ARM64, Thumb-2; big objects too) or a Mach-O `MH_OBJECT` (x86-64, arm64) is laid out from
+  0x10000 with its relocations applied, undefined symbols named in an `extern` segment, GOT references in a
+  synthetic GOT and COFF `__imp_` pointers in a synthetic import table, so functions, xrefs (with the relocation as
+  evidence), strings and decompiled C work as in a linked image. A member of a GNU or BSD `ar` library, an MSVC
+  `.lib` or a Mach-O universal `.a` opens as `lib.a(member.o)`; import-library members are listed as imports. A
+  whole library builds a signature database with relocation-exact patterns. Limits: one member per project;
+  unsupported relocation types are reported, not applied; no 32-bit Mach-O objects.
 
 - `list_dir` lists a folder with each entry's kind, size and sniffed format, so work can start from a directory.
   See [MCP](mcp.md). Limits: one directory per call, 1,000,000 entries read; formats come from magic bytes only.
@@ -376,7 +379,9 @@ accessors unnamed. `identify_functions` takes a Cortex-M Raw project's `raw` sel
 gets the same names as its ELF. An embedded call graph built from the same references then names the callees of
 named library functions (source `rampage-builtin call graph`). Limits: on owned firmware built with a held-out GCC
 the two name 45–60% of library functions with no wrong name; FreeRTOS matches only configurations laid out like a trained one. Build an
-overlay database from a binary with named functions using `function build-signatures` (legacy `signatures`).
+overlay database from a binary with named functions using `function build-signatures` (legacy `signatures`),
+or from a static library (`.a`, `.lib`), which adds patterns that leave out exactly the bytes relocations patch
+([signatures from a library](object-files.md#signatures-from-a-library)).
 A database hashes each function over both its symbol size and discovered extent. A function cut short at an
 unresolved jump table can match when discovery stops at the same place in the target.
 

@@ -903,6 +903,15 @@ impl Binary {
                             .ok_or_else(|| LoadError::Malformed("unreadable short import object".to_owned()))?;
                         return Err(crate::ar::import_member_error(&import));
                     }
+                    _ if data[start..end].starts_with(&[0, 0])
+                        && object::read::coff::CoffFile::<&[u8]>::parse(&data[start..end]).is_ok() =>
+                    {
+                        return Err(LoadError::Unsupported(
+                            "machine-independent COFF objects (IMAGE_FILE_MACHINE_UNKNOWN): this library member only \
+                             aliases symbols and holds no code"
+                                .to_owned(),
+                        ));
+                    }
                     Ok(object::FileKind::Coff | object::FileKind::CoffBig) => {
                         let size = found.size;
                         let mut binary = Self::load_recovery(data, start..end, Vec::new(), wanted, recover)?;
@@ -1415,6 +1424,11 @@ impl Binary {
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
         binary.warnings.extend(warning);
+        // A COFF object's `.pdata` entries start its functions, SEH funclets (`$fin$0`, `$dtor$0`) among them, which
+        // only the exception tables reach. The layout's image base is 0, so each begin is the function's address.
+        if binary.format == Format::Pe && binary.relocated.is_some() {
+            function_starts.extend(coff_pdata_starts(&binary));
+        }
         // Stripped firmware names its interrupt handlers only in the vector table, as a Raw image does.
         if elf_m_profile && let Some(table) = crate::raw_vectors::elf_table(&binary) {
             function_starts.extend(table.handlers());
@@ -2010,6 +2024,25 @@ fn code_ranges(sections: &[Section], segments: &[Segment]) -> Vec<Range<u64>> {
             .collect();
     }
     merged(ranges)
+}
+
+/// The function begins a COFF object's `.pdata` sections give: x64's 12-byte entries (begin, end, unwind) and
+/// ARM64's and ARM's 8-byte ones (begin, unwind or packed data), relocated to the layout's addresses.
+fn coff_pdata_starts(binary: &Binary) -> Vec<u64> {
+    let entry = match binary.arch {
+        Arch::X86_64 => 12,
+        Arch::Aarch64 | Arch::Arm => 8,
+        _ => return Vec::new(),
+    };
+    let mut starts = Vec::new();
+    for section in binary.sections.iter().filter(|section| section.name == ".pdata" && section.address != 0) {
+        let Some(bytes) = binary.read(section.address, section.size) else { continue };
+        for record in bytes.chunks_exact(entry).take(1 << 16) {
+            let begin = u64::from(u32::from_le_bytes([record[0], record[1], record[2], record[3]]));
+            starts.push(if binary.arch == Arch::Arm { begin & !1 } else { begin });
+        }
+    }
+    starts
 }
 
 /// Whether `name` is a section-start label an assembler gives a Mach-O object's sections (`ltmp0`, `ltmp1`).

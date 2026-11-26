@@ -89,8 +89,8 @@ Compared with Ghidra and IDA, rampage does not have:
 - a scripting API (IDAPython, Ghidra scripts); new capabilities are added as MCP tools instead;
 - a mature interactive GUI: its desktop UI is an experimental viewer for inspecting a binary and what an agent
   found, not an editor; types, structs, patches and debugging stay with the agent through MCP;
-- Java decompilation of Android DEX code (rampage lists Dalvik bytecode and structured pseudocode), JVM class
-  files, or COFF and Mach-O object files (ELF objects and `ar` libraries load with relocations applied; see
+- Java decompilation of Android DEX code (rampage lists Dalvik bytecode and structured pseudocode) or JVM class
+  files (ELF, COFF and Mach-O objects and `.a`/`.lib` libraries load with relocations applied; see
   [object files](object-files.md));
 - Swift metadata, C++ class-layout recovery beyond RTTI and vtable evidence, or exception-table recovery beyond
   MSVC `__CxxFrameHandler3` tables (experimental);

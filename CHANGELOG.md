@@ -24,6 +24,22 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `binary archive-inventory`) lists a library's members with the symbols its index gives each and the `open` path,
   and `contains` matches those symbols. `ANALYSIS_VERSION` is 14 and `DECOMPILE_CACHE_VERSION` 3. See
   [object files](docs/object-files.md). New fixtures in `tests/fixtures/objects` (`build-objects.sh`).
+- COFF objects (`.obj`: x64, x86, ARM64, Thumb-2, big objects too) and Mach-O `MH_OBJECT` objects (x86-64, arm64)
+  load the same way. COFF: addends read from the field, `__imp_X` pointers as slots of a synthetic `.idata` import
+  table holding the extern `X` (so calls through them decompile by name), weak externals resolved to their default,
+  COMDAT, debug and directive sections handled (`binary_info` reports `comdats` and the `.drectve` `directives`),
+  image base 0 for `ADDR32NB`, `.pdata` entries seeding function starts (SEH funclets); the format is `pe`. Mach-O: sections keep their own addresses moved by the base,
+  `SUBTRACTOR` and `ADDEND` pairs, a synthetic `__got`. Every relocation of the fixtures references the same symbol
+  plus addend in rampage's image as in `lld-link`'s or `ld64.lld`'s output. MSVC `.lib` members open as
+  `lib.lib(member.obj)`; import-library members (short import objects) are listed by `archive_inventory` with their
+  `import` (DLL, symbol, kind, by name or ordinal) and refused with what they import when opened; a Mach-O universal
+  `.a` lists every slice's members with their `arch` and a member path opens the slice `arch` picks.
+  `build_signatures` (CLI `function build-signatures`) takes a static library as its path and builds from all its
+  objects, adding PAT patterns whose wildcards are exactly the bytes relocations patched (the 16-bit immediate for
+  MIPS `%hi`/`%lo`): a MIPS library's database names all seven of its functions in a program linked against it,
+  where the objects' hashes alone named two. `ANALYSIS_VERSION` is 15 (Mach-O objects were loaded unlaid-out
+  before). New fixtures: COFF and Mach-O objects, `libobjects-coff.lib`, `imports-coff.lib`, `libobjects-macho.a`,
+  `libobjects-mipsel.a` and `linked-mipsel`.
 
 - `peripheral_map` (MCP group `types`, Raw-capable; CLI `binary peripheral-map`) maps which code touches which
   memory-mapped peripheral without an SVD, from load and store instructions only (base-plus-offset field references

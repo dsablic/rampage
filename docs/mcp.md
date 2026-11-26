@@ -201,9 +201,10 @@ Errors from these tools are JSON objects: `{"error": kind, "message": text}`. `k
 ## Inputs, paging and decompiler tokens
 
 Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_length` to open an embedded view.
-A `path` of the form `lib.a(member.o)` opens one member of a static library (`member.o#N` picks member N where
-names repeat), as the embedded image at the member's location; a relocatable object is laid out with its
-relocations applied. See [object files](object-files.md).
+A `path` of the form `lib.a(member.o)` opens one member of a static library (`.a`, MSVC `.lib`, Mach-O universal
+`.a` with `arch` picking the slice; `member.o#N` picks member N where names repeat), as the embedded image at the
+member's location; a relocatable object (ELF, COFF or Mach-O) is laid out with its relocations applied.
+`build_signatures` takes a whole static library as its `path`. See [object files](object-files.md).
 
 **The session target.** Over MCP, `path` is optional. Each successful call of a project tool records its target: the
 path with the selectors it was opened with (`raw`, or `arch`/`image_offset`/`image_length`), or an Intel HEX or
@@ -1266,7 +1267,8 @@ ledger entries. Builds with the ledger skip edits of fields they do not know in 
 `undo`/`redo` revert/reapply one session step, including a whole batch. When another client's edit blocks undo,
 `discard_undo` drops the blocked step from session history, leaving its edits in effect and the log unchanged,
 so earlier steps can be undone. It refuses a step that undo could still revert unless `force: true` is explicit.
-`build_signatures` writes a database to its requested output path; `identify_functions` and
+`build_signatures` writes a database to its requested output path (from a binary, or from every object of a
+static library); `identify_functions` and
 `import_debug_signatures` persist changes only when `apply: true` is requested.
 
 ## Persistent analysis store

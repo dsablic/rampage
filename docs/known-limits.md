@@ -211,9 +211,10 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   so a float result can differ from hardware in its last bits. MIPS, PowerPC and RISC-V take no float arguments or
   results. A `string_decoding` replay starts at the block holding the call, so arguments the caller set up in
   earlier blocks are not seen.
-- Object files: ELF relocatable objects and members of `ar` libraries only (no COFF `.obj`/`.lib`, Mach-O
-  `MH_OBJECT` or core dumps); one member per project; TLS and 64-bit MIPS composite relocations are left unapplied
-  and reported. See [object files](object-files.md#limits).
+- Object files: ELF, COFF and 64-bit Mach-O objects and members of `ar`, `.lib` and universal libraries (no
+  32-bit Mach-O objects or core dumps); one member per project; ELF TLS, Mach-O TLV and 64-bit MIPS composite
+  relocations are left unapplied and reported; library signature patterns miss functions a linker relaxed. See
+  [object files](object-files.md#limits).
 - Not built yet: Swift metadata, C++ class-layout recovery beyond RTTI and
   vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and per-function (rather than
   per-binary) invalidation of stored decompilations after edits.

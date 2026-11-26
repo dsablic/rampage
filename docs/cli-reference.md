@@ -83,7 +83,7 @@ rampage binary analyze module.dylib --all-architectures --workflow triage-report
 | `function pseudocode FILE --at ADDRESS [--structured]` | `pseudocode` | Partial ARM64 SSA with explicit unknowns |
 | `function xrefs FILE --to ADDRESS` or `--from ADDRESS` | `xrefs` | Code/data references; exactly one direction. A field reached through a base register shows `[read 1B at base 0x20000100+0xb, base from ADDRESS]` |
 | `function identify FILE [--db DB] [--apply]` | `identify` | Native/PAT matches; optional separate fuzzy candidates |
-| `function build-signatures FILE [--output DB]` | `signatures` | Named-function JSON; separate fuzzy mode with `--fuzzy-request` |
+| `function build-signatures FILE [--output DB]` | `signatures` | Named-function JSON from a binary or a static library (`.a`, `.lib`; relocation-exact patterns); separate fuzzy mode with `--fuzzy-request` |
 | `function compare FILE --reference JSON` | `compare` | Versioned, image-matched function-start comparison |
 | `function inspect-table FILE --at ADDRESS --count N` | `jump-table` | Explicit immutable ARM64 table validation |
 | `function evaluate FILE --at ADDRESS [--arg VALUE]... [--return-bits N]` | | Run a function on arguments with a p-code interpreter (experimental; [details](mcp.md#inputs-paging-and-decompiler-tokens)) |
@@ -256,9 +256,11 @@ See [data packs](data-packs.md), [MCP](mcp.md) and the [internal workflow regist
 ## Global options and addresses
 
 - `--json`: machine-readable query output. MCP serving uses its protocol, not the CLI text/JSON renderer.
-- `--arch ARCH`: selects a universal Mach-O slice, e.g. `x86_64`, `aarch64` or `arm`.
+- `--arch ARCH`: selects a universal Mach-O slice (of a binary or a universal static library), e.g. `x86_64`,
+  `aarch64` or `arm`.
 - `FILE` may name a static library member, `'lib.a(member.o)'` (quoted for the shell; `member.o#N` where names
-  repeat); see [object files](object-files.md).
+  repeat; `--arch` picks a universal library's slice), of an `ar` archive or an MSVC `.lib`; see
+  [object files](object-files.md).
 - `--image-offset OFFSET`: opens an embedded ELF/PE/Mach-O in place; hex `0x...` or decimal. For a universal
   Mach-O this is the fat header's offset; use `--arch` for its slice. Offset 0 without a length opens the file itself.
 - `--image-length N`: requires `--image-offset`. It selects the embedded extent; bytes after the executable's
