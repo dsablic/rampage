@@ -1096,6 +1096,7 @@ mod tests {
             last_vtor_store: None,
             after_jump: None,
             vector_table: None,
+            vector_table_bytes: None,
             vector_table_refused: None,
             note: "",
         }

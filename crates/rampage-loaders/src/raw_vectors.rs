@@ -171,7 +171,27 @@ pub(crate) fn read_reset_table(
     address: u64,
     ram: &dyn Fn(u64) -> bool,
 ) -> Result<VectorTable, LoadError> {
-    let mut table = read(bytes, base, address)?;
+    let end = base.saturating_add(bytes.len() as u64);
+    let mut table = read_checked_table(bytes, base, address, &|target| (base..end).contains(&target), ram)?;
+    if let Some(reason) = table.refused_reason.take() {
+        table.refused_reason = Some(format!(
+            "not a reset {reason}. If the image starts with code, open it without vector_table and give entry (its \
+             first instruction) instead"
+        ));
+    }
+    Ok(table)
+}
+
+/// [`read_reset_table`], with `in_image` deciding which handler targets lie in mapped code: for a table whose bytes
+/// are not the code's own, such as one the program stored at the address it installs through VTOR.
+pub(crate) fn read_checked_table(
+    bytes: &[u8],
+    base: u64,
+    address: u64,
+    in_image: &dyn Fn(u64) -> bool,
+    ram: &dyn Fn(u64) -> bool,
+) -> Result<VectorTable, LoadError> {
+    let mut table = read_with(bytes, base, address, in_image)?;
     let word = |index: u16| table.vectors.iter().find(|vector| vector.index == index);
     let sp = word(0).expect("the initial SP word is always read");
     let reset = word(1).expect("the Reset word is always read");
@@ -214,11 +234,7 @@ pub(crate) fn read_reset_table(
     }
     let reasons: Vec<String> = sp_reason.into_iter().chain(reset_reason).collect();
     if !reasons.is_empty() {
-        table.refused_reason = Some(format!(
-            "not a reset vector table: {}; no handler was used. If the image starts with code, open it without \
-             vector_table and give entry (its first instruction) instead",
-            reasons.join("; ")
-        ));
+        table.refused_reason = Some(format!("vector table: {}; no handler was used", reasons.join("; ")));
     }
     Ok(table)
 }

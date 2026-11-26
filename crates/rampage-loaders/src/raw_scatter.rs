@@ -211,6 +211,18 @@ pub struct VtorStore {
     pub site: u64,
 }
 
+/// Where the bytes of the table at the last VTOR value came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VectorTableBytes {
+    /// A mapped region holding the table.
+    Mapped,
+    /// The program's stores during the follow: a table it copies or fills in memory without bytes before it
+    /// installs it. Judged as the reset-time table is: an initial SP in RAM and a Thumb Reset handler in mapped
+    /// code, or a Reset handler and two more.
+    Stored,
+}
+
 /// What following the reset code from the entry found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ScatterLoad {
@@ -247,6 +259,9 @@ pub struct ScatterLoad {
     /// The vector table at the last VTOR value, when that lies in a mapped region; its accepted handlers are seeds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table: Option<crate::raw_vectors::VectorTable>,
+    /// Where the bytes of `vector_table` came from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_table_bytes: Option<VectorTableBytes>,
     /// Why the table at the last VTOR value was not read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table_refused: Option<String>,
@@ -273,7 +288,13 @@ pub(crate) struct Follow {
     /// Per listed copy: whether the follow ended cleanly and the write was not interrupted or overwritten.
     pub complete: Vec<bool>,
     pub overwritten: Vec<bool>,
+    /// The bytes at the last VTOR value as the follow's memory held them when it stopped (the program's stores
+    /// over the mapped bytes), up to the first byte it does not know and at most a whole vector table.
+    pub vtor_bytes: Vec<u8>,
 }
+
+/// The bytes of the largest vector table: 16 system and 240 external vectors.
+const MAX_VECTOR_TABLE_BYTES: u32 = 4 * (16 + crate::raw_vectors::MAX_EXTERNAL_VECTORS as u32);
 
 type MemoKey = [u8; 32];
 static MEMO: Mutex<Vec<(MemoKey, Arc<Follow>)>> = Mutex::new(Vec::new());
@@ -1095,6 +1116,10 @@ impl<'a> Machine<'a> {
             complete.push(!write.interrupted);
             overwritten.push(write.overwritten);
         }
+        let vtor_bytes = self.vtor_last.as_ref().map_or_else(Vec::new, |store| {
+            let start = store.value as u32;
+            (0..MAX_VECTOR_TABLE_BYTES).map_while(|offset| self.byte(start.checked_add(offset)?).value).collect()
+        });
         Follow {
             report: ScatterLoad {
                 entry: u64::from(entry),
@@ -1111,11 +1136,13 @@ impl<'a> Machine<'a> {
                 last_vtor_store: self.vtor_last,
                 after_jump,
                 vector_table: None,
+                vector_table_bytes: None,
                 vector_table_refused: None,
                 note: NOTE,
             },
             complete,
             overwritten,
+            vtor_bytes,
         }
     }
 
@@ -2027,9 +2054,25 @@ mod tests {
         let report = raw.scatter_load().unwrap();
         let refused = report.vector_table_refused.as_deref().unwrap_or_default();
         assert!(
-            refused.starts_with("VTOR value 0x30000000 lies in no region with bytes: the program fills"),
+            refused.starts_with(
+                "VTOR value 0x30000000 lies in no region with bytes, and the follow saw no table stored there: the \
+                 program, or the code that loads it, fills"
+            ),
             "{refused}"
         );
+        assert!(!refused.contains("begins"), "{refused}");
+        // Just below a mapped copy, the reason names the region the table would run into.
+        let binary = admit(0x0fff_ff00);
+        let report = binary.raw_code_image().unwrap().scatter_load().unwrap();
+        let refused = report.vector_table_refused.as_deref().unwrap_or_default();
+        assert!(
+            refused.ends_with(
+                "raw.code.1 begins 0x100 bytes above it, room for 64 vectors: the table is memory reserved below that \
+                 region, which starts with its own bytes rather than the table's"
+            ),
+            "{refused}"
+        );
+        assert!(report.vector_table.is_none());
         let binary = admit(0x1000_0000);
         let report = binary.raw_code_image().unwrap().scatter_load().unwrap();
         assert_eq!(report.vector_table.as_ref().map(|table| table.address), Some(0x1000_0000), "{report:#?}");

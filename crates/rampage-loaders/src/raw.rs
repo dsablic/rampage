@@ -4,6 +4,7 @@ use rampage_arch::Arch;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::raw_scatter::VectorTableBytes;
 use crate::{LoadError, Perms, Section, SectionKind, Segment};
 
 /// Input cap for Sleigh-decoded profiles (every profile except the natively decoded Cortex-M and MIPS ones).
@@ -800,7 +801,7 @@ impl RawCodeImage {
         }
         let scatter_load = match (scatter_load_mode, options.entry) {
             (Some(map), Some(entry)) if options.profile.m_profile() => {
-                let mut report = scatter_regions(&mut regions, &mut data, entry, map, max);
+                let (mut report, vtor_bytes) = scatter_regions(&mut regions, &mut data, entry, map, max);
                 let in_code = |address: u64| {
                     regions.iter().any(|region| region.kind == RawRegionKind::Code && region.range().contains(&address))
                 };
@@ -811,33 +812,53 @@ impl RawCodeImage {
                 {
                     options.seeds.push(target);
                 }
-                // The vector table the program installs last, once the memory holding it is mapped.
+                // The vector table the program installs last: from the mapped region holding it, or else from what
+                // the program stored there before (a table it copies or fills in RAM the image has no bytes for).
                 if let Some(store) = report.last_vtor_store.clone() {
                     let holder = regions.iter().find(|region| region.backed() && region.range().contains(&store.value));
-                    match holder {
-                        None => {
-                            report.vector_table_refused = Some(format!(
-                                "VTOR value {:#x} lies in no region with bytes: the program fills that table at run \
-                                 time, so its interrupt handlers are not seeded; `xrefs` to {:#x} and the stores \
-                                 after it show the code that fills it",
-                                store.value, store.value
-                            ));
-                        }
-                        Some(region) => {
-                            match crate::raw_vectors::read_with(
+                    let read = match holder {
+                        Some(region) => Some((
+                            VectorTableBytes::Mapped,
+                            crate::raw_vectors::read_with(
                                 &data[region.data_range()],
                                 region.base_address,
                                 store.value,
                                 &in_code,
-                            ) {
-                                Ok(table) => {
-                                    options
-                                        .seeds
-                                        .extend(table.handlers().filter(|&handler| Some(handler) != options.entry));
-                                    report.vector_table = Some(table);
-                                }
-                                Err(error) => report.vector_table_refused = Some(error.to_string()),
+                            ),
+                        )),
+                        None if vtor_bytes.len() >= 8 => {
+                            let ram = |address: u64| {
+                                regions.iter().any(|region| {
+                                    region.kind == RawRegionKind::Ram && region.range().contains(&address)
+                                })
+                            };
+                            Some((
+                                VectorTableBytes::Stored,
+                                crate::raw_vectors::read_checked_table(
+                                    &vtor_bytes,
+                                    store.value,
+                                    store.value,
+                                    &in_code,
+                                    &ram,
+                                ),
+                            ))
+                        }
+                        None => None,
+                    };
+                    match read {
+                        None => report.vector_table_refused = Some(unbacked_vtor_reason(store.value, &regions)),
+                        Some((_, Err(error))) => report.vector_table_refused = Some(error.to_string()),
+                        Some((bytes, Ok(table))) => {
+                            if let Some(reason) = &table.refused_reason {
+                                report.vector_table_refused = Some(format!(
+                                    "the {} bytes the program stored at VTOR value {:#x} are not a {reason}",
+                                    vtor_bytes.len(),
+                                    store.value
+                                ));
                             }
+                            options.seeds.extend(table.handlers().filter(|&handler| Some(handler) != options.entry));
+                            report.vector_table = Some(table);
+                            report.vector_table_bytes = Some(bytes);
                         }
                     }
                 }
@@ -940,6 +961,31 @@ impl RawCodeImage {
     /// Evidence for every vector read when vector-table seeding was requested.
     pub fn vector_table(&self) -> Option<&crate::raw_vectors::VectorTable> {
         self.vector_table.as_ref()
+    }
+
+    /// When `vector_table` was requested and the table was refused, what to do instead: the words at the table
+    /// address are usually code (many decoded images start with their reset code), so the project should be opened
+    /// with `entry` and without vector seeding. None when no table was requested or it was used.
+    pub fn vector_table_hint(&self) -> Option<String> {
+        let table = self.vector_table.as_ref()?;
+        let reason = table.refused_reason.as_deref()?;
+        let reason = reason.split(". If the image starts with code").next().unwrap_or(reason);
+        let consequence = match self.entry {
+            None => "so the project has no entry: discovery starts only from seeds, and the reset code and its \
+                     startup copies are not followed"
+                .to_owned(),
+            Some(entry) => format!("the entry you gave, {entry:#x}, is used"),
+        };
+        let first = if table.address == self.base {
+            format!("its first instruction; {:#x} when the code starts at the base", self.base)
+        } else {
+            "its first instruction".to_owned()
+        };
+        Some(format!(
+            "the vector table at {:#x} was refused ({reason}), {consequence}. If the image starts with code, reopen \
+             without \"vector_table\" and give \"entry\" ({first})",
+            table.address
+        ))
     }
 
     /// Evidence for every pointer table found when pointer-table seeding was requested.
@@ -1111,7 +1157,7 @@ fn scatter_regions(
     entry: u64,
     map: bool,
     max: usize,
-) -> crate::raw_scatter::ScatterLoad {
+) -> (crate::raw_scatter::ScatterLoad, Vec<u8>) {
     use crate::raw_scatter::{CopyKind, CopyStatus, Mapped, NotMappedReason};
     let follow = {
         let memory: Vec<Mapped<'_>> = regions
@@ -1125,6 +1171,7 @@ fn scatter_regions(
         crate::raw_scatter::follow(&memory, entry)
     };
     let mut report = follow.report;
+    let vtor_bytes = follow.vtor_bytes;
     for (index, copy) in report.copies.iter_mut().enumerate() {
         let range = copy.destination..copy.destination + copy.length;
         let source = copy.source.and_then(|source| {
@@ -1199,7 +1246,35 @@ fn scatter_regions(
         copy.status = CopyStatus::Mapped;
         copy.region = Some(name);
     }
-    report
+    (report, vtor_bytes)
+}
+
+/// Why the table at VTOR value `value` was not read when no backed region holds it and the follow saw no table
+/// stored there. A region beginning less than one table above the value is named: the table is memory reserved
+/// below it, not its first bytes.
+fn unbacked_vtor_reason(value: u64, regions: &[RawRegionInfo]) -> String {
+    let reason = format!(
+        "VTOR value {value:#x} lies in no region with bytes, and the follow saw no table stored there: the program, or \
+         the code that loads it, fills that table at run time, so its interrupt handlers are not seeded; `xrefs` to \
+         {value:#x} and the stores after it show the code that fills it"
+    );
+    let max_table = 4 * (16 + crate::raw_vectors::MAX_EXTERNAL_VECTORS as u64);
+    let above = regions
+        .iter()
+        .filter(|region| region.base_address > value && region.base_address - value < max_table)
+        .min_by_key(|region| region.base_address);
+    match above {
+        Some(region) => {
+            let gap = region.base_address - value;
+            format!(
+                "{reason}. {} begins {gap:#x} bytes above it, room for {} vectors: the table is memory reserved below \
+                 that region, which starts with its own bytes rather than the table's",
+                region.name,
+                gap / 4
+            )
+        }
+        None => reason,
+    }
 }
 
 /// A copy of `length` bytes at `offset` of the admitted region named `from`, whose bytes lie in `data`; refused

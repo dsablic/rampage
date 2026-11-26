@@ -134,6 +134,38 @@ fn startup_copies_are_found_from_the_entry_and_mapped_at_their_run_addresses() {
     }
 }
 
+/// Copied code that fills a vector table in RAM the image has no bytes for (reserved just below the copy) and then
+/// installs it through VTOR: the table is read from what the program stored, judged as a reset table is, and its
+/// handlers are seeded.
+#[test]
+fn a_vector_table_the_copied_code_fills_below_the_copy_is_read_from_its_stores() {
+    let truth = |name: &str| truth("vtor", name);
+    let project = open("vtor", selector("vtor"));
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let scatter = &summary["raw"]["scatter_load"];
+    let (ramfunc, _, _) = section("vtor", ".ramfunc");
+    assert_eq!(scatter["copies"][0]["destination"], hex(ramfunc), "{scatter:#}");
+    assert!(truth("ram_vectors") < ramfunc && ramfunc - truth("ram_vectors") < 0x100, "{scatter:#}");
+    assert_eq!(scatter["last_vtor_store"]["value"], hex(truth("ram_vectors")), "{scatter:#}");
+    assert!(scatter.get("vector_table_refused").is_none(), "{scatter:#}");
+    assert_eq!(scatter["vector_table_bytes"], "stored", "{scatter:#}");
+    let table = &scatter["vector_table"];
+    assert_eq!(table["address"], hex(truth("ram_vectors")));
+    assert_eq!(table["vectors"][0]["status"], "stack_pointer");
+    assert_eq!(table["vectors"][1]["target"], hex(truth("default_handler")));
+    assert_eq!(table["vectors"][15]["target"], hex(truth("ram_systick_handler")));
+    assert_eq!(table["vectors"][15]["status"], "accepted");
+    // The table ends where the copied code it points at begins.
+    assert_eq!(table["stop_reason"], "reached_handler", "{table:#}");
+    let seeds = project.binary.raw_code_image().unwrap().seeds();
+    assert!(seeds.contains(&truth("ram_systick_handler")), "{seeds:x?}");
+    assert!(functions(&project).contains(&truth("ram_systick_handler")));
+
+    // Without the stores (the GCC image's table is the copy's own bytes) nothing changes: the table is mapped.
+    let gcc = serde_json::to_value(open("gcc", selector("gcc")).summary()).unwrap();
+    assert_eq!(gcc["raw"]["scatter_load"]["vector_table_bytes"], "mapped");
+}
+
 #[test]
 fn scatter_load_false_reports_the_copies_without_mapping_them() {
     let mut raw = selector("gcc");

@@ -1110,7 +1110,7 @@ impl Project {
         Ok(crate::rows::FunctionsPage {
             page,
             unexplored_code,
-            next: self.raw_discovery_hint(),
+            next: self.raw_functions_next(),
             note: match (self.binary.undecoded_isa_note(), self.pointer_tables_note()) {
                 (Some(isa), Some(tables)) => Some(format!("{isa}. {tables}")),
                 (isa, tables) => isa.or(tables),
@@ -1188,6 +1188,22 @@ impl Project {
             .sum();
         let thin = covered * RAW_COVERAGE_PARTS < code.saturating_sub(fill);
         (few || thin).then_some(crate::rows::RawCoverage { functions: found, code_bytes: code, covered_bytes: covered })
+    }
+
+    /// What `list_functions` suggests next on a Raw project: reopening with `entry` when the vector table was
+    /// refused (the image may start with code), then the options a sparse discovery calls for.
+    fn raw_functions_next(&self) -> Option<String> {
+        let vector = self.binary.raw_code_image().and_then(|raw| raw.vector_table_hint()).map(|hint| {
+            let mut hint = hint;
+            if let Some(first) = hint.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            hint + "."
+        });
+        match (vector, self.raw_discovery_hint()) {
+            (Some(vector), Some(discovery)) => Some(format!("{vector} {discovery}")),
+            (vector, discovery) => vector.or(discovery),
+        }
     }
 
     /// For a Raw project whose discovery, already run, is sparse (see [`Project::raw_discovery_sparse`]), the

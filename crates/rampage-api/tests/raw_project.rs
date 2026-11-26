@@ -1177,23 +1177,49 @@ fn cortex_m_code_read_as_a_vector_table_is_refused() {
     // The records fixture from its first function on: Thumb code where a table would be.
     let code = &CORTEX_M_RECORDS[0x40..];
     let path = owned.file("code.bin", code);
-    let request = request(json!({
+    let code_first = request(json!({
         "profile": "cortex-m4", "offset": 0, "length": code.len(), "base_address": "0x8000040", "vector_table": true,
         "pointer_tables": false,
     }));
-    let project = Session::default().open_raw(&path, &request).unwrap();
+    let project = Session::default().open_raw(&path, &code_first).unwrap();
     let summary = serde_json::to_value(project.summary()).unwrap();
     let table = &summary["raw"]["vector_table"];
     let reason = table["refused_reason"].as_str().unwrap_or_else(|| panic!("{table:#}"));
     assert!(reason.starts_with("not a reset vector table") && reason.contains("give entry"), "{reason}");
     assert!(summary["entry"].is_null(), "{summary:#}");
     assert_eq!(summary["raw"]["seed_count"], 0, "{summary:#}");
+    // binary_info's warnings and list_functions' next say so where an agent reads first: set entry, drop
+    // vector_table.
+    let warnings = summary["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{summary:#}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(warning.starts_with("the vector table at 0x8000040 was refused (not a reset vector table"), "{warning}");
+    assert!(warning.contains("the project has no entry"), "{warning}");
+    assert!(
+        warning.ends_with(
+            "reopen without \"vector_table\" and give \"entry\" (its first instruction; 0x8000040 when \
+                           the code starts at the base)"
+        ),
+        "{warning}"
+    );
+    let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
+    let next = page["next"].as_str().unwrap_or_else(|| panic!("{page:#}"));
+    assert!(next.starts_with("The vector table at 0x8000040 was refused") && next.contains("give \"entry\""), "{next}");
+    // Given an entry, the refused table only says the entry is used.
+    let with_entry = request(json!({
+        "profile": "cortex-m4", "offset": 0, "length": code.len(), "base_address": "0x8000040", "vector_table": true,
+        "pointer_tables": false, "entry": "0x8000040",
+    }));
+    let project = Session::default().open_raw(&path, &with_entry).unwrap();
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    assert!(summary["warnings"][0].as_str().unwrap().contains("the entry you gave, 0x8000040, is used"), "{summary:#}");
     // The real table is still accepted.
     let path = owned.file("records.bin", CORTEX_M_RECORDS);
     let project = Session::default().open_raw(&path, &records_request()).unwrap();
     let summary = serde_json::to_value(project.summary()).unwrap();
     assert!(summary["raw"]["vector_table"].get("refused_reason").is_none(), "{summary:#}");
     assert_eq!(summary["entry"], format!("{:#x}", elf_symbol(CORTEX_M_RECORDS_ELF, "reset_handler")));
+    assert_eq!(summary["warnings"], json!([]), "{summary:#}");
 }
 
 /// The starting points binary_info lists, as (address, reasons joined).

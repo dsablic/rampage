@@ -109,8 +109,10 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   pointer table, data record or inferred CRC routine seeds it; `xrefs` to a function then finds no caller and its
   `notes` name any Thumb `bl` in undiscovered code that targets it. `lock_mechanisms` analyses only the functions
   its evidence selects (`coverage.functions_analyzed` of `functions_discovered`).
-- A vector table the program builds in RAM at run time (VTOR set to memory with no bytes in the image) is not
-  read: `raw.scatter_load.vector_table_refused` says so, and its interrupt handlers are not seeded.
+- A vector table the program builds in RAM at run time (VTOR set to memory with no bytes in the image) is read only
+  when the bounded reset-code follow sees the stores that fill it; one filled later (by a driver registering its
+  handlers, or by the code that loads the image) is not: `raw.scatter_load.vector_table_refused` says so, and its
+  interrupt handlers are not seeded.
 - Raw Cortex-M discovery's record pass and pointer-table scan stop at work budgets (1,000,000 record words and
   decodes; 2,000,000 decodes per region scanned), and say so in `raw.record_seeds.truncated` and
   `walk_budget_exhausted`; `find_main` and the starting points follow at most 50,000 startup instructions.

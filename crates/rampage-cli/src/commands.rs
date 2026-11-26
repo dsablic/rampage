@@ -1363,6 +1363,9 @@ pub fn funcs(
     for unexplored in &page.unexplored_code {
         writeln!(out, "note: {} ({} known entry points inside)", unexplored.note, unexplored.known_entry_points)?;
     }
+    if let Some(next) = &page.next {
+        writeln!(out, "next: {next}")?;
+    }
     Ok(())
 }
 

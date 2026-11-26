@@ -22,7 +22,8 @@ Pass `raw` instead of a native image: `profile` (a Raw language ID or an alias s
 The table is refused as a whole, with `raw.vector_table.refused_reason`, when its Reset word is no Thumb address in
 the code, or when its initial SP lies outside RAM (0x10000000 to 0x40000000, or a `ram` region you map) and fewer
 than two other handlers check out: an image that starts with code (many decoded updates do) is then not misread,
-and you open it with `entry` instead. A table with an SP in external SDRAM is kept, its SP word flagged
+and you open it with `entry` instead; `binary_info` warns, and `list_functions` says in `next`, when a refused table
+leaves the project without an entry. A table with an SP in external SDRAM is kept, its SP word flagged
 `sp_outside_ram`; map that RAM as a `ram` region to accept it.
 
 ```json
@@ -219,7 +220,12 @@ their initial bytes; zero fills map as unbacked `ram`. Every copy, mapped or not
 
 After the jump the follow goes on, bounded, for stores to the Vector Table Offset Register: the table at the last
 value is read when a mapped region holds it, and its handlers are seeded, so interrupt handlers that only a
-relocated vector table names are discovered.
+relocated vector table names are discovered. Code that relocates its vectors often fills a table in RAM the image
+has no bytes for, just below the copied code, and then sets VTOR: when the follow sees those stores, the table is
+read from them (`vector_table_bytes: "stored"`), judged as the reset-time table is (an initial SP in RAM and a
+Thumb Reset handler in mapped code, or Reset and two more handlers), and its handlers are seeded. A table nothing
+in the follow fills is refused, and `vector_table_refused` names the mapped region that begins above it when the
+table is the memory reserved below that region.
 
 To see the copies without mapping them, pass `"scatter_load": false`. When that leaves discovery sparse,
 `list_functions` says so in `next`. See [scatter-load copies](mcp.md#scatter-load-copies) for every field and

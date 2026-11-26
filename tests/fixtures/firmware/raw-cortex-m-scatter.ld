@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Flash at 0x08000000 holds the code, the region table and the load images of .ramfunc and .data. .ramfunc runs
-   from tightly coupled RAM at 0x10000000 (with its own vector table first), .data from SRAM at 0x20000000, and
-   .bss follows .data. */
+   from tightly coupled RAM at 0x10000000 (with its own vector table first, or after a vector table the code fills
+   with -DRAM_VECTORS), .data from SRAM at 0x20000000, and .bss follows .data. */
 ENTRY(reset_handler)
 
 MEMORY
@@ -26,6 +26,12 @@ SECTIONS
     __region_table_end = .;
     . = ALIGN(4);
   } > FLASH
+
+  /* Empty unless built with -DRAM_VECTORS: a vector table the copied code fills, below the copy. */
+  .ram_vectors (NOLOAD) :
+  {
+    KEEP(*(.ram_vectors))
+  } > TCM
 
   .ramfunc :
   {

@@ -51,6 +51,22 @@ see the [stability policy](docs/stability.md) for what the version promises.
   entry for a `code` region); `true` on `data` and `false` on `ram` are refused. `binary_info` reports `writable`
   and `writable_reason` on each region. Flash mappings, other profiles and native images decompile as before. The Raw interpretation
   identity is now `rampage-raw-interpretation-v7`, so analyses cached for Raw projects are recomputed once.
+- Raw Cortex-M: a vector table the program fills in RAM the image has no bytes for (often reserved just below the
+  copied code) and then installs through VTOR is read from the stores the reset-code follow saw, running on into
+  mapped bytes after them, judged as the reset-time table is (an initial SP in RAM and an accepted Thumb Reset
+  handler, or Reset and two more handlers in mapped code), and its handlers are seeded. `raw.scatter_load` reports
+  `vector_table_bytes` (`mapped` or `stored`); a table nothing in the follow fills is still refused, and
+  `vector_table_refused` names the mapped region that begins less than one table above it. New fixture
+  `tests/fixtures/firmware/raw-cortex-m-scatter-vtor.bin`.
+- Raw Cortex-M: when `vector_table` is refused (an image that starts with code), `binary_info` adds a `warnings` line
+  and `list_functions` a `next` saying to reopen without `vector_table` and with `entry`, and what the refusal cost
+  (no entry, so the reset code and its startup copies are not followed). The CLI's `function list` prints `next`.
+- Decompiled C names a callee without a symbol `sub_<hex>` (lowercase hex byte address, as listings, `xrefs` and
+  address arguments use it) instead of Ghidra's `func_0x<padded hex>`, also for calls into code discovery never made
+  a function; the name resolves in every tool that takes an address. The decompiler's own default names (an
+  undiscovered function decompiled by address, the targets in a virtual-call comment, which said `FUN_<hex>`) follow
+  the same scheme. Only output that contained such names changes; the recorded fixture digests do not, so
+  `DECOMPILE_CACHE_VERSION` stays 1 (each build's executable stamp already keys its stored decompilations).
 
 ## 1.11.0 (2026-11-22)
 

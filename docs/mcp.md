@@ -231,7 +231,10 @@ then x86). `image_offset` (hex `"0x..."` or decimal) opens the ELF, PE or Mach-O
 file give its fat header's offset with `arch` for the slice; offset 0 without `image_length` is the file itself.
 `image_length` defaults to the extent the image's header tables give, which leaves out any overlay after it.
 Native addresses are hexadecimal strings; most queries also accept
-symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
+symbols, exports, import-stub names and `sub_<hex>`. `sub_<hex>` (lowercase hex, no leading zeros, a Thumb
+function at its even address) is the one name every tool gives code without a symbol: `list_functions`, `xrefs`,
+`disassemble` and the C `decompile` writes, including calls to code discovery never made a function, so a name read
+off any result can be passed back. Runtime comparison slots/ranges and branch windows require
 explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
 
 List queries use `offset`/`limit`, generally defaulting to 100 entries and capped at 1000. `list_functions`
@@ -904,7 +907,9 @@ word lies outside RAM (0x10000000..=0x40000000, or inside or at the end of a `ra
 handlers are `accepted`, `refused_reason` says why (for example code at offset 0, whose first words are no SP and no
 Thumb handler) and no handler of it becomes the entry or a seed; the words are still listed with their verdicts. A
 table whose Reset and two more handlers check out is kept with an SP outside RAM (external SDRAM, a part's own RAM),
-the SP word `refused` with `sp_outside_ram`. A table that VTOR stores install is not held to the SP rule.
+the SP word `refused` with `sp_outside_ram`. A table that VTOR stores install in a mapped region is not held to the
+SP rule. A refused table leaves the project without an entry unless you gave one: `binary_info` then adds a
+`warnings` line, and `list_functions` a `next`, saying to reopen without `vector_table` and with `entry`.
 
 `"pointer_tables": true` (Cortex-M only) also seeds functions from tables of Thumb code pointers,
 such as handler arrays and command tables, so a raw image needs no hand-built symbol list. `false` never scans.
@@ -1052,8 +1057,13 @@ After the jump into copied code the follow goes on for at most 200,000 more inst
 anywhere in the follow are listed in `vtor_stores` (the first eight; `vtor_stores_not_listed` counts the rest)
 and the last one in `last_vtor_store`; the table at that value is read when a region with bytes
 holds it, reported as `vector_table` (each word with its verdict, as for `vector_table`), and its accepted handlers
-become seeds, so handlers that only the relocated table names are discovered. Otherwise `vector_table_refused` says
-why (for example, the table lies in memory nothing copied).
+become seeds, so handlers that only the relocated table names are discovered. When no region holds it but the
+follow saw the program store a table there (code that copies or fills its vectors in RAM before setting VTOR,
+often just below the copied code), the table is read from those stores, running on into mapped bytes after them,
+and judged as the reset-time table is (an initial SP in RAM and an accepted Reset, or Reset and two more handlers);
+`vector_table_bytes` says which (`mapped` or `stored`). Otherwise `vector_table_refused` says why (for example, the
+table lies in memory nothing copied or filled, and when a mapped region begins less than one table above the value,
+that region's name and the room it leaves).
 
 When discovery from the entry and seeds finds fewer than one function per 16 KiB of a Raw project's code (none at all
 in a smaller image), or functions covering less than an eighth of it, `list_functions` adds a one-line `next` naming what to try, and so does `binary_info` once

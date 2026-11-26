@@ -3,6 +3,7 @@
 # Rebuild the scatter-load Cortex-M4 fixtures (see raw-cortex-m-scatter.c):
 #   raw-cortex-m-scatter-gcc.bin    flash image at 0x08000000; GCC-style startup loops over linker symbols.
 #   raw-cortex-m-scatter-table.bin  the same program with an Arm-style region table walked by the startup code.
+#   raw-cortex-m-scatter-vtor.bin   the GCC-style program filling a RAM vector table below the copied code.
 # The .elf files keep the symbols. Needs zig and llvm-objcopy; built freestanding with -g0, so no local path is
 # recorded (`python3 tests/fixtures/scrub-paths.py --check` passes on each output).
 set -euo pipefail
@@ -19,3 +20,4 @@ build() {
 }
 build raw-cortex-m-scatter-gcc
 build raw-cortex-m-scatter-table -DREGION_TABLE
+build raw-cortex-m-scatter-vtor -DRAM_VECTORS

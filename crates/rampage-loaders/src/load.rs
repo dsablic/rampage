@@ -305,7 +305,7 @@ impl Binary {
             exports: Vec::new(),
             function_starts: raw.seeds().to_vec(),
             slices: vec![arch],
-            warnings: Vec::new(),
+            warnings: raw.vector_table_hint().into_iter().collect(),
             details: Details::None,
             big_endian: raw.profile().big_endian(),
             thumb: raw.thumb_ranges(),
@@ -483,7 +483,7 @@ impl Binary {
             || !self.imports.is_empty()
             || !self.import_slots.is_empty()
             || !self.exports.is_empty()
-            || !self.warnings.is_empty()
+            || self.warnings.iter().ne(raw.vector_table_hint().iter())
             || !matches!(&self.details, Details::None)
             || self.overlay.is_some()
             || self.global_pointer.is_some()

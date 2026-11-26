@@ -4,6 +4,10 @@
 //   raw-cortex-m-scatter-gcc.bin    GCC-style startup: inline loops over pairs of linker symbols.
 //   raw-cortex-m-scatter-table.bin  built with -DREGION_TABLE: Arm-style startup walking a table of (load, run,
 //                                   size, handler) entries in flash with a copy and a zero handler.
+//   raw-cortex-m-scatter-vtor.bin   built with -DRAM_VECTORS: the GCC-style startup, but the copied code fills a
+//                                   vector table in RAM reserved below it (0x10000000, the copy at 0x10000040)
+//                                   before it sets VTOR, as code that relocates its vectors does (the compiler turns
+//                                   the copy from flash_vectors into stores of the handler addresses).
 // The copied code (.ramfunc) runs from 0x10000000; it sets VTOR to a vector table copied with it, whose SysTick
 // handler is reachable only through that table. .data runs from 0x20000000 and .bss follows it. The .elf files keep
 // the symbols and section addresses (the truth for tests).
@@ -31,6 +35,17 @@ RAMFUNC void ram_systick_handler(void) {
   UART_DR = tick_count;
 }
 
+#ifdef RAM_VECTORS
+// The table the copied code installs, filled at run time from flash into RAM the image has no bytes for.
+__attribute__((used)) void (*const flash_vectors[16])(void) = {
+    (void (*)(void))&__stack_top,
+    default_handler, /* Reset is never taken from RAM */
+    default_handler, default_handler, default_handler, default_handler, default_handler, 0, 0, 0, 0,
+    default_handler, default_handler, 0, default_handler,
+    ram_systick_handler, /* SysTick */
+};
+__attribute__((section(".ram_vectors"), aligned(128))) void (*volatile ram_vectors[16])(void);
+#else
 __attribute__((section(".ramfunc.vectors"), used, aligned(128))) void (*const ram_vectors[16])(void) = {
     (void (*)(void))&__stack_top,
     default_handler, /* Reset is never taken from RAM */
@@ -38,6 +53,7 @@ __attribute__((section(".ramfunc.vectors"), used, aligned(128))) void (*const ra
     default_handler, default_handler, 0, default_handler,
     ram_systick_handler, /* SysTick */
 };
+#endif
 
 RAMFUNC uint32_t ram_mix(uint32_t value) {
   uint32_t state = mix_state;
@@ -49,6 +65,11 @@ RAMFUNC uint32_t ram_mix(uint32_t value) {
 }
 
 RAMFUNC void ram_main(void) {
+#ifdef RAM_VECTORS
+  for (uint32_t i = 0; i < 16; i++) {
+    ram_vectors[i] = flash_vectors[i];
+  }
+#endif
   SCB_VTOR = (uint32_t)ram_vectors;
   for (;;) {
     UART_DR = ram_mix(scratch[tick_count & 7]);
