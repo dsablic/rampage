@@ -54,6 +54,14 @@ After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below, 
 Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
 1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
 
+## Haiku suite v4 pass for 1.20.0 (2026-11-27)
+
+rampage only, 1 rep, label haiku-v4-1.20.0: 18/20 strict, 19/20 lenient, $0.53, 8 tool errors (12 at 1.11.0).
+Both misses are on the model's side: emulate-mix-x64-elf gave the right value inside `{"status":"ok","result":…}`
+(the slip of the last three releases; still open below), and lock-rollback-cm4-raw answered refusal `reset` for the
+version check without ever inspecting that function (`halt`; right at 1.10.0 and 1.11.0). libid-names-m0-raw, a
+miss at 1.11.0, is right.
+
 ## Haiku suite v4 pass for 1.11.0 (2026-11-22)
 
 rampage only, 1 rep, label haiku-v4-1.11.0: 18/20 strict, $0.31, 12 tool errors (19 at 1.10.0, 41 at 1.9.0).
