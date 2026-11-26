@@ -45,7 +45,7 @@ These may change or disappear in any minor release. Each is marked as experiment
   and `pointer_tables` seeding, multiple `regions` and `ihex`/`srec` input; the MIPS32 profiles
   (`MIPS:BE:32:default`, `MIPS:LE:32:default`); and the Xtensa profile (`Xtensa:LE:32:default`) with its `esp`
   format. Their names, discovery behaviour and results may change, and so may the `raw` selector's `vector_table`,
-  `pointer_tables`, `regions` and `format` fields. The `raw` field of `binary_info` (`raw.esp` included) is
+  `pointer_tables`, `regions`, `writable` and `format` fields. The `raw` field of `binary_info` (`raw.esp` included) is
   experimental for every Raw profile, though its fields are pinned in the contract snapshots so changes are seen.
 - **Xtensa analysis:** Xtensa ELF files, ESP app images and flash dumps, and what `binary_info`, `file_layout`,
   `carve` (`esp_image`, `esp_partition_table`) and `list_dir` (`esp_image`, `esp_flash`) report about them.

@@ -136,7 +136,9 @@ rampage workflow run triage-report tests/fixtures/bin/hello-x64.elf
 ```
 
 Add `--json` for machine-readable output. `rampage --help` lists every command; the
-[CLI reference](docs/cli-reference.md) has the full catalog.
+[CLI reference](docs/cli-reference.md) has the full catalog. MCP tool names work too, where one command does the
+same thing (`rampage binary_info FILE` runs `binary inspect`), and a mistyped command is answered with the one
+meant.
 
 ## Capabilities
 
@@ -160,7 +162,8 @@ Areas marked *experimental* may change in any release; see the [stability policy
   checked DWARF and PDB type import. `get_type` also reads layouts straight from a binary's DWARF, and from the
   Go runtime type descriptors of stripped Go binaries, by member path or byte offset.
 - **Search and patching:** byte, text, regex, immediate, instruction and reference search (on 32-bit ARM and
-  Thumb, constants loaded from literal pools or built by MOVW/MOVT); an assembler for an x86/x64/AArch64 subset;
+  Thumb, constants loaded from literal pools or built by MOVW/MOVT, and structure fields reached through a base
+  register plus an offset); an assembler for an x86/x64/AArch64 subset;
   checked byte patches kept in the annotation log and exported to a new file.
 - **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), ELF, COFF and Mach-O object
   files and static library (`.a`, `.lib`) members with relocations applied ([object files](docs/object-files.md)), .NET metadata and CIL,
@@ -190,8 +193,11 @@ Areas marked *experimental* may change in any release; see the [stability policy
   copies followed and mapped at their run addresses; `find_main` and `binary_info`'s starting points following the
   reset handler; up to 15 further code, data or RAM regions; Intel HEX and Motorola S-record input;
   `probe_compression` for unknown LZSS and LZ4 variants; and integrity checks that find and fix an image's CRCs and
-  checksums and verify those in a container's records. Code addresses with the Thumb bit set work where the code
-  is known to be Thumb. Strings, triage, crypto and lock-mechanism tools work on Raw projects too. See
+  checksums and verify those in a container's records; a code region the program writes (an application that runs
+  from RAM) writable for the decompiler, so its globals do not fold to the image's bytes; a vector table the reset
+  code fills in RAM and installs through VTOR read from those stores; and `peripheral_map`, which lists which code
+  reads and writes which memory-mapped peripheral without an SVD. Code addresses with the Thumb bit set work where
+  the code is known to be Thumb. Strings, triage, crypto and lock-mechanism tools work on Raw projects too. See
   [how to read the code in a firmware update file](docs/firmware-walkthrough.md).
 - **Device privacy:** `endpoint_inventory` lists the hosts, URLs, IPs and certificates a binary or an extracted
   firmware tree names, `endpoint_blocklist` writes them as a router blocklist, and `privacy_surface` maps what a
@@ -209,7 +215,8 @@ Areas marked *experimental* may change in any release; see the [stability policy
   See [firmware version diffing](docs/firmware-diffing.md).
 - **Library identification and detection:** FLIRT/FunctionID-style signatures with bundled databases, user PAT
   and Ghidra FID input, fuzzy candidates, packer/compiler detection (including signatures converted from Detect It
-  Easy), encrypted or packed code detection that keeps discovery out of it, YARA, a capa subset, capability tags
+  Easy), databases built from static libraries with patterns that leave out exactly the bytes relocations patch,
+  encrypted or packed code detection that keeps discovery out of it, YARA, a capa subset, capability tags
   and crypto constants, all extendable with data packs.
 - **Persistent analysis store** (*experimental*): release builds save function discovery and each decompiled
   function per user and reuse them when the same binary is opened again with the same inputs, across processes;
@@ -263,7 +270,8 @@ targets debugged through an RSP stub, from a macOS or Linux host.
 - Android DEX code is listed as Dalvik bytecode and structured pseudocode, not decompiled to Java; JVM class files
   are not read.
 - microMIPS code is not decoded; MIPS16e is, in 32-bit ELF files whose header marks it (most OpenWrt programs).
-- Not yet built: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and vftable
+- Object files: one library member per project, no 32-bit Mach-O objects, and no core dumps.
+- Not yet built: Swift metadata, C++ class-layout recovery beyond RTTI and vftable
   evidence, decoding of `__CxxFrameHandler4` exception tables, and incremental re-analysis after edits.
 - The benchmarks above use one model and one client; they are not general accuracy guarantees.
 

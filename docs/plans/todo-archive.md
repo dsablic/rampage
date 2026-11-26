@@ -1498,7 +1498,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 
 #### Darwin narrow inputs and aggregate-verification bridge
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#darwin-narrow-inputs-and-aggregate-verification-bridge).
+Done items and notes are archived in [todo-archive.md](#darwin-narrow-inputs-and-aggregate-verification-bridge).
 
 - [ ] Full-workspace release gate: interrupted during compilation after an excessive optimized test-link rebuild;
   this is neither a suite pass nor an assertion failure. Focused release validation above passed with unchanged
@@ -1506,7 +1506,7 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 
 #### Verified-DWARF layout batch — initial bounded scope
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#verified-dwarf-layout-batch--initial-bounded-scope).
+Done items and notes are archived in [todo-archive.md](#verified-dwarf-layout-batch--initial-bounded-scope).
 
 - [ ] Initial layout-batch optimized acceptance: the selected API/worker fixture build hit its five-minute cap
   while linking, before assertions. No optimized-suite success is claimed;
@@ -1514,21 +1514,21 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 
 #### Usable typed-decompilation push
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#usable-typed-decompilation-push).
+Done items and notes are archived in [todo-archive.md](#usable-typed-decompilation-push).
 
 - [ ] Broader matched-setting C/C++ differential decompilation corpus and runtime/memory metrics. These initial
   independent compiler/source oracles are not that benchmark or general class-layout/virtual-dispatch acceptance.
 
 #### Bounded virtual-method evidence
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#bounded-virtual-method-evidence).
+Done items and notes are archived in [todo-archive.md](#bounded-virtual-method-evidence).
 
 - [ ] Broad C++ differential/corpus/performance acceptance, typed virtual dispatch, inheritance and adjusting thunks.
   The owned source/compiler oracles and exact slot correlations do not earn these broader capabilities.
 
 #### Exact-entry analysis and local debugger workspace
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#exact-entry-analysis-and-local-debugger-workspace).
+Done items and notes are archived in [todo-archive.md](#exact-entry-analysis-and-local-debugger-workspace).
 
 - [ ] New live end-to-end LLDB workspace acceptance, broader ABI/platform coverage and performance measurements.
   Owned protocol mocks and image fixtures do not establish arbitrary-host or third-party-runtime acceptance.
@@ -1541,7 +1541,7 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 
 #### Deferred exact-entry UI and reviewed static workspaces
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#deferred-exact-entry-ui-and-reviewed-static-workspaces).
+Done items and notes are archived in [todo-archive.md](#deferred-exact-entry-ui-and-reviewed-static-workspaces).
 
 - [ ] Broader derived analysis caches and runtime cross-module resolution; the historical inventory and static PE
   declaration slices below do not complete these. Broader ABI/type recovery and affirmative
@@ -1550,13 +1550,13 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 
 #### Static references, responsive file operations and historical inventory
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#static-references-responsive-file-operations-and-historical-inventory).
+Done items and notes are archived in [todo-archive.md](#static-references-responsive-file-operations-and-historical-inventory).
 
 - [ ] Runtime/converted executable plugins, broader recovery and remaining TODOs are not part of this milestone.
 
 #### Validation and external blockers
 
-Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#validation-and-external-blockers).
+Done items and notes are archived in [todo-archive.md](#validation-and-external-blockers).
 
 - [ ] Resolve the local `rust-objcopy` missing-`libLLVM.dylib` stripping warning; release tests still execute.
   - Command-local `DYLD_LIBRARY_PATH=<rustc-sysroot>/lib` resolves the installed tool's library lookup;

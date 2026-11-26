@@ -6,43 +6,27 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
-- ELF relocatable objects (`.o`) load as IDA loads them: allocated sections are laid out from 0x10000, each aligned,
-  undefined symbols get named slots in an `extern` segment (imports; functions where a call reaches them), common
-  symbols a `COMMON` segment and GOT references a synthetic `.got`, and relocations are applied into a loaded copy
-  for x86, x86-64, AArch64, ARM/Thumb (with `bl`/`blx` interworking), MIPS (HI16/LO16 pairing, `_gp_disp`, GOT16
-  pages, CALL16) and RISC-V (PCREL HI20/LO12 pairs, CALL, ADD/SUB/SET), REL and RELA alike. Unapplied types are
-  reported once per type. Functions, xrefs, strings, disassembly and decompiled C now work on objects: `xrefs` rows
-  carry the `relocation` (type, symbol, addend) applied at the referencing instruction, `binary_info` reports the
-  layout under `relocatable`, and the decompiler names externs, treats a jump to one (conditional or not) as a
-  call followed by a return (worker protocol 17), binds GOT entries of local functions and folds an object's
-  read-only data except fields whose relocation was left unapplied. Applied fields match `ld.lld`'s at the same
-  layout on the fixtures. Before, an object listed
-  no functions and could not be disassembled or decompiled.
-- Static libraries: a member of a GNU or BSD `ar` archive opens in any tool as `lib.a(member.o)` (`member.o#N`
-  where names repeat), as the embedded image at its location, with its own annotations and cache entry;
-  `binary_info` reports `archive_member`. Opening a whole library lists its members. `archive_inventory` (CLI
-  `binary archive-inventory`) lists a library's members with the symbols its index gives each and the `open` path,
-  and `contains` matches those symbols. `ANALYSIS_VERSION` is 14 and `DECOMPILE_CACHE_VERSION` 3. See
-  [object files](docs/object-files.md). New fixtures in `tests/fixtures/objects` (`build-objects.sh`).
-- COFF objects (`.obj`: x64, x86, ARM64, Thumb-2, big objects too) and Mach-O `MH_OBJECT` objects (x86-64, arm64)
-  load the same way. COFF: addends read from the field, `__imp_X` pointers as slots of a synthetic `.idata` import
-  table holding the extern `X` (so calls through them decompile by name), weak externals resolved to their default,
-  COMDAT, debug and directive sections handled (`binary_info` reports `comdats` and the `.drectve` `directives`),
-  image base 0 for `ADDR32NB`, `.pdata` entries seeding function starts (SEH funclets); the format is `pe`. Mach-O: sections keep their own addresses moved by the base,
-  `SUBTRACTOR` (a section-relative minuend too) and `ADDEND` pairs, a synthetic `__got`. COFF and Mach-O function
-  symbols are sized to the next symbol in their section, so objects and libraries build signatures. Every relocation of the fixtures references the same symbol
-  plus addend in rampage's image as in `lld-link`'s or `ld64.lld`'s output. MSVC `.lib` members open as
-  `lib.lib(member.obj)`; import-library members (short import objects) are listed by `archive_inventory` with their
-  `import` (DLL, symbol, kind, by name or ordinal) and refused with what they import when opened; a Mach-O universal
-  `.a` lists every slice's members with their `arch` and a member path opens the slice `arch` picks.
-  `build_signatures` (CLI `function build-signatures`) takes a static library as its path and builds from all its
-  objects, adding PAT patterns whose wildcards are exactly the bytes relocations patched (the 16-bit immediate for
-  MIPS `%hi`/`%lo`): a MIPS library's database names all seven of its functions in a program linked against it,
-  where the objects' hashes alone named two; a COFF `.lib`'s names all ten functions of a program lld-link links
-  from it. Members are skipped by format (import objects, alias-only objects), and the MCP call is cancellable. `ANALYSIS_VERSION` is 15 (Mach-O objects were loaded unlaid-out
-  before). New fixtures: COFF and Mach-O objects, `libobjects-coff.lib`, `imports-coff.lib`, `libobjects-macho.a`,
-  `libobjects-mipsel.a` and `linked-mipsel`.
+### Firmware
 
+- Raw projects: a code region the program writes is writable for the decompiler, so a Cortex-M application that runs
+  from RAM no longer gets `Read-only address is written` on its global stores, and reads of its globals are no
+  longer folded into the values the image holds; its function bodies, literal pools and strings stay read-only, so
+  constants, calls, switch tables and string literals still fold (an initialised char array stays writable). A
+  Cortex-M code region (primary, further `code` region or record run) is writable when mapped in SRAM (0x20000000 to
+  0x3fffffff), and a decoded primary region when at least two functions store into it outside their bodies. The
+  `raw` selector states it with `writable` (Cortex-M only; on the selector for the primary region, on a `regions`
+  entry for a `code` region); `true` on `data` and `false` on `ram` are refused. `binary_info` reports `writable`
+  and `writable_reason` on each region. Flash mappings, other profiles and native images decompile as before.
+- `xrefs` and `search` `references` find loads and stores that reach a structure field through a base register plus
+  an immediate offset (`ldr r1, =0x20001234` then `ldrb r0, [r1, #11]`, a MOVW/MOVT base, a Thumb `adds` on the
+  base), with evidence on each row: `base` (the instruction that set the base, the base address, the offset and the
+  access width) and `access` (`read` or `write`). On ARM and Thumb the base is followed across a function's
+  branches and loops when every path into the access sets the same base; MIPS and RISC-V bases (a completed
+  address pair or a GOT load) within a straight-line run. In a Raw Cortex-M project a field in unmapped RAM or
+  peripheral space is listed too. The CLI's `function xrefs` prints the evidence. New fixture
+  `tests/fixtures/firmware/raw-cortex-m-fields.bin`.
+- Discovery resolves base-plus-offset field references into unmapped RAM and peripheral space for an ELF whose
+  build attributes say M-profile, as it did for Raw Cortex-M projects.
 - `peripheral_map` (MCP group `types`, Raw-capable; CLI `binary peripheral-map`) maps which code touches which
   memory-mapped peripheral without an SVD, from load and store instructions only (base-plus-offset field references
   and the constant-address access scan), so literal-pool words and tables never dereferenced stay out. Accesses in
@@ -55,39 +39,6 @@ see the [stability policy](docs/stability.md) for what the version promises.
   decoded as code are left out; Cortex-M bit-band alias stores count at the word and bit they reach. Raw and ELF
   Cortex-M images; a hosted binary gets an empty map with a note. `peripheral_access` now counts the same
   accesses. New fixture `tests/fixtures/firmware/raw-cortex-m-peripherals.bin`.
-- Discovery resolves base-plus-offset field references into unmapped RAM and peripheral space for an ELF whose
-  build attributes say M-profile, as it did for Raw Cortex-M projects. The analysis store's `ANALYSIS_VERSION` is 13.
-- `xrefs` and `search` `references` find loads and stores that reach a structure field through a base register plus
-  an immediate offset (`ldr r1, =0x20001234` then `ldrb r0, [r1, #11]`, a MOVW/MOVT base, a Thumb `adds` on the
-  base), with evidence on each row: `base` (the instruction that set the base, the base address, the offset and the
-  access width) and `access` (`read` or `write`). On ARM and Thumb the base is followed across a function's
-  branches and loops when every path into the access sets the same base; MIPS and RISC-V bases (a completed
-  address pair or a GOT load) within a straight-line run. In a Raw Cortex-M project a field in unmapped RAM or
-  peripheral space is listed too. The CLI's `function xrefs` prints the evidence. New fixture
-  `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` went to 12.
-- `binary decode --output PATH` writes the whole decoded output to a new file, through the same API function and with
-  the same refusals as MCP `write_decoded_range`: a new file only (never over an existing file or symlink), mode
-  0644, and the decode's size caps. The CLI resolves the directory typed (relative, through `..` or a symlinked
-  `/tmp`) to its canonical path first; `--json` adds `written` (`path`, `bytes`) to the receipt and keeps `preview`.
-- `write_decoded_range` and `endpoint_blocklist` refuse an output path that ends in a separator, and open the output
-  directory one component at a time without following a symlink, so an ancestor swapped for a symlink after the
-  check cannot redirect the write.
-- MCP tool names work at the CLI as hidden aliases where one CLI command does the same thing (`rampage binary_info
-  FILE` runs `binary inspect`; also within a group). An unknown subcommand is refused with the
-  command meant: the CLI route of an MCP tool name (with flags, as for `write_decoded_range`), a note that an MCP
-  tool has no CLI command, or the nearest routes by edit distance (a prefix such as `function decomp` counts as close).
-  `rampage help <tool>` shows the route's help. The mapping is one table, listed in the
-  [CLI reference](docs/cli-reference.md#mcp-tool-names).
-- Raw projects: a code region the program writes is writable for the decompiler, so a Cortex-M application that runs
-  from RAM no longer gets `Read-only address is written` on its global stores, and reads of its globals are no
-  longer folded into the values the image holds; its function bodies, literal pools and strings stay read-only, so
-  constants, calls, switch tables and string literals still fold (an initialised char array stays writable). A
-  Cortex-M code region (primary, further `code` region or record run) is writable when mapped in SRAM (0x20000000 to
-  0x3fffffff), and a decoded primary region when at least two functions store into it outside their bodies. The
-  `raw` selector states it with `writable` (Cortex-M only; on the selector for the primary region, on a `regions`
-  entry for a `code` region); `true` on `data` and `false` on `ram` are refused. `binary_info` reports `writable`
-  and `writable_reason` on each region. Flash mappings, other profiles and native images decompile as before. The Raw interpretation
-  identity is now `rampage-raw-interpretation-v7`, so analyses cached for Raw projects are recomputed once.
 - Raw Cortex-M: a vector table the program fills in RAM the image has no bytes for (often reserved just below the
   copied code) and then installs through VTOR is read from the stores the reset-code follow saw, running on into
   mapped bytes after them, judged as the reset-time table is (an initial SP in RAM and an accepted Thumb Reset
@@ -99,12 +50,81 @@ see the [stability policy](docs/stability.md) for what the version promises.
   and `list_functions` a `next` saying to reopen without `vector_table` and with `entry`, and what the refusal cost
   (no entry, so the reset code and its startup copies are not followed). Given `entry`, only the warning remains,
   saying to drop `vector_table`. The CLI's `function list` prints `next`.
+
+### Object files and archives
+
+- ELF relocatable objects (`.o`) load as IDA loads them: allocated sections are laid out from 0x10000, each aligned,
+  undefined symbols get named slots in an `extern` segment (imports; functions where a call reaches them), common
+  symbols a `COMMON` segment and GOT references a synthetic `.got`, and relocations are applied into a loaded copy
+  for x86, x86-64, AArch64, ARM/Thumb (with `bl`/`blx` interworking), MIPS (HI16/LO16 pairing, `_gp_disp`, GOT16
+  pages, CALL16) and RISC-V (PCREL HI20/LO12 pairs, CALL, ADD/SUB/SET), REL and RELA alike. Unapplied types are
+  reported once per type. Functions, xrefs, strings, disassembly and decompiled C now work on objects: `xrefs` rows
+  carry the `relocation` (type, symbol, addend) applied at the referencing instruction, `binary_info` reports the
+  layout under `relocatable`, and the decompiler names externs, treats a jump to one (conditional or not) as a
+  call followed by a return, binds GOT entries of local functions and folds an object's read-only data except
+  fields whose relocation was left unapplied. Applied fields match `ld.lld`'s at the same layout on the fixtures.
+  Before, an object listed no functions and could not be disassembled or decompiled.
+- COFF objects (`.obj`: x64, x86, ARM64, Thumb-2, big objects too) and Mach-O `MH_OBJECT` objects (x86-64, arm64)
+  load the same way. COFF: addends read from the field, `__imp_X` pointers as slots of a synthetic `.idata` import
+  table holding the extern `X` (so calls through them decompile by name), weak externals resolved to their default,
+  COMDAT, debug and directive sections handled (`binary_info` reports `comdats` and the `.drectve` `directives`),
+  image base 0 for `ADDR32NB`, `.pdata` entries seeding function starts (SEH funclets); the format is `pe`. Mach-O:
+  sections keep their own addresses moved by the base, `SUBTRACTOR` (a section-relative minuend too) and `ADDEND`
+  pairs, a synthetic `__got`. COFF and Mach-O function symbols are sized to the next symbol in their section, so
+  objects and libraries build signatures. Every relocation of the fixtures references the same symbol plus addend
+  in rampage's image as in `lld-link`'s or `ld64.lld`'s output.
+- Static libraries: a member of a GNU or BSD `ar` archive opens in any tool as `lib.a(member.o)` (`member.o#N`
+  where names repeat), as the embedded image at its location, with its own annotations and cache entry;
+  `binary_info` reports `archive_member`. Opening a whole library lists its members. `archive_inventory` (CLI
+  `binary archive-inventory`) lists a library's members with the symbols its index gives each and the `open` path,
+  and `contains` matches those symbols. See [object files](docs/object-files.md).
+- MSVC `.lib` members open as `lib.lib(member.obj)`; import-library members (short import objects) are listed by
+  `archive_inventory` with their `import` (DLL, symbol, kind, by name or ordinal) and refused with what they import
+  when opened; a Mach-O universal `.a` lists every slice's members with their `arch` and a member path opens the
+  slice `arch` picks.
+- `build_signatures` (CLI `function build-signatures`) takes a static library as its path and builds from all its
+  objects, adding PAT patterns whose wildcards are exactly the bytes relocations patched (the 16-bit immediate for
+  MIPS `%hi`/`%lo`): a MIPS library's database names all seven of its functions in a program linked against it,
+  where the objects' hashes alone named two; a COFF `.lib`'s names all ten functions of a program lld-link links
+  from it. Members are skipped by format (import objects, alias-only objects), and the MCP call is cancellable.
+- New fixtures in `tests/fixtures/objects` (`build-objects.sh`): ELF objects and `ar` libraries, COFF and Mach-O
+  objects, `libobjects-coff.lib`, `imports-coff.lib`, `libobjects-macho.a`, `libobjects-mipsel.a` and
+  `linked-mipsel`.
+
+### CLI
+
+- `binary decode --output PATH` writes the whole decoded output to a new file, through the same API function and with
+  the same refusals as MCP `write_decoded_range`: a new file only (never over an existing file or symlink), mode
+  0644, and the decode's size caps. The CLI resolves the directory typed (relative, through `..` or a symlinked
+  `/tmp`) to its canonical path first; `--json` adds `written` (`path`, `bytes`) to the receipt and keeps `preview`.
+- MCP tool names work at the CLI as hidden aliases where one CLI command does the same thing (`rampage binary_info
+  FILE` runs `binary inspect`; also within a group). An unknown subcommand is refused with the command meant: the
+  CLI route of an MCP tool name (with flags, as for `write_decoded_range`), a note that an MCP tool has no CLI
+  command, or the nearest routes by edit distance (a prefix such as `function decomp` counts as close).
+  `rampage help <tool>` shows the route's help. The mapping is one table, listed in the
+  [CLI reference](docs/cli-reference.md#mcp-tool-names).
+
+### Changes and fixes
+
 - Decompiled C names a callee without a symbol `sub_<hex>` (lowercase hex byte address, as listings, `xrefs` and
   address arguments use it) instead of Ghidra's `func_0x<padded hex>`, also for calls into code discovery never made
   a function; the name resolves in every tool that takes an address, and the structured result's `calls[].name` and
   call tokens carry it for direct calls (before, `null` and empty). The decompiler's own default names (an
   undiscovered function decompiled by address, the targets in a virtual-call comment, which said `FUN_<hex>`) follow
-  the same scheme. `DECOMPILE_CACHE_VERSION` is 2, so stored decompilations are made afresh once.
+  the same scheme.
+- `write_decoded_range` and `endpoint_blocklist` refuse an output path that ends in a separator, and open the output
+  directory one component at a time without following a symlink, so an ancestor swapped for a symlink after the
+  check cannot redirect the write.
+
+### Versions
+
+- `ANALYSIS_VERSION` is 15 (field references, M-profile ELF discovery, archive members, and Mach-O objects, which
+  were loaded unlaid-out before), so stored function discovery is made afresh once.
+- `DECOMPILE_CACHE_VERSION` is 3 (`sub_<hex>` call names, object files), so stored decompilations are made afresh
+  once.
+- Worker protocol 17 (a jump to an extern decompiles as a call followed by a return).
+- The Raw interpretation identity is `rampage-raw-interpretation-v7` (writable regions), so analyses cached for Raw
+  projects are recomputed once.
 
 ## 1.11.0 (2026-11-22)
 

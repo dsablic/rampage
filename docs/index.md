@@ -41,7 +41,8 @@ Overviews:
 - [Feature overview](features.md): every capability area, its limits and where its reference is.
 - [MCP reference](mcp.md): connecting clients, server options, the tool catalog, paging, edits and data
   disclosure.
-- [CLI reference](cli-reference.md): every command, its compatibility spelling, global options and addresses.
+- [CLI reference](cli-reference.md): every command, its compatibility spelling, the
+  [MCP tool names](cli-reference.md#mcp-tool-names) it accepts, global options and addresses.
 - [Stability policy](stability.md): what is stable in 1.x and what is experimental.
 - [Known limits](known-limits.md): supported hosts, the decompiler worker, and what rampage does not do yet.
 - [Changelog](../CHANGELOG.md).
@@ -78,12 +79,14 @@ Formats and raw code:
 
 - [File layout](file-layout.md): regions, padding, entropy, string clusters and hashes of any file.
 - [CMSIS-SVD peripheral maps](peripheral-maps.md): register names in decompiled C, disassembly, xrefs and
-  evaluation of firmware.
+  evaluation of firmware, and [which code drives which peripheral](raw-code.md#which-code-drives-which-peripheral)
+  without an SVD (`peripheral_map`).
 - [Raw projects in MCP](mcp.md#raw-projects): the `raw` selector, regions, decoded and copied regions,
   scatter-load, pointer tables and load-address candidates.
 - [Raw-code windows](raw-code.md#raw-code-windows), [explicit Sleigh decoding and Raw Projects](sleigh-decoding.md),
   [explicit content decoding](decoding.md) (including `write_decoded_range` and `probe_compression`),
-  [native data inspection](data-inspection.md), [ZIP32 inventory](archive-inventory.md).
+  [native data inspection](data-inspection.md), [ZIP32 inventory](archive-inventory.md) (static libraries are
+  listed by the same tool; see below).
 - [Object files and static libraries](object-files.md): ELF `.o`, COFF `.obj` and Mach-O `.o` files laid out with
   relocations applied, externs named, `.a`/`.lib` members opened as `lib.a(member.o)`, and signatures built from a
   library.

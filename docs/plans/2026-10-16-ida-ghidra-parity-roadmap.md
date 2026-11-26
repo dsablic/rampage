@@ -40,6 +40,8 @@ Consequences for every milestone below:
   agent runner or retired. The Windows debugger's live run stays open until a Windows host exists.
 - **Planning.** Rules and the queue for after incremental analysis, both agreed on 2026-11-20, are in
   [the roadmap refresh](2026-11-20-roadmap-refresh.md).
+- **Since (2026-11-27).** Phase 4.3 is done for object files and static archives, with core dumps and
+  whole-archive projects open (see 4.3 below). Firmware analysis gaps 0.1–0.7 from `todo.md` shipped beside it.
 
 ### Status (2026-11-13)
 
@@ -324,7 +326,15 @@ plus function/import/export structure first).
 **Acceptance:** each new processor has an owned fixture (compiled where a compiler exists, else hand-assembled
 bytes compared with Ghidra's disassembly); discovery recall vs Ghidra recorded in the scorecard.
 
-*Status (2026-11-20):* 4.3 is open. 4.4 is partial: `wasm_module` (summary, imports, exports, functions) shipped
+*Status (2026-11-27):* 4.3 is done for object files and static archives. ELF `.o` (x86, x86-64, AArch64,
+ARM/Thumb, MIPS, RISC-V), COFF `.obj` (x64, x86, ARM64, Thumb-2) and 64-bit Mach-O `MH_OBJECT` objects are laid
+out with their relocations applied and externs named; members of GNU/BSD `ar`, MSVC `.lib` and Mach-O universal
+`.a` libraries open as `lib.a(member.o)`, `archive_inventory` lists them, and `build_signatures` builds a database
+from a whole library with patterns whose wildcards are exactly the relocated bytes (the MIPS HI/LO case included);
+see [object files](../object-files.md). Open: ELF and Mach-O core dumps as snapshot sources, a whole library opened
+as one project (calls between members resolved), and 32-bit Mach-O objects.
+
+*Status (2026-11-20):* 4.4 is partial: `wasm_module` (summary, imports, exports, functions) shipped
 in the `formats` group, and Android APK and DEX shipped in 1.7.0 natively, without an external decompiler
 (manifest, Dalvik bytecode and structured pseudocode; see [Android](../android.md)). WebAssembly disassembly, Java
 decompilation of DEX and JVM class files are open.

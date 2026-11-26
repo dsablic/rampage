@@ -90,8 +90,9 @@ Compared with Ghidra and IDA, rampage does not have:
 - a mature interactive GUI: its desktop UI is an experimental viewer for inspecting a binary and what an agent
   found, not an editor; types, structs, patches and debugging stay with the agent through MCP;
 - Java decompilation of Android DEX code (rampage lists Dalvik bytecode and structured pseudocode) or JVM class
-  files (ELF, COFF and Mach-O objects and `.a`/`.lib` libraries load with relocations applied; see
-  [object files](object-files.md));
+  files;
+- 32-bit Mach-O objects, core dumps, or a whole static library opened as one project (ELF, COFF and 64-bit Mach-O
+  objects and `.a`/`.lib` members load with relocations applied; see [object files](object-files.md));
 - Swift metadata, C++ class-layout recovery beyond RTTI and vtable evidence, or exception-table recovery beyond
   MSVC `__CxxFrameHandler3` tables (experimental);
 - full version tracking: [annotation transfer](build-diffing.md) moves names, comments, signatures, types and
