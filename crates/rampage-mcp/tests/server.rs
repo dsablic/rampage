@@ -980,6 +980,19 @@ async fn per_tool_aliases_are_taken_and_misplaced_arguments_name_the_right_call(
 }
 
 #[tokio::test]
+async fn peripheral_map_pages_sixteen_rows_unless_told_otherwise() {
+    let client = connect().await;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware/embedded-libs-m4f.elf");
+    let page = call(&client, "peripheral_map", json!({ "path": path, "by_function": true })).await;
+    let page = json_of(&page);
+    assert_eq!(page["functions"].as_array().unwrap().len(), 16, "{page}");
+    assert!(page["total"].as_u64().unwrap() > 16, "{page}");
+    let all = call(&client, "peripheral_map", json!({ "path": path, "by_function": true, "limit": 1000 })).await;
+    assert_eq!(json_of(&all)["functions"].as_array().unwrap().len() as u64, page["total"].as_u64().unwrap());
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn pointer_observations_preserve_writable_slot_values_without_annotations() {
     let client = connect().await;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

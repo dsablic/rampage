@@ -14,8 +14,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
   Cortex-M core block (SCB, NVIC, SysTick, MPU, DWT, ...) with register names, or the 1 KiB window of the base
   register's value. Counts first, then per block the offsets with read/write, width and functions, or with
   `by_function` per function the blocks and offsets it touches; filters by function and address range, paging, and
-  a `next` naming the function writing the most registers. Raw and ELF Cortex-M images; a hosted binary gets an
-  empty map with a note. New fixture `tests/fixtures/firmware/raw-cortex-m-peripherals.bin`.
+  a `next` naming the function writing the most registers. Misaligned accesses and "functions" that are data
+  decoded as code are left out; Cortex-M bit-band alias stores count at the word and bit they reach. Raw and ELF
+  Cortex-M images; a hosted binary gets an empty map with a note. `peripheral_access` now counts the same
+  accesses. New fixture `tests/fixtures/firmware/raw-cortex-m-peripherals.bin`.
+- Discovery resolves base-plus-offset field references into unmapped RAM and peripheral space for an ELF whose
+  build attributes say M-profile, as it did for Raw Cortex-M projects. The analysis store's `ANALYSIS_VERSION` is 13.
 - `xrefs` and `search` `references` find loads and stores that reach a structure field through a base register plus
   an immediate offset (`ldr r1, =0x20001234` then `ldrb r0, [r1, #11]`, a MOVW/MOVT base, a Thumb `adds` on the
   base), with evidence on each row: `base` (the instruction that set the base, the base address, the offset and the
@@ -23,7 +27,7 @@ see the [stability policy](docs/stability.md) for what the version promises.
   branches and loops when every path into the access sets the same base; MIPS and RISC-V bases (a completed
   address pair or a GOT load) within a straight-line run. In a Raw Cortex-M project a field in unmapped RAM or
   peripheral space is listed too. The CLI's `function xrefs` prints the evidence. New fixture
-  `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` is 12.
+  `tests/fixtures/firmware/raw-cortex-m-fields.bin`. The analysis store's `ANALYSIS_VERSION` went to 12.
 - `binary decode --output PATH` writes the whole decoded output to a new file, through the same API function and with
   the same refusals as MCP `write_decoded_range`: a new file only (never over an existing file or symlink), mode
   0644, and the decode's size caps. The CLI resolves the directory typed (relative, through `..` or a symlinked

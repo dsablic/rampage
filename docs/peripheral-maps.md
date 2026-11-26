@@ -41,6 +41,10 @@ from device to peripheral to cluster to register, field positions as `bitOffset`
 - **`peripheral_access`** lists the imported peripherals with read, write and function counts, or, with
   `peripheral`, that peripheral's registers with their bit fields (`MODE[6:4]`), reset value, read and write counts
   and up to eight accessing functions. Both page with `offset`/`limit`.
+- **`peripheral_map`** works with or without an import: the peripheral blocks the loads and stores reach, with the
+  offsets each function reads and writes. After an import its blocks and registers carry the SVD's names; before
+  one, it is how to find which code drives which block (see
+  [which code drives which peripheral](raw-code.md#which-code-drives-which-peripheral)).
 - **`evaluate_function`** names the register in an `unmapped_read` or `unmapped_write`, and takes `mmio`: up to
   64 `{at, value}` pairs, `at` an address or `PERIPHERAL.REGISTER`. Each maps its 4 KiB page as RAM and stores the
   value at the register's width, so a routine polling a status register runs to completion.

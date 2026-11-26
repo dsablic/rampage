@@ -300,13 +300,16 @@ rampage --raw-json "$fw" binary peripheral-map tests/fixtures/firmware/raw-corte
   ...
 0xe000ed00 SCB [core]  0 reads, 1 writes, 1 functions: sub_80001b0
   +0x8 VTOR w 4B  sub_80001b0
-next: decompile sub_8000040: it writes the most registers (5, in 1 peripheral block); ...
+next: decompile sub_8000040: it writes the most registers (5 registers in 1 peripheral block); ...
 ```
 
 The function writing many registers of one block is usually its configuration routine; the one reading a status
 offset in a loop and writing a data offset is the transfer path. `by_function` (`--by-function`) turns the map
 around: each function with the blocks and offsets it touches (`0x8 VTOR w`). Filter with `function` or an address
-range (`start`, `end`). Once you know the part, `import_svd` names the blocks and registers on the same map. An ELF
+range (`start`, `end`); a register keeps its block and offset whatever the filter. Misaligned accesses and
+"functions" that are really data decoded as code (their instructions run over NUL-terminated text) are left out,
+and on Cortex-M a store to the bit-band alias counts at the word and bit it reaches (`bit_band`). Once you know the
+part, `import_svd` names the blocks and registers on the same map. An ELF
 Cortex-M image works the same way; a hosted program gets an empty map with a note. See
 [`peripheral_map`](mcp.md#inputs-paging-and-decompiler-tokens) for the fields.
 

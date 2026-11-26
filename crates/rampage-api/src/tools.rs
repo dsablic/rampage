@@ -2021,7 +2021,7 @@ struct PeripheralMapArgs {
     #[serde(default)]
     by_function: bool,
     offset: Option<usize>,
-    /// Rows per page (default 16).
+    /// Rows per page (default 16, at most 1000).
     limit: Option<usize>,
 }
 
@@ -3836,7 +3836,7 @@ pub fn tools() -> Vec<Tool> {
                     end: address(args.end)?,
                     by_function: args.by_function,
                     offset: args.offset.unwrap_or(0),
-                    limit: page_limit(args.limit).unwrap_or(16),
+                    limit: args.limit.unwrap_or(16).min(1000),
                 })
             },
         ),

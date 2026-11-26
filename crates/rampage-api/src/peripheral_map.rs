@@ -4,13 +4,17 @@
 //! The accesses come from discovery's base-plus-offset field references (a load or store through a base register
 //! whose value is known, carried across a function's blocks) and from the constant-address access scan the SVD
 //! surface uses (constants formed in registers, MOVW/MOVT pairs, direct memory operands). An access counts when its
-//! address lies in device space: on 32-bit ARM the Cortex-M peripheral (0x40000000-0x5fffffff), external device
-//! (0xa0000000-0xdfffffff) and private peripheral bus (0xe0000000-0xe00fffff) regions, on MIPS32 uncached kseg1, on
-//! Xtensa the ESP peripheral windows, and anywhere an imported SVD places a peripheral. Accesses are grouped into
-//! peripheral blocks: an imported SVD peripheral, an architectural Cortex-M core block (SCB, NVIC, SysTick, MPU,
-//! DWT, ...) or else the 1 KiB-aligned window holding the base register's value.
+//! address lies in device space: on 32-bit ARM the peripheral (0x40000000-0x5fffffff) and external device
+//! (0xa0000000-0xdfffffff) regions, plus the private peripheral bus (0xe0000000-0xe00fffff) on M-profile, on MIPS32
+//! uncached kseg1, on Xtensa the ESP peripheral windows, and anywhere an imported SVD places a peripheral. An access
+//! misaligned for its width, or made by a "function" whose instructions run over NUL-terminated text (data decoded
+//! as code), is dropped. Accesses are grouped into peripheral blocks: an imported SVD peripheral, an architectural
+//! Cortex-M core block (SCB, NVIC, SysTick, MPU, DWT, ...) or else the 1 KiB-aligned windows the base registers'
+//! values reach, merged where they overlap. Blocks are assigned over every access before any filter applies, so a
+//! register keeps its block and offset whatever the query.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::AtomicBool;
 
 use rampage_arch::Arch;
 use rampage_loaders::{Binary, Details, Format};
@@ -26,6 +30,18 @@ const MAX_REGISTERS: usize = 32;
 const MAX_REGISTER_FUNCTIONS: usize = 4;
 const MAX_BLOCK_FUNCTIONS: usize = 8;
 const MAX_FUNCTION_BLOCKS: usize = 16;
+/// A NUL-terminated printable run this long inside a function's instructions marks it as data decoded as code.
+const DATA_TEXT_RUN: usize = 8;
+/// Distinct instructions a block needs before `next` may point at a function writing it.
+const NEXT_MIN_INSTRUCTIONS: usize = 2;
+/// The Cortex-M3/M4 peripheral bit-band alias and the region it maps.
+const BIT_BAND_ALIAS: std::ops::Range<u64> = 0x4200_0000..0x4400_0000;
+const BIT_BAND_REGION: u64 = 0x4000_0000;
+
+/// `1 block`, `2 blocks`.
+pub(crate) fn plural(count: usize, noun: &str) -> String {
+    if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct PeripheralMapQuery {
@@ -62,6 +78,9 @@ pub struct PeripheralRegisterUse {
     pub width: u8,
     pub reads: usize,
     pub writes: usize,
+    /// Bits set or cleared through the Cortex-M bit-band alias, when the code reaches the register that way.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bit_band: Vec<u8>,
     pub functions: Vec<String>,
     #[serde(skip_serializing_if = "is_zero")]
     pub more_functions: usize,
@@ -131,8 +150,8 @@ fn is_zero_u8(value: &u8) -> bool {
 
 /// Where a target keeps memory-mapped devices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeviceSpace {
-    /// 32-bit ARM; `core` names the private peripheral bus blocks (M-profile only).
+pub(crate) enum DeviceSpace {
+    /// 32-bit ARM; `core` is M-profile, whose private peripheral bus holds the architectural blocks.
     Arm {
         core: bool,
     },
@@ -142,16 +161,20 @@ enum DeviceSpace {
     Svd,
 }
 
+/// ARM external device space, which boards also use for external RAM.
+const ARM_EXTERNAL: std::ops::Range<u64> = 0xa000_0000..0xe000_0000;
+/// MIPS uncached kseg1 below the boot ROM.
+const MIPS_KSEG1: std::ops::Range<u64> = 0xa000_0000..0xbfc0_0000;
+
 impl DeviceSpace {
-    fn contains(self, address: u64) -> bool {
+    pub(crate) fn contains(self, address: u64) -> bool {
         match self {
-            DeviceSpace::Arm { .. } => {
+            DeviceSpace::Arm { core } => {
                 (0x4000_0000..0x6000_0000).contains(&address)
-                    || (0xa000_0000..0xe000_0000).contains(&address)
-                    || (0xe000_0000..0xe010_0000).contains(&address)
+                    || ARM_EXTERNAL.contains(&address)
+                    || (core && (0xe000_0000..0xe010_0000).contains(&address))
             }
-            // Uncached kseg1 below the boot ROM, where SoCs map their registers.
-            DeviceSpace::Mips => (0xa000_0000..0xbfc0_0000).contains(&address),
+            DeviceSpace::Mips => MIPS_KSEG1.contains(&address),
             // ESP32 DPORT and peripherals; ESP8266, ESP32-S2/S3 peripherals.
             DeviceSpace::Xtensa => {
                 (0x3ff0_0000..0x3ff8_0000).contains(&address) || (0x6000_0000..0x6010_0000).contains(&address)
@@ -159,31 +182,62 @@ impl DeviceSpace {
             DeviceSpace::Svd => false,
         }
     }
+
+    /// What the address-derived part of the map may get wrong on this target, given the accesses found.
+    fn caveats(self, addresses: impl Iterator<Item = u64> + Clone) -> Vec<String> {
+        let mut notes = Vec::new();
+        let any = |range: &std::ops::Range<u64>| addresses.clone().any(|address| range.contains(&address));
+        match self {
+            DeviceSpace::Arm { core: false } if addresses.clone().next().is_some() => notes.push(
+                "not an M-profile image: on Cortex-A/R parts 0x40000000 and up may be DRAM rather than peripherals; \
+                 import_svd (or the part's memory map) confirms which blocks are devices"
+                    .to_owned(),
+            ),
+            DeviceSpace::Arm { .. } if any(&ARM_EXTERNAL) => notes.push(
+                "0xa0000000-0xdfffffff is external device space, which boards also use for external RAM".to_owned(),
+            ),
+            DeviceSpace::Mips if any(&MIPS_KSEG1) => notes.push(
+                "kseg1 is uncached: besides device registers it reaches RAM and flash, so a block there may be \
+                 uncached memory"
+                    .to_owned(),
+            ),
+            _ => {}
+        }
+        notes
+    }
 }
 
-/// A bare-metal ELF: no interpreter, no shared libraries, no imports.
-fn bare_metal_elf(binary: &Binary) -> bool {
-    binary.format == Format::Elf
-        && binary.imports.is_empty()
-        && match &binary.details {
-            Details::Elf(details) => details.interpreter.is_none() && details.needed.is_empty(),
-            _ => false,
-        }
+/// A hosted (operating-system) ELF: an interpreter or shared libraries, an OS ABI in the header or an ABI note, or
+/// a C library's start routine.
+fn hosted_elf(binary: &Binary) -> bool {
+    if binary.format != Format::Elf {
+        return false;
+    }
+    let dynamic = !binary.imports.is_empty()
+        || matches!(&binary.details, Details::Elf(details) if details.interpreter.is_some() || !details.needed.is_empty());
+    // EI_OSABI: 0 is System V, 97 ARM and 255 standalone; the others name an operating system.
+    let osabi = binary.image_bytes().get(7).copied().unwrap_or(0);
+    let os_abi = binary.image_bytes().starts_with(b"\x7fELF") && !matches!(osabi, 0 | 97 | 255);
+    let abi_note = binary.sections.iter().any(|section| section.name == ".note.ABI-tag");
+    let libc = ["__libc_start_main", "__libc_start_call_main", "__uClibc_main"]
+        .iter()
+        .any(|name| binary.symbol_by_name(name).is_some());
+    dynamic || os_abi || abi_note || libc
 }
 
 /// The device space of a firmware-like target, or why it has none.
-fn device_space(binary: &Binary) -> Result<DeviceSpace, String> {
-    let firmware = binary.format == Format::Raw || bare_metal_elf(binary);
+pub(crate) fn device_space(binary: &Binary) -> Result<DeviceSpace, String> {
+    let firmware = binary.format == Format::Raw || (binary.format == Format::Elf && !hosted_elf(binary));
     match binary.arch {
-        Arch::Arm if binary.m_profile() => Ok(DeviceSpace::Arm { core: true }),
-        Arch::Arm if firmware => Ok(DeviceSpace::Arm { core: false }),
-        Arch::Mips if firmware => Ok(DeviceSpace::Mips),
-        Arch::Xtensa if firmware || binary.format == Format::Elf => Ok(DeviceSpace::Xtensa),
-        Arch::Arm | Arch::Mips | Arch::Xtensa => Err(format!(
-            "this {} image is not firmware-like (it is hosted: it imports or loads shared libraries), so its \
-             loads and stores are not read as peripheral accesses",
+        Arch::Arm | Arch::Mips | Arch::Xtensa if !firmware => Err(format!(
+            "this {} image is not firmware-like (it is hosted: it loads shared libraries, names an operating system \
+             ABI or links a C library's start routine), so its loads and stores are not read as peripheral accesses",
             binary.arch
         )),
+        Arch::Arm if binary.m_profile() => Ok(DeviceSpace::Arm { core: true }),
+        Arch::Arm => Ok(DeviceSpace::Arm { core: false }),
+        Arch::Mips => Ok(DeviceSpace::Mips),
+        Arch::Xtensa => Ok(DeviceSpace::Xtensa),
         arch => Err(format!(
             "peripheral_map reads device space on 32-bit ARM (Cortex-M), MIPS32 and Xtensa firmware; this target \
              is {arch}"
@@ -277,17 +331,39 @@ type Blocks = BTreeMap<BlockKey, BTreeMap<u64, Register>>;
 
 /// One load or store in device space.
 #[derive(Debug, Clone, Copy)]
-struct Hit {
-    function: u64,
-    address: u64,
-    write: bool,
-    width: u8,
+pub(crate) struct Hit {
+    pub instruction: u64,
+    pub function: u64,
+    /// The register's address; for a bit-band alias access, the word the bit lies in.
+    pub address: u64,
+    pub write: bool,
+    pub width: u8,
     /// The base register's value, for a field reference.
     base: Option<u64>,
+    /// For a bit-band alias access, the bit of the word at `address`.
+    bit: Option<u8>,
+}
+
+/// Every device-space access the code makes, for `peripheral_map` and `peripheral_access`.
+#[derive(Debug, Default)]
+pub(crate) struct DeviceHits {
+    /// Sorted by address, then instruction.
+    pub hits: Vec<Hit>,
+    /// The access scan stopped at its budget or could not run.
+    pub incomplete: bool,
+    pub notes: Vec<String>,
+}
+
+impl DeviceHits {
+    pub fn in_range(&self, start: u64, end: u64) -> &[Hit] {
+        let first = self.hits.partition_point(|hit| hit.address < start);
+        let last = self.hits.partition_point(|hit| hit.address < end);
+        &self.hits[first..last]
+    }
 }
 
 /// A peripheral block the accesses are grouped into.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct BlockKey {
     base: u64,
     name: String,
@@ -300,6 +376,7 @@ struct Register {
     reads: usize,
     writes: usize,
     width: u8,
+    bits: BTreeSet<u8>,
     /// Accesses per function.
     functions: BTreeMap<u64, usize>,
 }
@@ -315,30 +392,143 @@ impl Register {
 }
 
 impl Project {
+    /// Functions whose instructions run over NUL-terminated text: data that discovery decoded as code.
+    fn data_like_functions(&self, analysis: &crate::project::Analysis) -> BTreeSet<u64> {
+        analysis
+            .program
+            .functions
+            .iter()
+            .filter(|function| {
+                function.blocks.iter().any(|block| {
+                    let Some(bytes) = self.binary.read(block.start, block.end.saturating_sub(block.start)) else {
+                        return false;
+                    };
+                    rampage_analysis::strings::scan_bytes(bytes, block.start, DATA_TEXT_RUN).iter().any(|string| {
+                        let end = (string.address - block.start) as usize + string.text.len();
+                        string.encoding == rampage_analysis::strings::Encoding::Ascii && bytes.get(end) == Some(&0)
+                    })
+                })
+            })
+            .map(|function| function.address)
+            .collect()
+    }
+
+    /// The loads and stores whose address `device` admits, from the field references and the access scan, each
+    /// once per instruction, address and direction. With `bit_band`, Cortex-M bit-band alias accesses are
+    /// mapped to the word and bit they reach.
+    pub(crate) fn device_hits(
+        &self,
+        device: &dyn Fn(u64) -> bool,
+        bit_band: bool,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<DeviceHits, ApiError> {
+        let analysis = self.analysis()?;
+        let data_like = self.data_like_functions(analysis);
+        let mut collected = DeviceHits::default();
+        let mut seen: BTreeSet<(u64, u64, bool)> = BTreeSet::new();
+        let mut push = |hit: Hit, collected: &mut DeviceHits| {
+            let aligned = hit.width == 0 || hit.address.is_multiple_of(u64::from(hit.width));
+            if !aligned || data_like.contains(&hit.function) || !seen.insert((hit.instruction, hit.address, hit.write))
+            {
+                return;
+            }
+            let mut hit = hit;
+            if bit_band && BIT_BAND_ALIAS.contains(&hit.address) {
+                let alias = hit.address - BIT_BAND_ALIAS.start;
+                let byte = BIT_BAND_REGION + alias / 32;
+                let bit = (byte % 4) * 8 + (alias / 4) % 8;
+                hit = Hit { address: byte & !3, width: 4, base: None, bit: u8::try_from(bit).ok(), ..hit };
+            }
+            collected.hits.push(hit);
+        };
+        // Field references first: they carry the base register's value.
+        for field in analysis.program.field_refs.iter().filter(|field| device(field.to)) {
+            let Some(function) = analysis.function_containing(field.from) else { continue };
+            let hit = Hit {
+                instruction: field.from,
+                function,
+                address: field.to,
+                write: field.write,
+                width: field.width,
+                base: Some(field.base),
+                bit: None,
+            };
+            push(hit, &mut collected);
+        }
+        // Then the constant-address scan, which also sees device space discovery leaves unmapped.
+        match self.access_index_controlled(cancel) {
+            Ok(index) => {
+                collected.incomplete = index.incomplete;
+                if index.incomplete {
+                    collected
+                        .notes
+                        .push("the access scan stopped at its budget, so some accesses may be missing".to_owned());
+                }
+                for access in index.by_address.iter().filter(|access| device(access.address)) {
+                    let hit = Hit {
+                        instruction: access.instruction,
+                        function: access.function,
+                        address: access.address,
+                        write: access.write,
+                        width: access.width,
+                        base: None,
+                        bit: None,
+                    };
+                    push(hit, &mut collected);
+                }
+            }
+            Err(error) if cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed)) => {
+                return Err(error);
+            }
+            Err(error) => {
+                collected.incomplete = true;
+                collected.notes.push(format!("only base-register accesses are listed: {error}"));
+            }
+        }
+        let dropped = data_like.len();
+        if dropped > 0 {
+            collected.notes.push(format!(
+                "{} whose instructions run over NUL-terminated text (data decoded as code) left out",
+                plural(dropped, "function")
+            ));
+        }
+        collected.hits.sort_by_key(|hit| (hit.address, hit.instruction, hit.write));
+        Ok(collected)
+    }
+
     /// The peripheral blocks the code's loads and stores reach, with the registers and functions touching each, or
     /// with `by_function` the blocks each function touches.
     pub fn map_peripherals(&self, query: &PeripheralMapQuery) -> Result<PeripheralMapReport, ApiError> {
+        self.map_peripherals_controlled(query, None)
+    }
+
+    /// [`Self::map_peripherals`], giving up once `cancel` is set.
+    pub fn map_peripherals_controlled(
+        &self,
+        query: &PeripheralMapQuery,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<PeripheralMapReport, ApiError> {
+        if let (Some(start), Some(end)) = (query.start, query.end)
+            && start >= end
+        {
+            return Err(ApiError::Invalid(format!("start {start:#x} must lie below end {end:#x}")));
+        }
         let svd = self.peripheral_map();
-        let mut notes = Vec::new();
+        let empty = |notes: Vec<String>| PeripheralMapReport {
+            counts: PeripheralMapCounts::default(),
+            total: 0,
+            offset: query.offset,
+            blocks: Vec::new(),
+            functions: Vec::new(),
+            notes,
+            next: None,
+        };
         let space = match device_space(&self.binary) {
             Ok(space) => space,
             Err(_) if !svd.is_empty() => DeviceSpace::Svd,
-            Err(reason) => {
-                notes.push(reason);
-                return Ok(PeripheralMapReport {
-                    counts: PeripheralMapCounts::default(),
-                    total: 0,
-                    offset: query.offset,
-                    blocks: Vec::new(),
-                    functions: Vec::new(),
-                    notes,
-                    next: None,
-                });
-            }
+            Err(reason) => return Ok(empty(vec![reason])),
         };
         let analysis = self.analysis()?;
-        let in_code = |address: u64| self.binary.segment_containing(address).is_some_and(|s| s.perms.execute);
-        let device = |address: u64| (space.contains(address) || svd.at(address).is_some()) && !in_code(address);
         let function = match query.function {
             None => None,
             Some(address) => Some(
@@ -350,52 +540,27 @@ impl Project {
                     .ok_or_else(|| ApiError::NotFound(format!("no discovered function contains {address:#x}")))?,
             ),
         };
+        let in_code = |address: u64| self.binary.segment_containing(address).is_some_and(|s| s.perms.execute);
+        let device = |address: u64| (space.contains(address) || svd.at(address).is_some()) && !in_code(address);
+        let collected = self.device_hits(&device, space == (DeviceSpace::Arm { core: true }), cancel)?;
+        let mut notes = collected.notes;
+        // Blocks over every access, before any filter, so a register's block never depends on the query.
+        let keys = assign_blocks(&collected.hits, space, &svd);
+        let mut instructions: HashMap<&BlockKey, BTreeSet<u64>> = HashMap::new();
+        for (hit, (key, _)) in collected.hits.iter().zip(&keys) {
+            instructions.entry(key).or_default().insert(hit.instruction);
+        }
         let wanted = |hit: &Hit| {
             function.is_none_or(|function| hit.function == function)
                 && query.start.is_none_or(|start| hit.address >= start)
                 && query.end.is_none_or(|end| hit.address < end)
         };
-        // Field references first: they carry the base register's value.
-        let mut hits: Vec<Hit> = Vec::new();
-        let mut seen: BTreeSet<(u64, u64)> = BTreeSet::new();
-        for field in analysis.program.field_refs.iter().filter(|field| device(field.to)) {
-            let Some(owner) = analysis.function_containing(field.from) else { continue };
-            seen.insert((field.from, field.to));
-            hits.push(Hit {
-                function: owner,
-                address: field.to,
-                write: field.write,
-                width: field.width,
-                base: Some(field.base),
-            });
-        }
-        // Then the constant-address scan, which also sees device space discovery leaves unmapped outside Raw
-        // Cortex-M projects.
-        match self.access_index() {
-            Ok(index) => {
-                if index.incomplete {
-                    notes.push("the access scan stopped at its budget, so some accesses may be missing".to_owned());
-                }
-                for access in index.by_address.iter().filter(|access| device(access.address)) {
-                    if seen.insert((access.instruction, access.address)) {
-                        hits.push(Hit {
-                            function: access.function,
-                            address: access.address,
-                            write: access.write,
-                            width: access.width,
-                            base: None,
-                        });
-                    }
-                }
-            }
-            Err(error) => notes.push(format!("only base-register accesses are listed: {error}")),
-        }
-        hits.retain(wanted);
-        let blocks = assign_blocks(&hits, space, &svd);
-        // block -> offset -> register.
+        let selected: Vec<(&Hit, &(BlockKey, Option<String>))> =
+            collected.hits.iter().zip(&keys).filter(|(hit, _)| wanted(hit)).collect();
+        // block -> offset -> register, overall and per function.
         let mut map: Blocks = BTreeMap::new();
         let mut per_function: BTreeMap<u64, Blocks> = BTreeMap::new();
-        for (hit, (key, register_name)) in hits.iter().zip(&blocks) {
+        for &(hit, (key, register_name)) in &selected {
             let offset = hit.address.wrapping_sub(key.base);
             for register in [
                 map.entry(key.clone()).or_default().entry(offset).or_default(),
@@ -414,48 +579,55 @@ impl Project {
                     register.reads += 1;
                 }
                 register.width = register.width.max(hit.width);
+                register.bits.extend(hit.bit);
                 *register.functions.entry(hit.function).or_default() += 1;
             }
         }
         let counts = PeripheralMapCounts {
-            accesses: hits.len(),
-            reads: hits.iter().filter(|hit| !hit.write).count(),
-            writes: hits.iter().filter(|hit| hit.write).count(),
+            accesses: selected.len(),
+            reads: selected.iter().filter(|(hit, _)| !hit.write).count(),
+            writes: selected.iter().filter(|(hit, _)| hit.write).count(),
             blocks: map.len(),
             functions: per_function.len(),
         };
         let annotations = self.annotations();
         let name = |address: u64| self.function_name_in(&annotations, address);
-        // The function that writes the most registers is the likeliest configuration routine to read first.
+        // The function writing the most registers is the likeliest configuration routine to read first; only
+        // blocks more than one instruction touches count, so one stray store does not decide it.
         let configurer = per_function
             .iter()
             .map(|(&address, blocks)| {
-                let written = blocks.values().flat_map(BTreeMap::values).filter(|register| register.writes > 0);
-                (written.count(), blocks.len(), address)
+                let eligible: Vec<&BTreeMap<u64, Register>> = blocks
+                    .iter()
+                    .filter(|(key, _)| instructions.get(key).is_some_and(|set| set.len() >= NEXT_MIN_INSTRUCTIONS))
+                    .map(|(_, registers)| registers)
+                    .collect();
+                let written = eligible.iter().flat_map(|registers| registers.values()).filter(|r| r.writes > 0);
+                let written_blocks = eligible.iter().filter(|registers| registers.values().any(|r| r.writes > 0));
+                (written.count(), written_blocks.count(), address)
             })
             .filter(|(written, _, _)| *written > 0)
             .max_by_key(|&(written, blocks, address)| (written, blocks, std::cmp::Reverse(address)));
         let next = configurer.map(|(written, blocks, address)| {
             let function = name(address);
-            let blocks =
-                if blocks == 1 { "1 peripheral block".to_owned() } else { format!("{blocks} peripheral blocks") };
+            let (written, blocks) = (plural(written, "register"), plural(blocks, "peripheral block"));
             if query.function.is_some() {
-                format!("decompile {function}: it writes {written} registers in {blocks}")
+                format!("decompile {function}: it writes {written} in {blocks}")
             } else {
                 format!(
-                    "decompile {function}: it writes the most registers ({written}, in {blocks}); peripheral_map \
-                     with function={function} lists them"
+                    "decompile {function}: it writes the most registers ({written} in {blocks}); peripheral_map with \
+                     function={function} lists them"
                 )
             }
         });
-        if hits.is_empty() {
+        notes.extend(space.caveats(selected.iter().map(|(hit, _)| hit.address)));
+        if selected.is_empty() {
             notes.push(
                 "no load or store reaches device space: peripheral accesses through pointers passed in arguments \
                  or loaded from memory are not resolved"
                     .to_owned(),
             );
-        }
-        if svd.is_empty() && !hits.is_empty() {
+        } else if svd.is_empty() {
             notes.push(
                 "no SVD is imported: blocks are named by address (core blocks by the architecture); import_svd \
                  names vendor peripherals"
@@ -500,15 +672,8 @@ impl Project {
                     }
                 })
                 .collect();
-            return Ok(PeripheralMapReport {
-                counts,
-                total: page.total,
-                offset: page.offset,
-                blocks: Vec::new(),
-                functions,
-                notes,
-                next,
-            });
+            return Ok(PeripheralMapReport { functions, total: page.total, offset: page.offset, ..empty(notes) }
+                .with(counts, next));
         }
         let page = crate::rows::Page::of(map, Some(query.offset), Some(limit));
         let blocks = page
@@ -542,6 +707,7 @@ impl Project {
                                 width: register.width,
                                 reads: register.reads,
                                 writes: register.writes,
+                                bit_band: register.bits.iter().copied().collect(),
                                 more_functions: functions.len().saturating_sub(MAX_REGISTER_FUNCTIONS),
                                 functions: functions
                                     .iter()
@@ -559,19 +725,19 @@ impl Project {
                 }
             })
             .collect();
-        Ok(PeripheralMapReport {
-            counts,
-            total: page.total,
-            offset: page.offset,
-            blocks,
-            functions: Vec::new(),
-            notes,
-            next,
-        })
+        Ok(PeripheralMapReport { blocks, total: page.total, offset: page.offset, ..empty(notes) }.with(counts, next))
     }
 }
 
-/// Each hit's block, and its register's name when an SVD or the architecture gives one.
+impl PeripheralMapReport {
+    fn with(self, counts: PeripheralMapCounts, next: Option<String>) -> Self {
+        Self { counts, next, ..self }
+    }
+}
+
+/// Each hit's block, and its register's name when an SVD or the architecture gives one. A hit no SVD peripheral or
+/// core block holds goes to the merged reach of the base registers (each base's 1 KiB-aligned window up to the
+/// furthest access through it) that covers its address, else to its own 1 KiB window.
 fn assign_blocks(
     hits: &[Hit],
     space: DeviceSpace,
@@ -593,16 +759,21 @@ fn assign_blocks(
         None
     };
     let address_key = |base: u64| BlockKey { base, name: format!("periph_{base:08x}"), source: "address" };
-    // Blocks a base register reaches: its 1 KiB-aligned window, when the access lies within reach of it.
-    let mut reach: BTreeMap<u64, u64> = BTreeMap::new();
-    let based = |hit: &Hit| {
-        let base = hit.base? & !(BLOCK_ALIGN - 1);
-        (base <= hit.address && hit.address - base < BLOCK_REACH).then_some(base)
-    };
-    for hit in hits.iter().filter(|hit| named(hit).is_none()) {
-        if let Some(base) = based(hit) {
-            let end = reach.entry(base).or_insert(base);
-            *end = (*end).max(hit.address + u64::from(hit.width.max(1)));
+    let mut reach: Vec<(u64, u64)> = hits
+        .iter()
+        .filter(|hit| named(hit).is_none())
+        .filter_map(|hit| {
+            let base = hit.base? & !(BLOCK_ALIGN - 1);
+            (base <= hit.address && hit.address - base < BLOCK_REACH)
+                .then(|| (base, hit.address + u64::from(hit.width.max(1))))
+        })
+        .collect();
+    reach.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::new();
+    for (start, end) in reach {
+        match merged.last_mut() {
+            Some(last) if start < last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
         }
     }
     hits.iter()
@@ -610,17 +781,72 @@ fn assign_blocks(
             if let Some(found) = named(hit) {
                 return found;
             }
-            if let Some(base) = based(hit) {
-                return (address_key(base), None);
-            }
-            // An access with no base register joins a block a base register reaches, else its own window.
-            let aligned = hit.address & !(BLOCK_ALIGN - 1);
-            let base = reach
-                .range(..=hit.address)
-                .next_back()
-                .filter(|(_, end)| hit.address < **end)
-                .map_or(aligned, |(&base, _)| base);
+            let covering = merged.partition_point(|&(start, _)| start <= hit.address);
+            let base = covering
+                .checked_sub(1)
+                .map(|index| merged[index])
+                .filter(|&(_, end)| hit.address < end)
+                .map_or(hit.address & !(BLOCK_ALIGN - 1), |(start, _)| start);
             (address_key(base), None)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(address: u64, base: Option<u64>) -> Hit {
+        Hit { instruction: address, function: 0, address, write: false, width: 4, base, bit: None }
+    }
+
+    #[test]
+    fn device_spaces_by_processor() {
+        let m = DeviceSpace::Arm { core: true };
+        let a = DeviceSpace::Arm { core: false };
+        assert!(m.contains(0x4001_0000) && m.contains(0xe000_ed08) && m.contains(0xa000_0000));
+        assert!(!m.contains(0x2000_0000) && !m.contains(0x6000_0000) && !m.contains(0xe010_0000));
+        // The private peripheral bus is M-profile only.
+        assert!(a.contains(0x4001_0000) && !a.contains(0xe000_ed08));
+        let mips = DeviceSpace::Mips;
+        assert!(mips.contains(0xb800_0000) && !mips.contains(0xbfc0_0000) && !mips.contains(0x8000_0000));
+        let xtensa = DeviceSpace::Xtensa;
+        assert!(xtensa.contains(0x3ff4_0000) && xtensa.contains(0x6000_0000));
+        assert!(!xtensa.contains(0x3ffb_0000) && !xtensa.contains(0x4008_0000) && !xtensa.contains(0x6010_0000));
+        assert!(!DeviceSpace::Svd.contains(0x4001_0000));
+        assert_eq!(mips.caveats([0xb800_0000].into_iter()).len(), 1);
+        assert_eq!(a.caveats([0x4000_0000].into_iter()).len(), 1);
+        assert_eq!(m.caveats([0xa000_0000].into_iter()).len(), 1);
+        assert!(m.caveats([0x4000_0000].into_iter()).is_empty());
+    }
+
+    #[test]
+    fn overlapping_base_reaches_merge_into_one_block() {
+        let svd = crate::peripherals::PeripheralMap::default();
+        let space = DeviceSpace::Arm { core: true };
+        // Base 0x50000000 reaches +0x800; base 0x50000800 starts its own window inside that reach, and an access
+        // with no base at 0x50000804 lands in the same block, not in a window of its own.
+        let hits = [hit(0x5000_0800, Some(0x5000_0000)), hit(0x5000_0804, Some(0x5000_0800)), hit(0x5000_0804, None)];
+        let bases: Vec<u64> = assign_blocks(&hits, space, &svd).iter().map(|(key, _)| key.base).collect();
+        assert_eq!(bases, [0x5000_0000, 0x5000_0000, 0x5000_0000]);
+        // Past every reach, an access gets its own 1 KiB window.
+        let keys = assign_blocks(&[hit(0x5000_0000, Some(0x5000_0000)), hit(0x5000_0c00, None)], space, &svd);
+        assert_eq!(keys[1].0.base, 0x5000_0c00);
+    }
+
+    #[test]
+    fn core_registers_are_named() {
+        let nvic = core_block(0xe000_e184).unwrap();
+        assert_eq!((nvic.name, core_register(nvic, 0x84).as_deref()), ("NVIC", Some("ICER1")));
+        assert_eq!(core_register(nvic, 0x304).as_deref(), Some("IPR1"));
+        let scb = core_block(0xe000_ed08).unwrap();
+        assert_eq!((scb.name, core_register(scb, 0x8).as_deref()), ("SCB", Some("VTOR")));
+        assert!(core_block(0xe000_ef10).is_none());
+    }
+
+    #[test]
+    fn plurals() {
+        assert_eq!(plural(1, "peripheral block"), "1 peripheral block");
+        assert_eq!(plural(2, "register"), "2 registers");
+    }
 }

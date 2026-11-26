@@ -153,11 +153,11 @@ fn cortex_project(name: &str) -> Project {
 #[test]
 fn the_scan_budget_drops_partial_functions() {
     let project = cortex_project("raw-cortex-m-svd");
-    let full = project.scan_accesses_within(MAX_SCAN_INSTRUCTIONS, MAX_ACCESSES).unwrap();
+    let full = project.scan_accesses_within(MAX_SCAN_INSTRUCTIONS, MAX_ACCESSES, None).unwrap();
     assert!(!full.incomplete && full.by_address.len() > 4);
     let functions: std::collections::BTreeSet<u64> = full.by_address.iter().map(|access| access.function).collect();
     for limit in 1..full.by_address.len() {
-        let cut = project.scan_accesses_within(MAX_SCAN_INSTRUCTIONS, limit).unwrap();
+        let cut = project.scan_accesses_within(MAX_SCAN_INSTRUCTIONS, limit, None).unwrap();
         assert!(cut.incomplete);
         for function in &functions {
             let part = cut.by_address.iter().filter(|access| access.function == *function).count();
@@ -165,7 +165,7 @@ fn the_scan_budget_drops_partial_functions() {
             assert!(part == 0 || part == whole, "{function:#x}: {part} of {whole} at limit {limit}");
         }
     }
-    let cut = project.scan_accesses_within(5, MAX_ACCESSES).unwrap();
+    let cut = project.scan_accesses_within(5, MAX_ACCESSES, None).unwrap();
     assert!(cut.incomplete && cut.by_address.is_empty());
 }
 

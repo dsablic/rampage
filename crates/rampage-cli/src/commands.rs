@@ -2681,28 +2681,32 @@ pub(crate) fn peripheral_map(
         return write_json(out, &map);
     }
     let counts = &map.counts;
+    let plural = |count: usize, one: &str, many: &str| format!("{count} {}", if count == 1 { one } else { many });
+    let shown = map.blocks.len() + map.functions.len();
+    let rows = if shown == 0 {
+        format!("no rows at offset {} of {}", map.offset, map.total)
+    } else {
+        format!("rows {}-{} of {}", map.offset + 1, map.offset + shown, map.total)
+    };
     writeln!(
         out,
-        "{} accesses ({} reads, {} writes) in {} peripheral blocks from {} functions; rows {}-{} of {}",
-        counts.accesses,
-        counts.reads,
-        counts.writes,
-        counts.blocks,
-        counts.functions,
-        map.offset + usize::from(map.total > 0),
-        map.offset + map.blocks.len() + map.functions.len(),
-        map.total
+        "{} ({}, {}) in {} from {}; {rows}",
+        plural(counts.accesses, "access", "accesses"),
+        plural(counts.reads, "read", "reads"),
+        plural(counts.writes, "write", "writes"),
+        plural(counts.blocks, "peripheral block", "peripheral blocks"),
+        plural(counts.functions, "function", "functions"),
     )?;
     for block in &map.blocks {
         writeln!(
             out,
-            "{:#010x} {} [{}]  {} reads, {} writes, {} functions: {}",
+            "{:#010x} {} [{}]  {}, {}, {}: {}",
             block.base,
             block.name,
             block.source,
-            block.reads,
-            block.writes,
-            block.functions,
+            plural(block.reads, "read", "reads"),
+            plural(block.writes, "write", "writes"),
+            plural(block.functions, "function", "functions"),
             block.accessed_by.join(", ")
         )?;
         for register in &block.registers {
@@ -2710,9 +2714,11 @@ pub(crate) fn peripheral_map(
             let width = if register.width > 0 { format!(" {}B", register.width) } else { String::new() };
             let more =
                 if register.more_functions > 0 { format!(" +{}", register.more_functions) } else { String::new() };
+            let bits: Vec<String> = register.bit_band.iter().map(u8::to_string).collect();
+            let bits = if bits.is_empty() { String::new() } else { format!(" bit-band bits {}", bits.join(",")) };
             writeln!(
                 out,
-                "  +{:#x}{name} {}{width}  {}",
+                "  +{:#x}{name} {}{width}{bits}  {}",
                 register.offset,
                 register.access,
                 register.functions.join(", ") + &more
@@ -2725,8 +2731,11 @@ pub(crate) fn peripheral_map(
     for function in &map.functions {
         writeln!(
             out,
-            "{:#010x} {}  {} reads, {} writes",
-            function.address, function.function, function.reads, function.writes
+            "{:#010x} {}  {}, {}",
+            function.address,
+            function.function,
+            plural(function.reads, "read", "reads"),
+            plural(function.writes, "write", "writes")
         )?;
         for block in &function.blocks {
             writeln!(out, "  {:#010x} {}: {}", block.base, block.name, block.offsets.join(", "))?;

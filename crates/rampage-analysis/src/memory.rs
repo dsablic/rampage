@@ -63,9 +63,10 @@ impl Memory for Binary {
         Binary::code_from(self, address)
     }
 
-    /// A Raw Cortex-M image maps only the bytes it was given: its RAM and peripherals lie outside every region.
+    /// A Cortex-M image (Raw, or an ELF whose build attributes say M-profile) maps only its code and initialised
+    /// data: RAM beyond that and the peripherals lie outside every region.
     fn holds_unmapped_data(&self, address: u64) -> bool {
-        self.format == rampage_loaders::Format::Raw && self.m_profile() && CORTEX_M_DATA.contains(&address)
+        self.m_profile() && CORTEX_M_DATA.contains(&address)
     }
 
     fn is_mapped(&self, address: u64) -> bool {

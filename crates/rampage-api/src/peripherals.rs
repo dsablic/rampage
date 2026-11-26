@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rampage_analysis::discover::XrefKind;
 use rampage_decompiler::sleigh_decode::{DecodeStatus, SleighDecoder, Varnode};
@@ -26,6 +27,8 @@ const MAX_REPORTED: usize = 32;
 /// Most instructions one access scan decodes, and most accesses it keeps.
 const MAX_SCAN_INSTRUCTIONS: usize = 4_000_000;
 const MAX_ACCESSES: usize = 1 << 20;
+/// Why a cancelled access scan returned nothing.
+pub(crate) const CANCELLED: &str = "the peripheral access scan was cancelled";
 /// Largest peripheral struct handed to the decompiler (its global limit).
 const MAX_STRUCT_BYTES: u64 = 1 << 20;
 
@@ -869,25 +872,33 @@ impl Evaluator<'_> {
 
 impl Project {
     pub(crate) fn access_index(&self) -> Result<Arc<AccessIndex>, ApiError> {
-        self.mmio_accesses
-            .get_or_init(|| self.scan_accesses().map(Arc::new).map_err(|error| error.to_string()))
-            .clone()
-            .map_err(ApiError::Unavailable)
+        self.access_index_controlled(None)
+    }
+
+    /// [`Self::access_index`], giving up between functions once `cancel` is set. A cancelled scan is not cached,
+    /// so the next call scans again.
+    pub(crate) fn access_index_controlled(&self, cancel: Option<&AtomicBool>) -> Result<Arc<AccessIndex>, ApiError> {
+        if let Some(index) = self.mmio_accesses.get() {
+            return index.clone().map_err(ApiError::Unavailable);
+        }
+        let scanned = self.scan_accesses_within(MAX_SCAN_INSTRUCTIONS, MAX_ACCESSES, cancel);
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            return Err(ApiError::Unavailable(CANCELLED.to_owned()));
+        }
+        let scanned = scanned.map(Arc::new).map_err(|error| error.to_string());
+        self.mmio_accesses.get_or_init(|| scanned).clone().map_err(ApiError::Unavailable)
     }
 
     /// Finds every load and store whose address is a constant: per function, constants flow forward through
     /// registers and temporaries across blocks (meeting where paths join), and a call forgets all but the
-    /// registers the callee preserves.
-    fn scan_accesses(&self) -> Result<AccessIndex, ApiError> {
-        self.scan_accesses_within(MAX_SCAN_INSTRUCTIONS, MAX_ACCESSES)
-    }
-
-    /// [`Self::scan_accesses`] decoding at most `max_instructions` and keeping at most `max_accesses`; a function
-    /// either limit cuts short contributes nothing, and the index says `incomplete`.
+    /// registers the callee preserves. Decodes at most `max_instructions` and keeps at most `max_accesses`; a
+    /// function either limit cuts short contributes nothing, and the index says `incomplete`. Stops with
+    /// [`ApiError::Unavailable`] between functions once `cancel` is set.
     pub(crate) fn scan_accesses_within(
         &self,
         max_instructions: usize,
         max_accesses: usize,
+        cancel: Option<&AtomicBool>,
     ) -> Result<AccessIndex, ApiError> {
         let binary = &self.binary;
         let target = binary.target();
@@ -921,6 +932,9 @@ impl Project {
         let mut incomplete = false;
         let mut current_mode: Option<bool> = None;
         for function in &analysis.program.functions {
+            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                return Err(ApiError::Unavailable(CANCELLED.to_owned()));
+            }
             let mut blocks: Vec<DecodedBlock> = Vec::with_capacity(function.blocks.len());
             for block in &function.blocks {
                 let thumb = arm
@@ -1180,9 +1194,11 @@ impl Project {
                     .to_owned(),
             ));
         }
+        // The same accesses peripheral_map counts, inside imported peripherals.
+        let in_code = |address: u64| self.binary.segment_containing(address).is_some_and(|s| s.perms.execute);
         let index = self
-            .access_index()
-            .unwrap_or_else(|_| Arc::new(AccessIndex { incomplete: true, ..AccessIndex::default() }));
+            .device_hits(&|address| map.at(address).is_some() && !in_code(address), false, None)
+            .unwrap_or_else(|_| crate::peripheral_map::DeviceHits { incomplete: true, ..Default::default() });
         let device = map.peripherals().next().map(|peripheral| peripheral.device.clone());
         let Some(name) = &query.peripheral else {
             let rows = crate::rows::Page::of(map.peripherals(), Some(query.offset), Some(query.limit));
@@ -1228,7 +1244,7 @@ impl Project {
             .map(|register| {
                 let address = peripheral.base + register.offset;
                 // Accesses inside this register, attributed to it rather than to an alternate at the same offset.
-                let accesses: Vec<&Access> = index
+                let accesses: Vec<&crate::peripheral_map::Hit> = index
                     .in_range(address, address + register.bytes())
                     .iter()
                     .filter(|access| {

@@ -232,15 +232,17 @@ To see which code drives which peripheral, `peripheral_map` with the same select
 loads and stores reach, with no SVD:
 
 ```text
-4 accesses (0 reads, 4 writes) in 2 peripheral blocks from 3 functions
+4 accesses (0 reads, 4 writes) in 2 peripheral blocks from 3 functions; rows 1-2 of 2
 0x40011000 periph_40011000 [address]  0 reads, 3 writes, 3 functions: entry, sub_10000040, sub_100000e0
   +0x4 w 4B  entry, sub_10000040, sub_100000e0
-0xe000ed00 SCB [core]  0 reads, 1 writes, 1 functions: sub_100000e0
+0xe000ed00 SCB [core]  0 reads, 1 write, 1 function: sub_100000e0
   +0x8 VTOR w 4B  sub_100000e0
-next: decompile sub_100000e0: it writes the most registers (2, in 2 peripheral blocks); ...
+next: decompile entry: it writes the most registers (1 register in 1 peripheral block); ...
 ```
 
-The copied code at 0x100000e0 relocates the vector table (SCB VTOR) and writes one register of a vendor block; see
+Three functions write the same register of a vendor block, and the copied code at 0x100000e0 also relocates the
+vector table (SCB VTOR). `next` counts only blocks more than one instruction touches, so the single VTOR store does
+not decide it; see
 [which code drives which peripheral](raw-code.md#which-code-drives-which-peripheral).
 
 If another tool needs the decoded bytes as a file, `write_decoded_range` writes them to a new file at an absolute

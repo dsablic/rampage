@@ -192,7 +192,7 @@ fn a_name_shared_by_a_symbol_and_a_peripheral_is_ambiguous() {
     assert_eq!(project.resolve("TIMER0").unwrap(), 0x4001_0000);
 }
 
-// peripheral_map: tests/fixtures/firmware/raw-cortex-m-peripherals.c reaches an audio-like block, a GPIO-like block
+// peripheral_map: tests/fixtures/firmware/raw-cortex-m-peripherals.c reaches a UART-like block, a GPIO-like block
 // and the Cortex-M core blocks through literal-pool bases; its `routing` table holds address-like words that are
 // never dereferenced.
 
@@ -228,9 +228,9 @@ fn peripheral_map_without_an_svd_groups_loads_and_stores_into_blocks() {
     );
     assert_eq!((report.counts.blocks, report.counts.functions), (5, 5));
     // Bases 0x40015804 (offset -4) and 0x40015818 (loaded once, used in a loop) both land in one block.
-    let audio = block(&report, 0x4001_5800);
+    let uart = block(&report, 0x4001_5800);
     assert_eq!(
-        registers(audio),
+        registers(uart),
         [
             (0x0, None, "w", 4),
             (0x4, None, "rw", 4),
@@ -241,10 +241,10 @@ fn peripheral_map_without_an_svd_groups_loads_and_stores_into_blocks() {
             (0x20, None, "w", 4)
         ]
     );
-    let configure = project.function_name(truth("audio_configure"));
-    let write = project.function_name(truth("audio_write"));
-    assert_eq!(audio.registers[0].functions, std::slice::from_ref(&configure));
-    assert_eq!(audio.registers[6].functions, [write]);
+    let configure = project.function_name(truth("uart_configure"));
+    let write = project.function_name(truth("uart_write"));
+    assert_eq!(uart.registers[0].functions, std::slice::from_ref(&configure));
+    assert_eq!(uart.registers[6].functions, [write]);
     let gpio = block(&report, 0x4002_0000);
     assert_eq!(registers(gpio), [(0x10, None, "r", 1), (0x18, None, "w", 2)]);
     assert_eq!(registers(block(&report, 0xe000_ed00)), [(0x8, Some("VTOR"), "w", 4)]);
@@ -311,17 +311,97 @@ fn peripheral_map_takes_block_and_register_names_from_an_imported_svd() {
 }
 
 #[test]
-fn peripheral_map_reads_an_elf_cortex_m_image() {
-    let project = Project::new(Binary::open(format!("{FIRMWARE}raw-cortex-m-peripherals.elf")).unwrap());
-    let report = map(&project, PeripheralMapQuery::default());
+fn peripheral_map_reads_an_elf_cortex_m_image_as_it_reads_the_raw_one() {
+    let elf = Project::new(Binary::open(format!("{FIRMWARE}raw-cortex-m-peripherals.elf")).unwrap());
+    let report = map(&elf, PeripheralMapQuery::default());
     let names: Vec<&str> = report.blocks.iter().map(|block| block.name.as_str()).collect();
     assert_eq!(names, ["periph_40015800", "periph_40020000", "SysTick", "NVIC", "SCB"]);
-    assert_eq!(block(&report, 0x4001_5800).accessed_by, ["audio_write", "audio_configure"]);
+    assert_eq!(block(&report, 0x4001_5800).accessed_by, ["uart_write", "uart_configure"]);
+    // Discovery admits field references into device space for an M-profile ELF as for a Raw project.
+    let raw = map(&project("raw-cortex-m-peripherals"), PeripheralMapQuery::default());
+    let counts = |report: &rampage_api::PeripheralMapReport| {
+        (report.counts.accesses, report.counts.reads, report.counts.writes, report.counts.blocks)
+    };
+    assert_eq!(counts(&report), counts(&raw));
+}
+
+#[test]
+fn peripheral_map_keeps_blocks_and_offsets_whatever_the_filter() {
+    let project = project("raw-cortex-m-peripherals");
+    let all = map(&project, PeripheralMapQuery::default());
+    let rows = |report: &rampage_api::PeripheralMapReport| -> Vec<(u64, u64, String)> {
+        let mut rows = Vec::new();
+        for block in &report.blocks {
+            for register in &block.registers {
+                rows.extend(register.functions.iter().map(|function| (block.base, register.offset, function.clone())));
+            }
+        }
+        rows
+    };
+    let every = rows(&all);
+    for function in ["uart_configure", "uart_write", "gpio_read", "core_setup"] {
+        let address = truth("raw-cortex-m-peripherals", function);
+        let one = map(&project, PeripheralMapQuery { function: Some(address), ..PeripheralMapQuery::default() });
+        assert!(!one.blocks.is_empty(), "{function}");
+        for row in rows(&one) {
+            assert!(every.contains(&row), "{function}: {row:x?} not in {every:x?}");
+        }
+    }
+    // A range starting inside a block keeps the block's base and offsets.
+    let ranged = PeripheralMapQuery { start: Some(0x4001_5810), end: Some(0x4001_5900), ..Default::default() };
+    let ranged = map(&project, ranged);
+    let offsets: Vec<u64> = block(&ranged, 0x4001_5800).registers.iter().map(|register| register.offset).collect();
+    assert_eq!(offsets, [0x10, 0x14, 0x18, 0x20]);
+    let empty =
+        PeripheralMapQuery { start: Some(0x4002_0000), end: Some(0x4002_0000), limit: 10, ..Default::default() };
+    let refused = project.map_peripherals(&empty);
+    assert!(matches!(refused, Err(rampage_api::ApiError::Invalid(_))), "{refused:?}");
+}
+
+#[test]
+fn peripheral_map_leaves_out_data_decoded_as_code() {
+    // A few "functions" in this image are assert strings decoded as Thumb; their stores reach nonsense addresses.
+    let project = Project::new(Binary::open(format!("{FIRMWARE}embedded-libs-m0.elf")).unwrap());
+    let report = map(&project, PeripheralMapQuery::default());
+    let names: Vec<&str> = report.blocks.iter().map(|block| block.name.as_str()).collect();
+    assert_eq!(names, ["SysTick", "SCB"], "{report:#?}");
+    let by_function = map(&project, PeripheralMapQuery { by_function: true, ..PeripheralMapQuery::default() });
+    assert!(by_function.functions.iter().all(|row| row.address != 0x0800_eb8c), "{by_function:#?}");
+    assert!(report.notes.iter().any(|note| note.contains("data decoded as code")), "{:?}", report.notes);
+    // next names the routine that programs SysTick.
+    let next = report.next.as_deref().unwrap();
+    let systick = block(&report, 0xe000_e010);
+    assert_eq!(systick.accessed_by.len(), 1);
+    assert!(next.starts_with(&format!("decompile {}:", systick.accessed_by[0])), "{next}");
+}
+
+#[test]
+fn peripheral_access_counts_what_peripheral_map_counts() {
+    let project = project("raw-cortex-m-svd");
+    import(&project, "ARM_Example.svd", true);
+    let listing = project.peripheral_access(&PeripheralAccessQuery { peripheral: None, offset: 0, limit: 10 }).unwrap();
+    let mapped = map(&project, PeripheralMapQuery::default());
+    for row in &listing.peripherals {
+        let found = mapped.blocks.iter().find(|block| block.name == row.name);
+        let (reads, writes) = found.map_or((0, 0), |block| (block.reads, block.writes));
+        assert_eq!((row.reads, row.writes), (reads, writes), "{}", row.name);
+    }
+}
+
+#[test]
+fn peripheral_map_gives_up_when_cancelled_and_scans_again_later() {
+    let project = project("raw-cortex-m-peripherals");
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let query = PeripheralMapQuery { limit: 10, ..Default::default() };
+    let cancelled = project.map_peripherals_controlled(&query, Some(&cancel));
+    assert!(cancelled.is_err(), "{cancelled:?}");
+    assert_eq!(map(&project, PeripheralMapQuery::default()).counts.blocks, 5);
 }
 
 #[test]
 fn peripheral_map_on_a_hosted_binary_is_empty_with_a_note() {
-    for name in ["hello-arm.elf", "hello-x64.elf"] {
+    // A dynamic ARM program, a static musl Thumb program (no interpreter, but libc's start routine) and x86-64.
+    for name in ["hello-arm.elf", "hello-thumb.elf", "hello-x64.elf"] {
         let path = format!("{}/../../tests/fixtures/bin/{name}", env!("CARGO_MANIFEST_DIR"));
         let project = Project::new(Binary::open(path).unwrap());
         let report = map(&project, PeripheralMapQuery::default());
