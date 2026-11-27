@@ -69,11 +69,11 @@ Misses: emulate-libc-arm64-elf gave the `"status"` slip a third time (right valu
 `unknown` with four of five names (`strtol` is not named on the held-out M0 build). Tool errors: 6 `decompile`
 byte-budget refusals on large M0 functions (one even in `view=summary`), 2 `enable_tools("firmware")`, 2
 `import_svd` given the `.svd` before any binary was open, 1 a raw `.bin` opened without a selector, 1 `_strtol_r` by name.
-- [ ] `evaluate_function`: put the value first and drop `"status": "ok"` from successful results (the slip has now
+- [x] (2026-11-27, `result` now first; results never had `status`, the slip copies the bench prompt's `{"status":"unknown"}` fallback) `evaluate_function`: put the value first and drop `"status": "ok"` from successful results (the slip has now
       recurred on three releases).
-- [ ] `decompile` on a large function: a summary view that cannot fit should page or trim the evidence rather than
+- [x] (2026-11-27, rows trimmed with counts; `page` for long C) `decompile` on a large function: a summary view that cannot fit should page or trim the evidence rather than
       refuse; the code view's refusal should say which paging argument to pass and how many pages there are.
-- [ ] `enable_tools("firmware")` still errors: the alias list in 1.11.0 answers where the tools live, but the agent
+- [x] (2026-11-27, guessed names enable their groups, with `resolved`) `enable_tools("firmware")` still errors: the alias list in 1.11.0 answers where the tools live, but the agent
       reads the error as a failure. Consider succeeding with the groups that hold them enabled.
 
 ## Haiku suite v4 pass for 1.10.0 (2026-11-21)
@@ -82,7 +82,7 @@ rampage only, 1 rep, label haiku-v4-1.10.0: 17/20 strict, 18/20 lenient, $0.31, 
 Misses: emulate-libc-arm64-elf answered `{"status":"ok","result":<right value>}` (the same slip as at 1.9.0);
 svd-status-readers-cm4-raw answered `[200,200,200,200]` (model slip); libid-names-m0-elf got four of five names
 but `identify_functions` did not name `qsort` on the M0 held-out build, so the agent guessed (queue item 4).
-- [ ] The `"status"` slip has now recurred on two releases: consider having `evaluate_function` put the value
+- [x] (2026-11-27, see 1.11.0 above) The `"status"` slip has now recurred on two releases: consider having `evaluate_function` put the value
       first and drop `"status": "ok"` from successful results (when the next pass shows it again).
 
 ## Haiku suite v4 pass for 1.9.0 (2026-11-21)
@@ -565,7 +565,7 @@ fixture for each item. Start with 0.1 and 0.2.
    Open: whole-archive projects; TLS, MIPS64 composite, Mach-O TLV, COFF TOKEN/SECREL7, arm64e auth relocations;
    linker relaxation (patterns miss relaxed GOT loads); 32-bit Mach-O objects; DWARF in objects; thin archives; core
    dumps; rebuilding the bundled corpus with relocation patterns; ARM64 libucrt `strtok` decompile failure.
-   - [ ] The demangler reads a function named `f` as `float` (a bare one-letter name is not a mangled name).
+   - [x] (2026-11-27, only prefixed names are demangled) The demangler reads a function named `f` as `float` (a bare one-letter name is not a mangled name).
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
    layout, `__CxxFrameHandler4`, Swift metadata.
 7. **Windows:** the flywheel's Windows corpus, then a Windows host build.
