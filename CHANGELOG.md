@@ -6,7 +6,6 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
-
 ### Changes and fixes
 
 - Agent benchmark: the closing instruction says an answer has no `"status"` field and shows `{"result":42}`, since
