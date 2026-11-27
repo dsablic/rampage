@@ -1,0 +1,865 @@
+{
+"0x10381e4": {
+"name": "cJSON_GetErrorPtr",
+"params": [],
+"return": "pointer"
+},
+"0x10382f0": {
+"name": "cJSON_GetStringValue",
+"params": [
+"struct_pointer"
+],
+"return": "pointer"
+},
+"0x10383b8": {
+"name": "cJSON_IsString",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x10384e4": {
+"name": "cJSON_GetNumberValue",
+"params": [
+"struct_pointer"
+],
+"return": "float64"
+},
+"0x10385b0": {
+"name": "cJSON_IsNumber",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x10386dc": {
+"name": "cJSON_Version",
+"params": [],
+"return": "pointer"
+},
+"0x103871c": {
+"name": "cJSON_InitHooks",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1038b64": {
+"name": "cJSON_Delete",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1039308": {
+"name": "cJSON_SetNumberHelper",
+"params": [
+"struct_pointer",
+"float64"
+],
+"return": "float64"
+},
+"0x1039600": {
+"name": "cJSON_SetValuestring",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "pointer"
+},
+"0x1039c18": {
+"name": "cJSON_strdup",
+"params": [
+"pointer",
+"struct_pointer"
+],
+"return": "pointer"
+},
+"0x1039d28": {
+"name": "cJSON_free",
+"params": [
+"pointer"
+],
+"return": "void"
+},
+"0x1039d8c": {
+"name": "cJSON_ParseWithOpts",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1039df4": {
+"name": "cJSON_ParseWithLengthOpts",
+"params": [
+"pointer",
+"int64",
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x103a600": {
+"name": "cJSON_New_Item",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x103a6d0": {
+"name": "parse_value",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103c670": {
+"name": "buffer_skip_whitespace",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x103cd94": {
+"name": "skip_utf8_bom",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x103d294": {
+"name": "cJSON_Parse",
+"params": [
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x103d2c0": {
+"name": "cJSON_ParseWithLength",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x103d2f4": {
+"name": "cJSON_Print",
+"params": [
+"struct_pointer"
+],
+"return": "pointer"
+},
+"0x103d324": {
+"name": "print",
+"params": [
+"struct_pointer",
+"int32",
+"struct_pointer"
+],
+"return": "pointer"
+},
+"0x103dbf4": {
+"name": "cJSON_PrintUnformatted",
+"params": [
+"struct_pointer"
+],
+"return": "pointer"
+},
+"0x103dc24": {
+"name": "cJSON_PrintBuffered",
+"params": [
+"struct_pointer",
+"int32",
+"int32"
+],
+"return": "pointer"
+},
+"0x103de2c": {
+"name": "print_value",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103e290": {
+"name": "cJSON_PrintPreallocated",
+"params": [
+"struct_pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x103e42c": {
+"name": "cJSON_GetArraySize",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103e5a8": {
+"name": "cJSON_GetArrayItem",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x103e5f4": {
+"name": "get_array_item",
+"params": [
+"struct_pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x103e798": {
+"name": "cJSON_GetObjectItem",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x103e7c8": {
+"name": "get_object_item",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x103ecb4": {
+"name": "cJSON_GetObjectItemCaseSensitive",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x103ece4": {
+"name": "cJSON_HasObjectItem",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x103ed1c": {
+"name": "cJSON_AddItemToArray",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103ed48": {
+"name": "add_item_to_array",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103f240": {
+"name": "cJSON_AddItemToObject",
+"params": [
+"struct_pointer",
+"pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103f280": {
+"name": "add_item_to_object",
+"params": [
+"struct_pointer",
+"pointer",
+"struct_pointer",
+"struct_pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x103f7e0": {
+"name": "cJSON_AddItemToObjectCS",
+"params": [
+"struct_pointer",
+"pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103f820": {
+"name": "cJSON_AddItemReferenceToArray",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103f884": {
+"name": "create_reference",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x103fb74": {
+"name": "cJSON_AddItemReferenceToObject",
+"params": [
+"struct_pointer",
+"pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x103fc00": {
+"name": "cJSON_AddNullToObject",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x103fc6c": {
+"name": "cJSON_CreateNull",
+"params": [],
+"return": "struct_pointer"
+},
+"0x103fd8c": {
+"name": "cJSON_AddTrueToObject",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x103fdf8": {
+"name": "cJSON_CreateTrue",
+"params": [],
+"return": "struct_pointer"
+},
+"0x103ff18": {
+"name": "cJSON_AddFalseToObject",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x103ff84": {
+"name": "cJSON_CreateFalse",
+"params": [],
+"return": "struct_pointer"
+},
+"0x10400a4": {
+"name": "cJSON_AddBoolToObject",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1040118": {
+"name": "cJSON_CreateBool",
+"params": [
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x10402b0": {
+"name": "cJSON_AddNumberToObject",
+"params": [
+"struct_pointer",
+"pointer",
+"float64"
+],
+"return": "struct_pointer"
+},
+"0x1040324": {
+"name": "cJSON_CreateNumber",
+"params": [
+"float64"
+],
+"return": "struct_pointer"
+},
+"0x1040728": {
+"name": "cJSON_AddStringToObject",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x104079c": {
+"name": "cJSON_CreateString",
+"params": [
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x1040a0c": {
+"name": "cJSON_AddRawToObject",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x1040a80": {
+"name": "cJSON_CreateRaw",
+"params": [
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x1040cf0": {
+"name": "cJSON_AddObjectToObject",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x1040d5c": {
+"name": "cJSON_CreateObject",
+"params": [],
+"return": "struct_pointer"
+},
+"0x1040e7c": {
+"name": "cJSON_AddArrayToObject",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x1040ee8": {
+"name": "cJSON_CreateArray",
+"params": [],
+"return": "struct_pointer"
+},
+"0x1041008": {
+"name": "cJSON_DetachItemViaPointer",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10419b4": {
+"name": "cJSON_DetachItemFromArray",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1041a14": {
+"name": "cJSON_DeleteItemFromArray",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x1041a44": {
+"name": "cJSON_DetachItemFromObject",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x1041a80": {
+"name": "cJSON_DetachItemFromObjectCaseSensitive",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x1041abc": {
+"name": "cJSON_DeleteItemFromObject",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "void"
+},
+"0x1041aec": {
+"name": "cJSON_DeleteItemFromObjectCaseSensitive",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "void"
+},
+"0x1041b1c": {
+"name": "cJSON_InsertItemInArray",
+"params": [
+"struct_pointer",
+"int32",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1042170": {
+"name": "cJSON_ReplaceItemViaPointer",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1042e2c": {
+"name": "cJSON_ReplaceItemInArray",
+"params": [
+"struct_pointer",
+"int32",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1042e94": {
+"name": "cJSON_ReplaceItemInObject",
+"params": [
+"struct_pointer",
+"pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1042ecc": {
+"name": "replace_item_in_object",
+"params": [
+"struct_pointer",
+"pointer",
+"struct_pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x10432c8": {
+"name": "cJSON_ReplaceItemInObjectCaseSensitive",
+"params": [
+"struct_pointer",
+"pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1043300": {
+"name": "cJSON_CreateStringReference",
+"params": [
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x10434bc": {
+"name": "cast_away_const",
+"params": [
+"pointer"
+],
+"return": "pointer"
+},
+"0x10434d0": {
+"name": "cJSON_CreateObjectReference",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x104368c": {
+"name": "cJSON_CreateArrayReference",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x1043848": {
+"name": "cJSON_CreateIntArray",
+"params": [
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1043c9c": {
+"name": "suffix_object",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1043de0": {
+"name": "cJSON_CreateFloatArray",
+"params": [
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1044234": {
+"name": "cJSON_CreateDoubleArray",
+"params": [
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1044684": {
+"name": "cJSON_CreateStringArray",
+"params": [
+"pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1044ad4": {
+"name": "cJSON_Duplicate",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x1045970": {
+"name": "cJSON_Minify",
+"params": [
+"pointer"
+],
+"return": "void"
+},
+"0x1045ec4": {
+"name": "skip_oneline_comment",
+"params": [
+"pointer"
+],
+"return": "void"
+},
+"0x10461e8": {
+"name": "skip_multiline_comment",
+"params": [
+"pointer"
+],
+"return": "void"
+},
+"0x104661c": {
+"name": "minify_string",
+"params": [
+"pointer",
+"pointer"
+],
+"return": "void"
+},
+"0x10472a0": {
+"name": "cJSON_IsInvalid",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x104736c": {
+"name": "cJSON_IsFalse",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1047498": {
+"name": "cJSON_IsTrue",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x10475c4": {
+"name": "cJSON_IsBool",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1047748": {
+"name": "cJSON_IsNull",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1047874": {
+"name": "cJSON_IsArray",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x10479a0": {
+"name": "cJSON_IsObject",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1047acc": {
+"name": "cJSON_IsRaw",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1047bf8": {
+"name": "cJSON_Compare",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x1048a44": {
+"name": "compare_double",
+"params": [
+"float64",
+"float64"
+],
+"return": "int32"
+},
+"0x1048ac0": {
+"name": "cJSON_malloc",
+"params": [
+"int64"
+],
+"return": "pointer"
+},
+"0x1048aec": {
+"name": "update_offset",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1048e0c": {
+"name": "parse_string",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x104abd0": {
+"name": "parse_number",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x104bba0": {
+"name": "parse_array",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x104cf78": {
+"name": "parse_object",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x104eaf8": {
+"name": "utf16_literal_to_utf8",
+"params": [
+"pointer",
+"pointer",
+"pointer"
+],
+"return": "int8"
+},
+"0x104f400": {
+"name": "parse_hex4",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x104fcc4": {
+"name": "get_decimal_point",
+"params": [],
+"return": "int8"
+},
+"0x104fccc": {
+"name": "ensure",
+"params": [
+"struct_pointer",
+"int64"
+],
+"return": "pointer"
+},
+"0x1051044": {
+"name": "print_number",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1051a78": {
+"name": "print_string",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1051b28": {
+"name": "print_array",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1052308": {
+"name": "print_object",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1053948": {
+"name": "print_string_ptr",
+"params": [
+"pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x10546a8": {
+"name": "case_insensitive_strcmp",
+"params": [
+"pointer",
+"pointer"
+],
+"return": "int32"
+}
+}

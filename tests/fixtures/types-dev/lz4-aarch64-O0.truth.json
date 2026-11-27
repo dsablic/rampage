@@ -1,0 +1,2049 @@
+{
+"0x103a924": {
+"name": "LZ4_versionNumber",
+"params": [],
+"return": "int32"
+},
+"0x103a92c": {
+"name": "LZ4_versionString",
+"params": [],
+"return": "pointer"
+},
+"0x103a938": {
+"name": "LZ4_compressBound",
+"params": [
+"int32"
+],
+"return": "int32"
+},
+"0x103aa58": {
+"name": "LZ4_sizeofState",
+"params": [],
+"return": "int32"
+},
+"0x103aa60": {
+"name": "LZ4_compress_fast_extState",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x1063170": {
+"name": "LZ4_initStream",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x1063208": {
+"name": "LZ4_compress_fast_extState_fastReset",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x10adf28": {
+"name": "LZ4_compress_fast",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x10adfc0": {
+"name": "LZ4_compress_default",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x10ae000": {
+"name": "LZ4_compress_destSize_extState",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x10ae060": {
+"name": "LZ4_compress_destSize_extState_internal",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x10c099c": {
+"name": "LZ4_compress_destSize",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x10c0a30": {
+"name": "LZ4_createStream",
+"params": [],
+"return": "struct_pointer"
+},
+"0x10c0a84": {
+"name": "LZ4_isAligned",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x10c0aac": {
+"name": "LZ4_stream_t_alignment",
+"params": [],
+"return": "int64"
+},
+"0x10c0ab4": {
+"name": "LZ4_resetStream",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x10c0ae0": {
+"name": "LZ4_resetStream_fast",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x10c1148": {
+"name": "LZ4_freeStream",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x10c118c": {
+"name": "LZ4_loadDict_internal",
+"params": [
+"struct_pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x10c2928": {
+"name": "LZ4_loadDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x10c2960": {
+"name": "LZ4_loadDictSlow",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x10c2998": {
+"name": "LZ4_attach_dictionary",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "void"
+},
+"0x10c2d7c": {
+"name": "LZ4_compress_fast_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x110bebc": {
+"name": "LZ4_renormDictT",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x110cbfc": {
+"name": "LZ4_compress_forceExtDict",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x111f638": {
+"name": "LZ4_saveDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x111fca8": {
+"name": "LZ4_decompress_safe",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x112370c": {
+"name": "LZ4_decompress_safe_partial",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x1127474": {
+"name": "LZ4_decompress_fast",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x1128104": {
+"name": "LZ4_decompress_safe_withPrefix64k",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x112bc78": {
+"name": "LZ4_decompress_fast_withPrefix64k",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x112c97c": {
+"name": "LZ4_decompress_safe_forceExtDict",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x11303f4": {
+"name": "LZ4_decompress_safe_partial_forceExtDict",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x1133ea8": {
+"name": "LZ4_createStreamDecode",
+"params": [],
+"return": "struct_pointer"
+},
+"0x1133ec4": {
+"name": "LZ4_freeStreamDecode",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x1133f08": {
+"name": "LZ4_setStreamDecode",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x113430c": {
+"name": "LZ4_decoderRingBufferSize",
+"params": [
+"int32"
+],
+"return": "int32"
+},
+"0x11343c8": {
+"name": "LZ4_decompress_safe_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11392cc": {
+"name": "LZ4_decompress_safe_withSmallPrefix",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int64"
+],
+"return": "int32"
+},
+"0x113ce0c": {
+"name": "LZ4_decompress_fast_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x113e8f4": {
+"name": "LZ4_decompress_fast_extDict",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x113f564": {
+"name": "LZ4_decompress_safe_usingDict",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x113f768": {
+"name": "LZ4_decompress_safe_partial_usingDict",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x113f980": {
+"name": "LZ4_decompress_safe_partial_withPrefix64k",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11437f4": {
+"name": "LZ4_decompress_safe_partial_withSmallPrefix",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"int64"
+],
+"return": "int32"
+},
+"0x114736c": {
+"name": "LZ4_decompress_fast_usingDict",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x1148160": {
+"name": "LZ4_compress_limitedOutput",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114819c": {
+"name": "LZ4_compress",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x11481f4": {
+"name": "LZ4_compress_limitedOutput_withState",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114823c": {
+"name": "LZ4_compress_withState",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x11482a8": {
+"name": "LZ4_compress_limitedOutput_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11482f0": {
+"name": "LZ4_compress_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x114835c": {
+"name": "LZ4_uncompress",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x1148390": {
+"name": "LZ4_uncompress_unknownOutputSize",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11483cc": {
+"name": "LZ4_sizeofStreamState",
+"params": [],
+"return": "int32"
+},
+"0x11483d4": {
+"name": "LZ4_resetStreamState",
+"params": [
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x1148400": {
+"name": "LZ4_create",
+"params": [
+"pointer"
+],
+"return": "pointer"
+},
+"0x1148420": {
+"name": "LZ4_slideInputBuffer",
+"params": [
+"pointer"
+],
+"return": "pointer"
+},
+"0x1148500": {
+"name": "LZ4_getPositionOnHash",
+"params": [
+"int32",
+"pointer",
+"int32"
+],
+"return": "pointer"
+},
+"0x114862c": {
+"name": "LZ4_read32",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x1148694": {
+"name": "LZ4_writeLE16",
+"params": [
+"pointer",
+"int16"
+],
+"return": "void"
+},
+"0x1148808": {
+"name": "LZ4_write32",
+"params": [
+"pointer",
+"int32"
+],
+"return": "void"
+},
+"0x1148880": {
+"name": "LZ4_isLittleEndian",
+"params": [],
+"return": "int32"
+},
+"0x11488d8": {
+"name": "LZ4_write16",
+"params": [
+"pointer",
+"int16"
+],
+"return": "void"
+},
+"0x1148950": {
+"name": "LZ4_read_ARCH",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x11489b8": {
+"name": "LZ4_NbCommonBytes",
+"params": [
+"int64"
+],
+"return": "int32"
+},
+"0x1148ab0": {
+"name": "LZ4_read16",
+"params": [
+"pointer"
+],
+"return": "int16"
+},
+"0x1148b18": {
+"name": "LZ4_readLE16",
+"params": [
+"pointer"
+],
+"return": "int16"
+},
+"0x1148cc0": {
+"name": "read_long_length_no_check",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x1148e04": {
+"name": "LZ4HC_searchExtDict",
+"params": [
+"pointer",
+"int32",
+"pointer",
+"pointer",
+"struct_pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "struct"
+},
+"0x114aaa0": {
+"name": "LZ4HC_hashPtr",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x114ab08": {
+"name": "LZ4_read32",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x114ab70": {
+"name": "LZ4_sizeofStateHC",
+"params": [],
+"return": "int32"
+},
+"0x114ab7c": {
+"name": "LZ4_compress_HC_extStateHC_fastReset",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114acd0": {
+"name": "LZ4_isAligned",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x114acf8": {
+"name": "LZ4_streamHC_t_alignment",
+"params": [],
+"return": "int64"
+},
+"0x114ad00": {
+"name": "LZ4_resetStreamHC_fast",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x114b158": {
+"name": "LZ4HC_init_internal",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "void"
+},
+"0x114b77c": {
+"name": "LZ4HC_compress_generic",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114b898": {
+"name": "LZ4_compress_HC_extStateHC",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114b918": {
+"name": "LZ4_initStreamHC",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x114ba0c": {
+"name": "LZ4_compress_HC",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114ba94": {
+"name": "LZ4_compress_HC_destSize",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114bba0": {
+"name": "LZ4_setCompressionLevel",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x114bcc4": {
+"name": "LZ4_createStreamHC",
+"params": [],
+"return": "struct_pointer"
+},
+"0x114bd20": {
+"name": "LZ4_freeStreamHC",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x114bd64": {
+"name": "LZ4_resetStreamHC",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x114bda0": {
+"name": "LZ4_favorDecompressionSpeed",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x114be8c": {
+"name": "LZ4_loadDictHC",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x114cbf8": {
+"name": "LZ4HC_getCLevelParams",
+"params": [
+"int32"
+],
+"return": "struct"
+},
+"0x114cdc0": {
+"name": "LZ4MID_fillHTable",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "void"
+},
+"0x114db30": {
+"name": "LZ4_attach_HC_dictionary",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "void"
+},
+"0x114dc78": {
+"name": "LZ4_compress_HC_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114dd40": {
+"name": "LZ4_compressHC_continue_generic",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114f00c": {
+"name": "LZ4_compress_HC_continue_destSize",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x114f054": {
+"name": "LZ4_saveDictHC",
+"params": [
+"struct_pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x114fce8": {
+"name": "LZ4_compressHC",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x114fd44": {
+"name": "LZ4_compressHC_limitedOutput",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114fd84": {
+"name": "LZ4_compressHC2",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114fde4": {
+"name": "LZ4_compressHC2_limitedOutput",
+"params": [
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114fe28": {
+"name": "LZ4_compressHC_withStateHC",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x114fe94": {
+"name": "LZ4_compressHC_limitedOutput_withStateHC",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114fedc": {
+"name": "LZ4_compressHC2_withStateHC",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114ff4c": {
+"name": "LZ4_compressHC2_limitedOutput_withStateHC",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x114ff98": {
+"name": "LZ4_compressHC_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x1150000": {
+"name": "LZ4_compressHC_limitedOutput_continue",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x1150044": {
+"name": "LZ4_sizeofStreamStateHC",
+"params": [],
+"return": "int32"
+},
+"0x1150050": {
+"name": "LZ4_resetStreamStateHC",
+"params": [
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x11500ec": {
+"name": "LZ4_createHC",
+"params": [
+"pointer"
+],
+"return": "pointer"
+},
+"0x1150178": {
+"name": "LZ4_freeHC",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x11501bc": {
+"name": "LZ4_compressHC2_continue",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x1150270": {
+"name": "LZ4_compressHC2_limitedOutput_continue",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x1150328": {
+"name": "LZ4_slideInputBufferHC",
+"params": [
+"pointer"
+],
+"return": "pointer"
+},
+"0x1150744": {
+"name": "LZ4_read_ARCH",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x11507ac": {
+"name": "LZ4_NbCommonBytes",
+"params": [
+"int64"
+],
+"return": "int32"
+},
+"0x11508a4": {
+"name": "LZ4_read16",
+"params": [
+"pointer"
+],
+"return": "int16"
+},
+"0x115090c": {
+"name": "LZ4_isLittleEndian",
+"params": [],
+"return": "int32"
+},
+"0x1150964": {
+"name": "LZ4HC_clearTables",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1150a14": {
+"name": "LZ4HC_compress_generic_noDictCtx",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x1172528": {
+"name": "LZ4HC_compress_generic_dictCtx",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11935d0": {
+"name": "LZ4MID_compress",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x119bea0": {
+"name": "LZ4HC_compress_optimal",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int64",
+"int32",
+"int32",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11bdc40": {
+"name": "select_searchDict_function",
+"params": [
+"struct_pointer"
+],
+"return": "pointer"
+},
+"0x11bdd78": {
+"name": "LZ4MID_hash8Ptr",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x11bdda0": {
+"name": "LZ4MID_hash4Ptr",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x11bddc8": {
+"name": "LZ4MID_searchExtDict",
+"params": [
+"pointer",
+"int32",
+"pointer",
+"struct_pointer",
+"int32"
+],
+"return": "struct"
+},
+"0x11bfdac": {
+"name": "LZ4MID_searchHCDict",
+"params": [
+"pointer",
+"int32",
+"pointer",
+"struct_pointer",
+"int32"
+],
+"return": "struct"
+},
+"0x11bfe64": {
+"name": "LZ4MID_hash7",
+"params": [
+"int64"
+],
+"return": "int32"
+},
+"0x11bfefc": {
+"name": "LZ4_readLE64",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x11c060c": {
+"name": "LZ4_read64",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x11c0674": {
+"name": "LZ4MID_hash4",
+"params": [
+"int32"
+],
+"return": "int32"
+},
+"0x11c06d8": {
+"name": "LZ4_writeLE16",
+"params": [
+"pointer",
+"int16"
+],
+"return": "void"
+},
+"0x11c084c": {
+"name": "LZ4_write16",
+"params": [
+"pointer",
+"int16"
+],
+"return": "void"
+},
+"0x11c08c4": {
+"name": "LZ4HC_countPattern",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x11c0dcc": {
+"name": "LZ4HC_protectDictEnd",
+"params": [
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11c0df8": {
+"name": "LZ4HC_rotatePattern",
+"params": [
+"int64",
+"int32"
+],
+"return": "int32"
+},
+"0x11c0f58": {
+"name": "LZ4HC_reverseCountPattern",
+"params": [
+"pointer",
+"pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x11c146c": {
+"name": "isStateCompatible",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11c1640": {
+"name": "LZ4HC_setExternalDict",
+"params": [
+"struct_pointer",
+"pointer"
+],
+"return": "void"
+},
+"0x11c284c": {
+"name": "LZ4F_isError",
+"params": [
+"int64"
+],
+"return": "int32"
+},
+"0x11c2868": {
+"name": "LZ4F_getErrorName",
+"params": [
+"int64"
+],
+"return": "pointer"
+},
+"0x11c2a38": {
+"name": "LZ4F_getErrorCode",
+"params": [
+"int64"
+],
+"return": "int32"
+},
+"0x11c2ab0": {
+"name": "LZ4F_getVersion",
+"params": [],
+"return": "int32"
+},
+"0x11c2ab8": {
+"name": "LZ4F_compressionLevel_max",
+"params": [],
+"return": "int32"
+},
+"0x11c2ac0": {
+"name": "LZ4F_getBlockSize",
+"params": [
+"int32"
+],
+"return": "int64"
+},
+"0x11c2ca0": {
+"name": "LZ4F_returnErrorCode",
+"params": [
+"int32"
+],
+"return": "int64"
+},
+"0x11c2cf8": {
+"name": "LZ4F_compressFrameBound",
+"params": [
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c2dcc": {
+"name": "LZ4F_compressBound_internal",
+"params": [
+"int64",
+"struct_pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x11c3324": {
+"name": "LZ4F_compressFrame_usingCDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c3934": {
+"name": "LZ4F_optimalBSID",
+"params": [
+"int32",
+"int64"
+],
+"return": "int32"
+},
+"0x11c3a7c": {
+"name": "LZ4F_compressBegin_usingCDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c3ac8": {
+"name": "LZ4F_compressUpdate",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c3b18": {
+"name": "LZ4F_compressEnd",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c42b0": {
+"name": "LZ4F_compressFrame",
+"params": [
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c47fc": {
+"name": "LZ4F_free",
+"params": [
+"pointer",
+"struct"
+],
+"return": "void"
+},
+"0x11c48f0": {
+"name": "LZ4F_createCDict_advanced",
+"params": [
+"struct",
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x11c5448": {
+"name": "LZ4F_malloc",
+"params": [
+"int64",
+"struct"
+],
+"return": "pointer"
+},
+"0x11c5530": {
+"name": "LZ4F_freeCDict",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x11c58bc": {
+"name": "LZ4F_createCDict",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x11c5934": {
+"name": "LZ4F_createCompressionContext_advanced",
+"params": [
+"struct",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x11c5b44": {
+"name": "LZ4F_calloc",
+"params": [
+"int64",
+"struct"
+],
+"return": "pointer"
+},
+"0x11c5d10": {
+"name": "LZ4F_createCompressionContext",
+"params": [
+"pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x11c5e6c": {
+"name": "LZ4F_freeCompressionContext",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c610c": {
+"name": "LZ4F_compressBegin_internal",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11c9620": {
+"name": "ctxTypeID_to_size",
+"params": [
+"int32"
+],
+"return": "int32"
+},
+"0x11c9684": {
+"name": "LZ4F_initStream",
+"params": [
+"pointer",
+"struct_pointer",
+"int32",
+"int32"
+],
+"return": "void"
+},
+"0x11c9844": {
+"name": "LZ4F_writeLE32",
+"params": [
+"pointer",
+"int32"
+],
+"return": "void"
+},
+"0x11c9b80": {
+"name": "LZ4F_writeLE64",
+"params": [
+"pointer",
+"int64"
+],
+"return": "void"
+},
+"0x11ca294": {
+"name": "LZ4F_headerChecksum",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int8"
+},
+"0x11ca2fc": {
+"name": "LZ4F_compressBegin",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11ca344": {
+"name": "LZ4F_compressBegin_usingDictOnce",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11ca394": {
+"name": "LZ4F_compressBegin_usingDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11ca3e0": {
+"name": "LZ4F_compressBound",
+"params": [
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11ca4d0": {
+"name": "LZ4F_compressUpdateImpl",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x11cd130": {
+"name": "LZ4F_uncompressedUpdate",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11cd180": {
+"name": "LZ4F_flush",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11ce400": {
+"name": "LZ4F_selectCompression",
+"params": [
+"int32",
+"int32",
+"int32"
+],
+"return": "pointer"
+},
+"0x11ce4ac": {
+"name": "LZ4F_makeBlock",
+"params": [
+"pointer",
+"pointer",
+"int64",
+"pointer",
+"pointer",
+"int32",
+"struct_pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x11ce850": {
+"name": "LZ4F_localSaveDict",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11cec5c": {
+"name": "LZ4F_createDecompressionContext_advanced",
+"params": [
+"struct",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x11cede4": {
+"name": "LZ4F_createDecompressionContext",
+"params": [
+"pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x11cef38": {
+"name": "LZ4F_freeDecompressionContext",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11cf270": {
+"name": "LZ4F_resetDecompressionContext",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x11cf534": {
+"name": "LZ4F_headerSize",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x11cf734": {
+"name": "LZ4F_readLE32",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x11cfa68": {
+"name": "LZ4F_getFrameInfo",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"pointer",
+"pointer"
+],
+"return": "int64"
+},
+"0x11cffcc": {
+"name": "LZ4F_decompress",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11db30c": {
+"name": "LZ4F_decodeHeader",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x11dc988": {
+"name": "LZ4F_updateDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int32"
+],
+"return": "void"
+},
+"0x11dec68": {
+"name": "LZ4F_decompress_usingDict",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"pointer",
+"pointer",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11dee7c": {
+"name": "LZ4F_doNotCompressBlock",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11deea8": {
+"name": "LZ4F_compressBlock",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11defe4": {
+"name": "LZ4F_compressBlock_continue",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11df0d0": {
+"name": "LZ4F_compressBlockHC",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11df16c": {
+"name": "LZ4F_compressBlockHC_continue",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"int32",
+"int32",
+"int32",
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11df1b8": {
+"name": "LZ4F_readLE64",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x11df8a8": {
+"name": "XXH_versionNumber",
+"params": [],
+"return": "int32"
+},
+"0x11df8b0": {
+"name": "XXH32",
+"params": [
+"pointer",
+"int64",
+"int32"
+],
+"return": "int32"
+},
+"0x11e1d18": {
+"name": "XXH_isLittleEndian",
+"params": [],
+"return": "int32"
+},
+"0x11e1d70": {
+"name": "XXH32_createState",
+"params": [],
+"return": "struct_pointer"
+},
+"0x11e1d88": {
+"name": "XXH_malloc",
+"params": [
+"int64"
+],
+"return": "pointer"
+},
+"0x11e1dac": {
+"name": "XXH32_freeState",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11e1dd4": {
+"name": "XXH_free",
+"params": [
+"pointer"
+],
+"return": "void"
+},
+"0x11e1df8": {
+"name": "XXH32_copyState",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "void"
+},
+"0x11e1e7c": {
+"name": "XXH32_reset",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "int32"
+},
+"0x11e2038": {
+"name": "XXH32_update",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x11e6310": {
+"name": "XXH32_digest",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11e706c": {
+"name": "XXH32_canonicalFromHash",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x11e70dc": {
+"name": "XXH_swap32",
+"params": [
+"int32"
+],
+"return": "int32"
+},
+"0x11e71fc": {
+"name": "XXH32_hashFromCanonical",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11e7220": {
+"name": "XXH_readBE32",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x11e7270": {
+"name": "XXH64",
+"params": [
+"pointer",
+"int64",
+"int64"
+],
+"return": "int64"
+},
+"0x11e9ab8": {
+"name": "XXH64_createState",
+"params": [],
+"return": "struct_pointer"
+},
+"0x11e9ad0": {
+"name": "XXH64_freeState",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x11e9af8": {
+"name": "XXH64_copyState",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "void"
+},
+"0x11e9b7c": {
+"name": "XXH64_reset",
+"params": [
+"struct_pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x11e9d54": {
+"name": "XXH64_update",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x11edef8": {
+"name": "XXH64_digest",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11ee970": {
+"name": "XXH64_canonicalFromHash",
+"params": [
+"struct_pointer",
+"int64"
+],
+"return": "void"
+},
+"0x11ee9e0": {
+"name": "XXH_swap64",
+"params": [
+"int64"
+],
+"return": "int64"
+},
+"0x11eec10": {
+"name": "XXH64_hashFromCanonical",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x11eec34": {
+"name": "XXH_readBE64",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x11eec84": {
+"name": "XXH32_round",
+"params": [
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11eed4c": {
+"name": "XXH32_finalize",
+"params": [
+"int32",
+"pointer",
+"int64",
+"int32",
+"int32"
+],
+"return": "int32"
+},
+"0x11f1190": {
+"name": "XXH_read32",
+"params": [
+"pointer"
+],
+"return": "int32"
+},
+"0x11f11ec": {
+"name": "XXH32_avalanche",
+"params": [
+"int32"
+],
+"return": "int32"
+},
+"0x11f12f4": {
+"name": "XXH_memcpy",
+"params": [
+"pointer",
+"pointer",
+"int64"
+],
+"return": "pointer"
+},
+"0x11f1330": {
+"name": "XXH64_round",
+"params": [
+"int64",
+"int64"
+],
+"return": "int64"
+},
+"0x11f1400": {
+"name": "XXH64_mergeRound",
+"params": [
+"int64",
+"int64"
+],
+"return": "int64"
+},
+"0x11f1474": {
+"name": "XXH64_finalize",
+"params": [
+"int64",
+"pointer",
+"int64",
+"int32",
+"int32"
+],
+"return": "int64"
+},
+"0x11f65fc": {
+"name": "XXH_read64",
+"params": [
+"pointer"
+],
+"return": "int64"
+},
+"0x11f6658": {
+"name": "XXH64_avalanche",
+"params": [
+"int64"
+],
+"return": "int64"
+}
+}
