@@ -1,0 +1,39 @@
+{
+"0x1012680": {
+"name": "ini_parse_stream",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x1012c20": {
+"name": "ini_parse",
+"params": [
+"pointer",
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x1012c70": {
+"name": "ini_parse_string",
+"params": [
+"pointer",
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x1012cb0": {
+"name": "ini_reader_string",
+"params": [
+"pointer",
+"int32",
+"pointer"
+],
+"return": "pointer"
+}
+}

@@ -424,6 +424,36 @@ fn run_types_scores_each_parameter_and_counts_disagreement_classes() {
     assert!(!failure.contains("wrong"), "{stderr}");
 }
 
+/// The classes metric on both signature paths over both probe fixtures: `raw` (a bare in-memory project) is the
+/// path of every number before 2026-11-27 and reproduces the plan's 85 of 138; `api` (the MCP decompile tool's
+/// Session-opened project) gives the same 85 because no prototype or hint reaches a stripped static binary
+/// (docs/plans/2026-11-27-parameter-types.md, "Slice 0 result"). A change to either count is a measured change:
+/// update it with the plan.
+#[test]
+fn types_classes_count_on_both_signature_paths() {
+    let scratch = std::env::temp_dir().join(format!("rampage-eval-types-paths-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let slice = |arch: &str| {
+        serde_json::json!({"family": "types", "metric": "classes",
+            "target": fixture(&format!("eval-types-{arch}.elf")),
+            "truth": data(&format!("eval-truth-types-{arch}.json"))})
+    };
+    let manifest = scratch.join("manifest.json");
+    let slices = serde_json::json!({"slices": {"x86_64": slice("x86_64"), "aarch64": slice("aarch64")}});
+    std::fs::write(&manifest, slices.to_string()).unwrap();
+    for (path, expected) in [("raw", 85), ("api", 85)] {
+        let output = eval().args(["run", "--path", path, "--manifest"]).arg(&manifest).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{path}: {stderr}");
+        let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+        let correct: usize = evaluation.slices.values().map(|report| report.correct).sum();
+        let declared: usize =
+            evaluation.slices.values().map(|report| report.correct + report.wrong + report.missed).sum();
+        assert_eq!((correct, declared), (expected, 138), "{path}: {stderr}");
+    }
+    std::fs::remove_dir_all(&scratch).unwrap();
+}
+
 /// The committed type truths are what `rampage-eval type-truth` reads from the committed `-g` builds, twin checks
 /// included, and they describe the corpus source's functions.
 #[test]

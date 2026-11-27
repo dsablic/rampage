@@ -73,8 +73,12 @@ pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
             }
         }
     }
-    let (evaluation, decompiler_health) =
-        evaluate_slices(slices, args.max_disagreements, args.health_sample.map(|limit| limit as usize))?;
+    let (evaluation, decompiler_health) = evaluate_slices(
+        slices,
+        args.max_disagreements,
+        args.health_sample.map(|limit| limit as usize),
+        args.path.into(),
+    )?;
     for (path, workload) in &mut workloads {
         let names = workload_slices
             .get(path)

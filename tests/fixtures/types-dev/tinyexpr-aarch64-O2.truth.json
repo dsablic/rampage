@@ -1,0 +1,290 @@
+{
+"0x1027b24": {
+"name": "te_free_parameters",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1027c4c": {
+"name": "te_eval",
+"params": [
+"struct_pointer"
+],
+"return": "float64"
+},
+"0x1028350": {
+"name": "te_compile",
+"params": [
+"pointer",
+"struct_pointer",
+"int32",
+"pointer"
+],
+"return": "struct_pointer"
+},
+"0x10283fc": {
+"name": "next_token",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x10289dc": {
+"name": "list",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x1028aa0": {
+"name": "optimize",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1028be0": {
+"name": "te_interp",
+"params": [
+"pointer",
+"pointer"
+],
+"return": "float64"
+},
+"0x1028c40": {
+"name": "te_print",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1028c48": {
+"name": "pn",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "void"
+},
+"0x1028dd0": {
+"name": "add",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028dd8": {
+"name": "sub",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028de0": {
+"name": "mul",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028de8": {
+"name": "divide",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028df0": {
+"name": "not_equal",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028e04": {
+"name": "logical_not",
+"params": [
+"float64"
+],
+"return": "float64"
+},
+"0x1028e18": {
+"name": "equal",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028e2c": {
+"name": "lower_eq",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028e40": {
+"name": "lower",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028e54": {
+"name": "greater_eq",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028e68": {
+"name": "greater",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028e7c": {
+"name": "logical_and",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028e94": {
+"name": "logical_or",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1028eac": {
+"name": "e",
+"params": [],
+"return": "float64"
+},
+"0x1028fe0": {
+"name": "npr",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x1029114": {
+"name": "pi",
+"params": [],
+"return": "float64"
+},
+"0x1029120": {
+"name": "expr",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10291f0": {
+"name": "comma",
+"params": [
+"float64",
+"float64"
+],
+"return": "float64"
+},
+"0x10291f8": {
+"name": "and_expr",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10292c8": {
+"name": "eq_expr",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10293b0": {
+"name": "rel_expr",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10294c0": {
+"name": "sum_expr",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10295a8": {
+"name": "term",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10296a0": {
+"name": "factor",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x1029770": {
+"name": "power",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x10299f4": {
+"name": "logical_notnot",
+"params": [
+"float64"
+],
+"return": "float64"
+},
+"0x1029a08": {
+"name": "negate",
+"params": [
+"float64"
+],
+"return": "float64"
+},
+"0x1029a10": {
+"name": "negate_logical_not",
+"params": [
+"float64"
+],
+"return": "float64"
+},
+"0x1029a24": {
+"name": "negate_logical_notnot",
+"params": [
+"float64"
+],
+"return": "float64"
+},
+"0x1029a38": {
+"name": "base_impl",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+}
+}

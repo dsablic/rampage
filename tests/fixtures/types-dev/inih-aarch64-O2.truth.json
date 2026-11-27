@@ -1,0 +1,39 @@
+{
+"0x1024744": {
+"name": "ini_parse_stream",
+"params": [
+"pointer",
+"pointer",
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x1024b9c": {
+"name": "ini_parse",
+"params": [
+"pointer",
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x1024c08": {
+"name": "ini_parse_string",
+"params": [
+"pointer",
+"pointer",
+"pointer"
+],
+"return": "int32"
+},
+"0x1024c54": {
+"name": "ini_reader_string",
+"params": [
+"pointer",
+"int32",
+"pointer"
+],
+"return": "pointer"
+}
+}

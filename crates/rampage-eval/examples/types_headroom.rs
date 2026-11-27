@@ -2,11 +2,13 @@
 //! one-feature miner over the decompiler's own answer already takes (docs/plans/2026-11-20-flywheel-next.md,
 //! step 2; report in docs/benchmarks/flywheel-headroom-2026-11-21.md).
 //!
-//! `cargo run --release -p rampage-eval --example types_headroom -- OUT.json ROLE:DEBUG:STRIPPED:TRUTH...`
+//! `cargo run --release -p rampage-eval --example types_headroom -- [--path raw|api] OUT.json ROLE:DEBUG:STRIPPED:TRUTH...`
 //!
 //! ROLE is `train` or `dev`; TRUTH is `rampage-eval type-truth DEBUG --stripped STRIPPED`. Every truth function is
-//! decompiled in the stripped binary, as the `types` eval family does, and each declared parameter position is
-//! scored by class. Each wrong or missed position is classified:
+//! decompiled in the stripped binary, as the `types` eval family does on the same `--path` (default `api`, the MCP
+//! decompile tool's project; `raw` is the bare project of the numbers before 2026-11-27), and each declared
+//! parameter position is scored by class. `positions` in OUT.json lists every scored position, for diffing two
+//! runs. Each wrong or missed position is classified:
 //!
 //! - `not_decompiled`: no signature at all (not a type problem);
 //! - `dead`: DWARF gives the parameter no location, so the callee never reads it and holds no evidence of its
@@ -28,7 +30,7 @@ use std::path::PathBuf;
 
 use gimli::{Dwarf, EndianSlice, RunTimeEndian};
 use object::{Object, ObjectSection};
-use rampage_eval::{ProposedSignature, TypeClass, TypeTruth, decompiled_signatures};
+use rampage_eval::{ProposedSignature, SignaturePath, TypeClass, TypeTruth, signature_batch_on};
 use serde_json::json;
 
 /// Per function address: whether each formal parameter has a DWARF location.
@@ -118,8 +120,19 @@ fn feature(kind: &str, position: &Position) -> Option<String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
+    let path = if args.peek().map(String::as_str) == Some("--path") {
+        args.next();
+        match args.next().as_deref() {
+            Some("raw") => SignaturePath::Raw,
+            Some("api") => SignaturePath::Api,
+            other => return Err(format!("--path takes raw or api, not {other:?}").into()),
+        }
+    } else {
+        SignaturePath::Api
+    };
     let out = PathBuf::from(args.next().ok_or("OUT.json")?);
+    let mut rows = Vec::new();
     let mut positions: BTreeMap<String, Vec<Position>> = BTreeMap::new();
     let mut spurious: BTreeMap<String, u64> = BTreeMap::new();
     let mut per_binary = serde_json::Map::new();
@@ -128,10 +141,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let [role, debug, stripped, truth] = parts[..] else { return Err(format!("bad spec {spec}").into()) };
         let truth = TypeTruth::from_json(&std::fs::read_to_string(truth)?)?;
         let live = liveness(&std::fs::read(debug)?)?;
-        let binary = rampage_loaders::Binary::open(std::path::Path::new(stripped))?;
-        let arch = binary.arch.to_string();
+        let arch = rampage_loaders::Binary::open(std::path::Path::new(stripped))?.arch.to_string();
         let started = std::time::Instant::now();
-        let proposals = decompiled_signatures(binary, truth.0.keys().copied());
+        let proposals = signature_batch_on(path, std::path::Path::new(stripped), truth.0.keys().copied())?.signatures;
         let mut counts: BTreeMap<&str, u64> = BTreeMap::new();
         for (address, declared) in &truth.0 {
             let proposed: Option<&ProposedSignature> = proposals.get(address).and_then(|result| result.as_ref().ok());
@@ -148,6 +160,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     decompiled: proposed.is_some(),
                 };
                 *counts.entry(category(&position)).or_default() += 1;
+                rows.push(json!({
+                    "binary": stripped, "function": declared.name, "address": format!("{address:#x}"), "index": index,
+                    "truth": class.tag(), "proposed": position.proposed.as_ref().map(|(class, _)| class.tag()),
+                    "raw": position.proposed.as_ref().map(|(_, raw)| raw), "category": category(&position),
+                }));
                 positions.entry(role.to_owned()).or_default().push(position);
             }
             if let Some(proposed) = proposed
@@ -229,7 +246,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                    "fixed_by_category": fixed_by_category, "changing_rules": rules}),
         );
     }
-    let report = json!({"binaries": per_binary, "summary": summary, "miners": miners});
+    let report = json!({"path": path.tag(), "binaries": per_binary, "summary": summary, "miners": miners,
+                        "positions": rows});
     std::fs::write(&out, serde_json::to_vec_pretty(&report)?)?;
     Ok(())
 }

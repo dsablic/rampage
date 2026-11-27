@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use object::{Object, ObjectSection, ObjectSymbol};
-use rampage_eval::{Evaluation, Gate, Report, ToolTruth, Truth, TypeMetric, TypeTruth};
+use rampage_eval::{Evaluation, Gate, Report, SignaturePath, ToolTruth, Truth, TypeMetric, TypeTruth};
 use rampage_loaders::Binary;
 use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
@@ -186,6 +186,25 @@ enum Metric {
     Classes,
 }
 
+/// Where a types slice reads recovered signatures ([`SignaturePath`]).
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum SignatureSource {
+    /// A bare in-memory project, as every types number up to 2026-11-27 was measured.
+    Raw,
+    /// The project and decompile call of the MCP `decompile` tool: library prototypes, type hints, propagation.
+    #[default]
+    Api,
+}
+
+impl From<SignatureSource> for SignaturePath {
+    fn from(source: SignatureSource) -> SignaturePath {
+        match source {
+            SignatureSource::Raw => SignaturePath::Raw,
+            SignatureSource::Api => SignaturePath::Api,
+        }
+    }
+}
+
 impl From<Metric> for TypeMetric {
     fn from(metric: Metric) -> TypeMetric {
         match metric {
@@ -255,6 +274,10 @@ struct RunArgs {
     /// What a types slice scores.
     #[arg(long, value_enum, default_value_t = Metric::Params, conflicts_with = "manifest")]
     metric: Metric,
+    /// Where types slices read recovered signatures: `api` (the MCP decompile tool's project and call) or `raw`
+    /// (a bare in-memory project, the path of every types number before 2026-11-27). Applies to manifests too.
+    #[arg(long, value_enum, default_value_t = SignatureSource::Api)]
+    path: SignatureSource,
     /// The recall baseline; a lower measured recall fails the gate.
     #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
     min_recall: f64,
@@ -578,14 +601,14 @@ impl Slice {
     }
 
     /// The slice's report, and its default name.
-    fn evaluate(&self, decompiled: &mut Decompiled) -> Result<(Report, String), String> {
+    fn evaluate(&self, decompiled: &mut Decompiled, path: SignaturePath) -> Result<(Report, String), String> {
         match (self.family, &self.target) {
             (Family::Toolid, None) => Ok((self.evaluate_tools()?, Family::Toolid.tag().to_owned())),
             (Family::Toolid, Some(target)) => {
                 Err(format!("{}: a toolid slice takes its binaries from its truth", target.display()))
             }
             (family, None) => Err(format!("{}: a {} slice needs a target", self.truth.display(), family.tag())),
-            (Family::Types, Some(target)) => self.evaluate_types(target, decompiled),
+            (Family::Types, Some(target)) => self.evaluate_types(target, decompiled, path),
             (family, Some(target)) => self.evaluate_target(family, target),
         }
     }
@@ -612,13 +635,18 @@ impl Slice {
     }
 
     /// Decompiles (once per target) every truth function of the stripped target and scores the slice's metric.
-    fn evaluate_types(&self, target_path: &Path, decompiled: &mut Decompiled) -> Result<(Report, String), String> {
+    fn evaluate_types(
+        &self,
+        target_path: &Path,
+        decompiled: &mut Decompiled,
+        path: SignaturePath,
+    ) -> Result<(Report, String), String> {
         let truth =
             TypeTruth::from_json(&read(&self.truth)?).map_err(|error| format!("{}: {error}", self.truth.display()))?;
         let target = open(target_path)?;
         let name = format!("types-{}-{}", TypeMetric::from(self.metric).tag(), target.arch);
         if !decompiled.contains_key(target_path) {
-            let signatures = rampage_eval::decompiled_signature_batch(target, truth.0.keys().copied());
+            let signatures = rampage_eval::signature_batch_on(path, target_path, truth.0.keys().copied())?;
             decompiled.insert(target_path.to_owned(), signatures);
         }
         let signatures = &decompiled[target_path].signatures;
@@ -697,7 +725,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
         };
         vec![(args.slice, slice)]
     };
-    let (evaluation, _health) = evaluate_slices(slices, args.max_disagreements, None)?;
+    let (evaluation, _health) = evaluate_slices(slices, args.max_disagreements, None, args.path.into())?;
     println!("{}", serde_json::to_string_pretty(&evaluation).map_err(|error| error.to_string())?);
     Ok(if evaluation.passes_gate() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
@@ -722,6 +750,7 @@ fn evaluate_slices(
     slices: Vec<(Option<String>, Slice)>,
     max_disagreements: usize,
     health_sample: Option<usize>,
+    signature_path: SignaturePath,
 ) -> Result<(Evaluation, serde_json::Value), String> {
     let mut evaluation = Evaluation::default();
     let mut decompiled = Decompiled::new();
@@ -747,7 +776,7 @@ fn evaluate_slices(
                 addresses.pop_last();
             }
         }
-        let (mut report, default_name) = slice.evaluate(&mut decompiled)?;
+        let (mut report, default_name) = slice.evaluate(&mut decompiled, signature_path)?;
         let name = name.unwrap_or(default_name);
         eprintln!("{name}: {}", report.summary());
         report.truncate_disagreements(max_disagreements);

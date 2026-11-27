@@ -417,8 +417,79 @@ pub struct SignatureRecoveryBatch {
     pub timing_boundary: &'static str,
 }
 
+/// Where a types eval reads its recovered signatures from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignaturePath {
+    /// A bare in-memory [`rampage_api::Project`] over the stripped binary, decompiled function by function: the
+    /// path every types number up to 2026-11-27 was measured on.
+    Raw,
+    /// The project the MCP server opens ([`rampage_api::Session::open`]: the binary's annotation sidecar, the
+    /// session's packs and analysis store) and the call its `decompile` tool makes, so library prototypes, type
+    /// hints and propagation reach the score as they reach an agent. Decompiles in process: the supervised worker
+    /// runs the same operation plan in a child process, one process per function.
+    #[default]
+    Api,
+}
+
+impl SignaturePath {
+    pub fn tag(self) -> &'static str {
+        match self {
+            SignaturePath::Raw => "raw",
+            SignaturePath::Api => "api",
+        }
+    }
+}
+
+/// [`decompiled_signature_batch`] on the [`SignaturePath::Api`] path: opens `path` as the MCP server does.
+pub fn api_signature_batch(
+    path: &std::path::Path,
+    addresses: impl IntoIterator<Item = u64>,
+) -> Result<SignatureRecoveryBatch, String> {
+    let session = rampage_api::Session::default();
+    let project = session.open(path, None).map_err(|error| format!("{}: {error}", path.display()))?;
+    project.set_decompiler_worker(None);
+    Ok(signature_batch(
+        &project,
+        addresses,
+        "Around each Project::decompile call of a Session-opened project (the MCP decompile tool's call), in \
+         process; opening excluded. First call may include discovery/native initialization; subsequent calls share \
+         target caches. In-process calls are not forcibly interruptible.",
+    ))
+}
+
+/// The recovered signatures of `addresses` in the binary at `path`, read on `signature_path`.
+pub fn signature_batch_on(
+    signature_path: SignaturePath,
+    path: &std::path::Path,
+    addresses: impl IntoIterator<Item = u64>,
+) -> Result<SignatureRecoveryBatch, String> {
+    match signature_path {
+        SignaturePath::Raw => {
+            let binary = Binary::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            Ok(decompiled_signature_batch(binary, addresses))
+        }
+        SignaturePath::Api => api_signature_batch(path, addresses),
+    }
+}
+
+/// [`SignaturePath::Raw`]: decompiles in a bare in-memory project over `target`.
 pub fn decompiled_signature_batch(target: Binary, addresses: impl IntoIterator<Item = u64>) -> SignatureRecoveryBatch {
     let project = rampage_api::Project::new(target);
+    signature_batch(
+        &project,
+        addresses,
+        "Around each Project::decompile call; Project construction excluded. \
+         First call may include discovery/native initialization; subsequent calls share target caches. \
+         In-process calls are not forcibly interruptible.",
+    )
+}
+
+fn signature_batch(
+    project: &rampage_api::Project,
+    addresses: impl IntoIterator<Item = u64>,
+    timing_boundary: &'static str,
+) -> SignatureRecoveryBatch {
     let mut observations = Vec::new();
     let mut signatures = BTreeMap::new();
     for address in addresses {
@@ -467,13 +538,7 @@ pub fn decompiled_signature_batch(target: Binary, addresses: impl IntoIterator<I
         observations.push(observation);
         signatures.insert(address, signature);
     }
-    SignatureRecoveryBatch {
-        signatures,
-        observations,
-        timing_boundary: "Around each Project::decompile call; Project construction excluded. \
-            First call may include discovery/native initialization; subsequent calls share target caches. \
-            In-process calls are not forcibly interruptible.",
-    }
+    SignatureRecoveryBatch { signatures, observations, timing_boundary }
 }
 
 /// Which part of a signature a slice scores.

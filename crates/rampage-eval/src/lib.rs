@@ -39,8 +39,9 @@ pub use toolid::{
     kind_tag, score_tools,
 };
 pub use types::{
-    DecompileObservation, ProposedSignature, ProposedType, SignatureRecoveryBatch, SignatureTruth, TypeClass,
-    TypeMetric, TypeTruth, decompiled_signature_batch, decompiled_signatures, score_types,
+    DecompileObservation, ProposedSignature, ProposedType, SignaturePath, SignatureRecoveryBatch, SignatureTruth,
+    TypeClass, TypeMetric, TypeTruth, api_signature_batch, decompiled_signature_batch, decompiled_signatures,
+    score_types, signature_batch_on,
 };
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
