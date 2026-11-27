@@ -8,6 +8,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changes and fixes
 
+- `evaluate_function` puts `result` first in its report when the function returned (field order only, CLI text
+  output too), and the tool description names `result` as the value. Successful reports have never carried a
+  `status` field: the `{"status":"ok","result":…}` answers in the Haiku v4 passes copy the
+  `{"status":"unknown",…}` fallback shape in the benchmark prompt, not a tool result.
 - `decompile` on a large function: `view=summary` and `view=code` no longer refuse when the evidence is over the
   60,000-byte budget. They keep the same number of leading rows in `variables`, `structure_metadata.variables` and
   `diagnostics.warnings`, with a `variables_omitted` (`warnings_omitted`) count beside each shortened list and a

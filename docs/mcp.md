@@ -533,7 +533,8 @@ points here. Addresses below 0x1000 and segments without permissions (Mach-O
 executable with a segment in page 0, as Cortex-M firmware often is; in an ELF PIE or shared object linked at 0,
 code sections in page 0 run while address 0 and the headers still fault), and Apple arm64 binaries pack stack
 arguments at their own size. Memory starts as the file's image (zero-filled bss, copy-on-write) plus a
-zeroed stack and thread block; `memory` writes bytes into it first. Calls inside the image are followed; `stop`
+zeroed stack and thread block; `memory` writes bytes into it first. Calls inside the image are followed. A run that
+returned starts its report with `result`; a successful report has no `status` field. `stop`
 says why the run ended: `returned` (with `result` as hex, unsigned and signed), `step_limit`, `timeout`,
 `external_call` (an import, named), `external_read`, `unmapped_read`/`unmapped_write`/`unmapped_fetch`, `user_op`
 (system calls, traps and processor operations, named), `unsupported_op`, `invalid_instruction` or

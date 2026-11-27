@@ -53,6 +53,10 @@ async fn evaluate_function_runs_functions_and_names_stops() {
     assert_eq!(report["result"]["unsigned"], expected, "{report}");
     assert_eq!(report["result"]["registers"], json!(["EDX", "EAX"]));
     assert_eq!(report["arguments"][0]["location"], "stack+0x4");
+    // The value leads the report, and a success carries no `status` for an agent to copy into its answer (Haiku v4
+    // answered `{"status":"ok","result":…}` on four releases).
+    assert_eq!(report.as_object().unwrap().keys().next().map(String::as_str), Some("result"), "{report}");
+    assert!(report.get("status").is_none(), "{report}");
 
     // A Thumb-2 strlen of the static runtime on a text buffer, and the buffer's final contents.
     let thumb = fixture("bin/hello-thumb.elf");

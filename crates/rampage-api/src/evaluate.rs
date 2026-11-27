@@ -170,6 +170,9 @@ pub enum StopReason {
 
 #[derive(Debug, Serialize)]
 pub struct EvaluateReport {
+    /// The result, present when the function returned. First, so the value leads the report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<ResultValue>,
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub function: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -180,9 +183,6 @@ pub struct EvaluateReport {
     pub detail: String,
     /// Instructions executed, including those of called functions.
     pub steps: u64,
-    /// The result, present when the function returned.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<ResultValue>,
     /// Where execution stopped, unless it returned.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<StoppedAt>,

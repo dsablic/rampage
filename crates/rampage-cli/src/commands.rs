@@ -2268,13 +2268,6 @@ pub fn evaluate(out: &mut impl Write, args: &crate::args::EvaluateArgs, options:
         writeln!(out)?;
         return Ok(());
     }
-    writeln!(
-        out,
-        "stop: {} ({}) after {} instructions",
-        result["stop"].as_str().unwrap_or(""),
-        result["detail"].as_str().unwrap_or(""),
-        result["steps"]
-    )?;
     if let Some(value) = result.get("result") {
         let registers: Vec<&str> =
             value["registers"].as_array().into_iter().flatten().filter_map(|name| name.as_str()).collect();
@@ -2291,6 +2284,13 @@ pub fn evaluate(out: &mut impl Write, args: &crate::args::EvaluateArgs, options:
             )?;
         }
     }
+    writeln!(
+        out,
+        "stop: {} ({}) after {} instructions",
+        result["stop"].as_str().unwrap_or(""),
+        result["detail"].as_str().unwrap_or(""),
+        result["steps"]
+    )?;
     if let Some(at) = result.get("stopped_at") {
         writeln!(
             out,

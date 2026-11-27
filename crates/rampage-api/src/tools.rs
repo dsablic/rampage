@@ -3275,7 +3275,8 @@ pub fn tools() -> Vec<Tool> {
              for X\" question instead of working loops or bit operations out from decompiled code. A p-code \
              interpreter over the bundled Sleigh specifications (x86/x86-64 with SSE/AVX2, AArch64, ARM/Thumb, MIPS, \
              PowerPC, RISC-V, Xtensa); nothing runs natively. Calls inside the image are followed; common C library \
-             imports are modelled. `stop` says why the run ended. return_bits 32 reads a C int on 64-bit targets, 64 \
+             imports are modelled. `result` (first) holds the value when it returned; `stop` says why the run \
+             ended. return_bits 32 reads a C int on 64-bit targets, 64 \
              a register pair on 32-bit ones.",
             |project, request: crate::evaluate::EvaluateRequest| {
                 let report = serde_json::to_value(project.evaluate_function(&request)?)
