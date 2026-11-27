@@ -15,9 +15,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - `decompile` on a large function: `view=summary` and `view=code` no longer refuse when the evidence is over the
   60,000-byte budget. They keep the same number of leading rows in `variables`, `structure_metadata.variables` and
   `diagnostics.warnings`, with a `variables_omitted` (`warnings_omitted`) count beside each shortened list and a
-  receipt in `view_projection.omissions`. C longer than one page (about 40,000 JSON bytes) in `view=code` refuses
-  with the page count and the values to pass to the new `page` argument (0-based, `view=code` only), which returns
-  whole lines with `code_page` (`page`, `pages`, `next_page`, `first_line`, `lines`, `total_lines`). CLI:
+  receipt in `view_projection.omissions`. A `view=code` result that does not fit and whose C is longer than one
+  page (about 40,000 JSON bytes) refuses with the page count and the values to pass to the new `page` argument
+  (0-based, `view=code` only), which returns whole lines with `code_page` (`page`, `pages`, `next_page`,
+  `first_line`, `lines`, `total_lines`) and a `/code` receipt. CLI:
   `function decompile --view code --page N`. The Haiku v4 pass for 1.11.0 had six such refusals on Cortex-M0
   library functions. `view=full` still refuses when oversized.
 - `enable_tools` with a guessed group name succeeds instead of failing: `firmware` (also `embedded`, `mcu`, `raw`)

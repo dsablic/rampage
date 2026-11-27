@@ -2159,10 +2159,16 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
         ));
     }
     let mut value = crate::tool_views::project_decompilation(value, args.view, args.page)?;
-    if let Some(next) = value.get("code").and_then(Value::as_str).and_then(|code| evaluate_hint(code, address)) {
+    if let Some(next) = decompilation_hint(&value, address) {
         value["next"] = Value::String(next);
     }
     Ok(with_note(value, thumb_note))
+}
+
+/// The evaluate_function hint for a decompile view: from its C, unless that is one page of a longer function.
+pub(crate) fn decompilation_hint(view: &Value, address: u64) -> Option<String> {
+    let whole = view.get("code_page").is_none_or(|page| page["pages"] == 1);
+    view.get("code").and_then(Value::as_str).filter(|_| whole).and_then(|code| evaluate_hint(code, address))
 }
 
 /// Characters of decompiled C up to which a function counts as small enough to point at evaluate_function.

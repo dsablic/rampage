@@ -1281,6 +1281,17 @@ fn decompile_points_small_value_functions_at_evaluate_function() {
     assert!(crate::tools::evaluate_hint("\nuint4 f(uint4 param_1)\n{\n  return param_1;\n}\n", 0x10).is_some());
     let long = format!("int f(int a)\n{{\n{}}}\n", "  a = a + 1;\n".repeat(400));
     assert!(crate::tools::evaluate_hint(&long, 0x10).is_none());
+    // Review: the last page of a paged function is small C that looks like a whole function; it gets no hint.
+    let small = "
+uint4 f(uint4 param_1)
+{
+  return param_1;
+}
+";
+    let page = |pages: u64| json!({"code": small, "code_page": {"page": 0, "pages": pages}});
+    assert!(crate::tools::decompilation_hint(&page(3), 0x10).is_none());
+    assert!(crate::tools::decompilation_hint(&page(1), 0x10).is_some());
+    assert!(crate::tools::decompilation_hint(&json!({"code": small}), 0x10).is_some());
 }
 
 #[test]

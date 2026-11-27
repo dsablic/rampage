@@ -262,19 +262,25 @@ fn fits_within(value: &Value, limit: usize) -> bool {
 /// JSON bytes of decompiled C one page of a paged code view holds; the rest of the budget is the evidence's.
 pub const DECOMPILE_CODE_PAGE_BYTES: usize = 40_000;
 
-/// Bytes a fitted decompilation leaves free for the fields the tool adds after the view (`next`, `note`).
-const DECOMPILE_SLACK: usize = 1024;
+/// Bytes every fitted decompilation leaves free for the fields the tool adds after the view (`next`, `note`), so
+/// the tool's result stays within [`MAX_TOOL_VIEW_BYTES`].
+pub const DECOMPILE_SLACK: usize = 1024;
+
+/// Bytes below the trimming limit kept for the `*_omitted` counts and receipts added after the rows are chosen.
+const TRIM_RECEIPT_MARGIN: usize = 512;
 
 /// The row lists of a reduced decompilation that a view too large for the budget shortens, as JSON pointers.
 const DECOMPILE_ROW_LISTS: [&str; 3] = ["/variables", "/structure_metadata/variables", "/diagnostics/warnings"];
 
 /// Projects a decompilation like [`project_tool_view`], fitting the summary and code views instead of refusing.
 ///
-/// A summary that does not fit keeps the first rows of its variable lists (the same count for each) with
-/// `variables_omitted` counts and omission receipts. A code view whose C fits one page
-/// ([`DECOMPILE_CODE_PAGE_BYTES`]) is fitted the same way; longer C refuses, naming `page` and the page count,
-/// unless `page` (0-based) asks for one page of whole lines, which comes with `code_page` (`page`, `pages`,
-/// `next_page`, `first_line`, `lines`, `total_lines`). view=full keeps its exact-or-refuse contract.
+/// Every fitted view stays [`DECOMPILE_SLACK`] bytes below the budget. A summary that does not fit keeps the first
+/// rows of its variable lists (the same count for each) with `variables_omitted` counts and omission receipts. A
+/// code view that does not fit is fitted the same way when its C is one page ([`DECOMPILE_CODE_PAGE_BYTES`]);
+/// longer C refuses, naming `page` and the page count, unless `page` (0-based) asks for one page of whole lines
+/// (a single line longer than a page is a page alone), which comes with `code_page` (`page`, `pages`,
+/// `next_page`, `first_line`, `lines`, `total_lines`) and a `/code` receipt. A view that fits is exactly
+/// [`project_tool_view`]'s. view=full keeps its exact-or-refuse contract.
 pub fn project_decompilation(value: Value, view: ToolView, page: Option<usize>) -> Result<Value, ApiError> {
     if page.is_some() && view != ToolView::Code {
         return Err(invalid("`page` pages the C text of view=code; pass view=\"code\" with it"));
@@ -288,7 +294,7 @@ pub fn project_decompilation(value: Value, view: ToolView, page: Option<usize>) 
         let code = value.get("code").and_then(Value::as_str).unwrap_or_default();
         let pages = code_pages(code);
         match page {
-            None if pages.len() > 1 && !fits(&value) => {
+            None if pages.len() > 1 && !fits_within(&value, limit) => {
                 return Err(invalid(&format!(
                     "decompile Code view exceeds the tool JSON byte budget (> {MAX_TOOL_VIEW_BYTES}): the C is {} \
                      bytes in {} lines; pass page 0 through {} (the `page` argument; CLI --page) with view=code to \
@@ -312,6 +318,14 @@ pub fn project_decompilation(value: Value, view: ToolView, page: Option<usize>) 
                 let total_lines = code.lines().count();
                 let text = code[start..end].to_owned();
                 let next_page = (page + 1 < pages.len()).then_some(page + 1);
+                let receipt = json!({
+                    "path": "/code", "reason": "lines outside this page omitted without truncation",
+                    "json_bytes": json_bytes(&Value::String(code.to_owned())), "utf8_bytes": code.len(),
+                    "kept_utf8_bytes": end - start,
+                });
+                if let Some(Value::Array(omissions)) = value.pointer_mut("/view_projection/omissions") {
+                    omissions.push(receipt);
+                }
                 let object = object(&mut value, "decompilation")?;
                 object.insert("code".into(), Value::String(text));
                 derived(
@@ -325,14 +339,15 @@ pub fn project_decompilation(value: Value, view: ToolView, page: Option<usize>) 
             }
         }
     }
-    if !fits(&value) {
+    if !fits_within(&value, limit) {
         trim_decompilation_rows(&mut value, limit)?;
     }
     checked(value, ToolViewKind::Decompile, view)
 }
 
-/// The pages of `code`: whole lines whose JSON-escaped bytes fit [`DECOMPILE_CODE_PAGE_BYTES`] (a longer line is a
-/// page alone), as byte range, first line (1-based) and line count.
+/// The pages of `code`: whole lines (ending in `\n`, so a `\r\n` stays with its line) whose JSON-escaped bytes fit
+/// [`DECOMPILE_CODE_PAGE_BYTES`] (a longer line is a page alone), as byte range, first line (1-based) and line
+/// count.
 fn code_pages(code: &str) -> Vec<(usize, usize, usize, usize)> {
     let mut pages = Vec::new();
     let (mut start, mut bytes, mut lines, mut first_line) = (0, 0, 0, 1);
@@ -371,7 +386,7 @@ fn trim_decompilation_rows(value: &mut Value, limit: usize) -> Result<(), ApiErr
     let fit = |keep: usize| {
         let mut probe = value.clone();
         shortened(&mut probe, keep);
-        fits_within(&probe, limit - 512)
+        fits_within(&probe, limit - TRIM_RECEIPT_MARGIN)
     };
     let (mut keep, mut high) = (0, longest);
     while keep < high {
@@ -390,6 +405,7 @@ fn trim_decompilation_rows(value: &mut Value, limit: usize) -> Result<(), ApiErr
         if dropped == 0 {
             continue;
         }
+        let dropped_bytes: usize = rows[keep..].iter().map(|row| json_bytes(row) + 1).sum();
         let (parent, key) = pointer.rsplit_once('/').expect("row list pointers have a parent");
         let parent = if parent.is_empty() { Some(&mut *value) } else { value.pointer_mut(parent) };
         if let Some(Value::Object(fields)) = parent {
@@ -397,7 +413,7 @@ fn trim_decompilation_rows(value: &mut Value, limit: usize) -> Result<(), ApiErr
         }
         receipts.push(json!({
             "path": pointer, "reason": "rows after the first kept dropped to fit the byte budget",
-            "items": dropped, "kept": rows.len() - dropped,
+            "items": dropped, "kept": rows.len() - dropped, "json_bytes": dropped_bytes,
         }));
     }
     if let Some(Value::Array(omissions)) = value.pointer_mut("/view_projection/omissions") {
@@ -1819,6 +1835,105 @@ mod tests {
         // Escapes count: a page of quotes holds half as many characters.
         let quotes = format!("{}\n", "\"".repeat(DECOMPILE_CODE_PAGE_BYTES / 2 + 1)).repeat(2);
         assert_eq!(code_pages(&quotes).len(), 2);
+        // CRLF lines stay whole (`\r\n` escapes to 4 bytes), and the pages joined are the input, line numbers
+        // continuing across pages.
+        let crlf = "  x = x + 1;\r\n".repeat(5000);
+        let pages = code_pages(&crlf);
+        assert!(pages.len() > 1, "{pages:?}");
+        let mut joined = String::new();
+        for &(start, end, first_line, lines) in &pages {
+            assert!(crlf[start..end].ends_with("\r\n"));
+            assert_eq!(first_line, joined.lines().count() + 1);
+            assert_eq!(lines, crlf[start..end].lines().count());
+            assert!(json_bytes(&Value::String(crlf[start..end].to_owned())) - 2 <= DECOMPILE_CODE_PAGE_BYTES);
+            joined.push_str(&crlf[start..end]);
+        }
+        assert_eq!(joined, crlf);
+    }
+
+    /// A decompilation whose variable and warning lists are `rows` long, each row about `pad` bytes larger.
+    fn decompilation_with_rows(rows: usize, pad: usize) -> Value {
+        let mut value = native_decompilation();
+        let variable = value["variables"][0].clone();
+        let raw = value["structure"]["variables"][0].clone();
+        let named = |row: &Value, index: usize| {
+            let mut row = row.clone();
+            row["name"] = json!(format!("v{index}_{}", "p".repeat(pad)));
+            row
+        };
+        value["variables"] = Value::Array((0..rows).map(|index| named(&variable, index)).collect());
+        value["structure"]["variables"] = Value::Array((0..rows).map(|index| named(&raw, index)).collect());
+        value["structure"]["diagnostics"]["warnings"] = Value::Array(
+            (0..rows).map(|index| json!({"kind": "body", "address": null, "message": format!("w{index}")})).collect(),
+        );
+        value
+    }
+
+    #[test]
+    fn oversized_decompile_views_trim_every_row_list_and_count_what_was_dropped() {
+        let value = decompilation_with_rows(400, 100);
+        for view in [ToolView::Summary, ToolView::Code] {
+            assert!(project_tool_view(value.clone(), ToolViewKind::Decompile, view).is_err());
+            let fitted = project_decompilation(value.clone(), view, None).unwrap();
+            assert!(json_bytes(&fitted) <= MAX_TOOL_VIEW_BYTES - DECOMPILE_SLACK, "{view:?}");
+            let kept = fitted["variables"].as_array().unwrap().len();
+            assert!(kept > 0 && kept < 400, "{view:?}: {kept}");
+            assert_eq!(fitted["variables_omitted"], 400 - kept);
+            assert_eq!(fitted["structure_metadata"]["variables"].as_array().unwrap().len(), kept);
+            assert_eq!(fitted["structure_metadata"]["variables_omitted"], 400 - kept);
+            assert_eq!(fitted["diagnostics"]["warnings"].as_array().unwrap().len(), kept);
+            assert_eq!(fitted["diagnostics"]["warnings_omitted"], 400 - kept);
+            let receipts = fitted["view_projection"]["omissions"].as_array().unwrap();
+            for path in DECOMPILE_ROW_LISTS {
+                let receipt = receipts.iter().find(|receipt| receipt["path"] == path).unwrap();
+                assert_eq!(
+                    (receipt["items"].as_u64(), receipt["kept"].as_u64()),
+                    (Some(400 - kept as u64), Some(kept as u64))
+                );
+                assert!(receipt["json_bytes"].as_u64() > Some(0), "{receipt}");
+            }
+        }
+    }
+
+    /// Review: a view just under the budget passed untrimmed, and the `next` or `note` the tool adds after pushed the
+    /// result past it. Every fitted view leaves the slack free; one that fits it is exactly project_tool_view's.
+    #[test]
+    fn decompile_views_near_the_budget_leave_room_for_the_tool_fields() {
+        let small = native_decompilation();
+        for view in [ToolView::Summary, ToolView::Code] {
+            let exact = project_tool_view(small.clone(), ToolViewKind::Decompile, view).unwrap();
+            let fitted = project_decompilation(small.clone(), view, None).unwrap();
+            assert_eq!(serde_json::to_string(&fitted).unwrap(), serde_json::to_string(&exact).unwrap());
+        }
+        // Grow the rows until the code view lands between the slack and the budget.
+        let near = (1..400)
+            .map(|rows| decompilation_with_rows(rows, 100))
+            .find(|value| {
+                let size = project_tool_view(value.clone(), ToolViewKind::Decompile, ToolView::Code)
+                    .map_or(usize::MAX, |view| json_bytes(&view));
+                (MAX_TOOL_VIEW_BYTES - DECOMPILE_SLACK + 1..=MAX_TOOL_VIEW_BYTES).contains(&size)
+            })
+            .expect("a row count lands within the slack");
+        let fitted = project_decompilation(near, ToolView::Code, None).unwrap();
+        assert!(json_bytes(&fitted) <= MAX_TOOL_VIEW_BYTES - DECOMPILE_SLACK);
+        assert!(fitted["variables_omitted"].as_u64() > Some(0), "{}", fitted["view_projection"]);
+    }
+
+    #[test]
+    fn a_page_of_decompiled_c_carries_its_page_and_a_code_receipt() {
+        let mut value = native_decompilation();
+        let code = "  x = x + 1;\n".repeat(5000);
+        value["code"] = json!(code);
+        let pages = code_pages(&code).len();
+        let refusal = project_decompilation(value.clone(), ToolView::Code, None).unwrap_err().to_string();
+        assert!(refusal.contains(&format!("in {pages} pages")), "{refusal}");
+        let page = project_decompilation(value, ToolView::Code, Some(1)).unwrap();
+        assert_eq!(page["code_page"]["page"], 1);
+        assert_eq!(page["code_page"]["pages"], pages);
+        let receipts = page["view_projection"]["omissions"].as_array().unwrap();
+        let receipt = receipts.iter().find(|receipt| receipt["path"] == "/code").unwrap();
+        assert_eq!(receipt["utf8_bytes"], code.len());
+        assert_eq!(receipt["kept_utf8_bytes"], page["code"].as_str().unwrap().len());
     }
 
     #[test]

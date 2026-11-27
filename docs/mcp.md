@@ -498,11 +498,14 @@ diagnostics and worker requirements; `function_summary` remains a structural alt
 instead of refusing. When the evidence does not fit the 60,000-byte budget, `variables`,
 `structure_metadata.variables` and `diagnostics.warnings` keep the same number of leading rows, and each shortened
 list gets a `variables_omitted` (or `warnings_omitted`) count beside it and a receipt in
-`view_projection.omissions` with the rows kept and dropped. In `view=code`, C longer than one page (about 40,000
-JSON bytes) refuses with the page count and the `page` values to pass. `page` (0-based, `view=code` only) returns
-whole lines of the C with `code_page`: `page`, `pages`, `next_page` (null on the last page), `first_line`,
-`lines` and `total_lines`. Nothing is truncated inside a string. `view=full` still refuses when oversized. CLI:
-`function decompile --view code --page N`.
+`view_projection.omissions` with the rows kept and dropped and their `json_bytes`. A `view=code` result that does
+not fit and whose C is longer than one page (about 40,000 JSON bytes) refuses with the page count and the `page`
+values to pass; C that fits one page is kept whole and only the rows are shortened. `page` (0-based, `view=code`
+only) returns whole lines of the C (a single line longer than a page is a page alone) with `code_page`: `page`,
+`pages`, `next_page` (null on the last page), `first_line`, `lines` and `total_lines`, and a `/code` receipt with
+the C's whole size. A page of a longer function gets no `evaluate_function` hint. Every fitted result leaves about
+1 KB of the budget free for `next` and `note`, and a view that fits is returned unchanged. Nothing is truncated
+inside a string. `view=full` still refuses when oversized. CLI: `function decompile --view code --page N`.
 
 `evaluate_function` (core, experimental) runs one function of the image on given arguments and returns its
 result, so a question like "what does this return for (0x00F0A500, 3)?" is answered by running the code rather

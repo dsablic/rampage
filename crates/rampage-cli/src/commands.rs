@@ -1259,13 +1259,10 @@ fn write_decompilation_view(
     args: &crate::args::DecompileArgs,
     options: &Options,
 ) -> Result<bool> {
-    if !options.json && args.view.is_none() && args.page.is_none() {
-        return Ok(false);
-    }
-    let result = serde_json::to_value(result)?;
     let view = args.view.map(Into::into).unwrap_or_default();
-    writeln!(out, "{}", rampage_api::project_decompilation(result, view, args.page)?)?;
-    Ok(true)
+    write_projected(out, result, options.json || args.view.is_some() || args.page.is_some(), |value| {
+        rampage_api::project_decompilation(value, view, args.page)
+    })
 }
 
 fn write_tool_view(
@@ -1275,12 +1272,22 @@ fn write_tool_view(
     view: Option<crate::args::OutputView>,
     options: &Options,
 ) -> Result<bool> {
-    if !options.json && view.is_none() {
+    write_projected(out, result, options.json || view.is_some(), |value| {
+        rampage_api::project_tool_view(value, kind, view.map(Into::into).unwrap_or_default())
+    })
+}
+
+/// Writes `result` as the JSON `project` makes of it when `json` is set; false when it is not, for text output.
+fn write_projected(
+    out: &mut impl Write,
+    result: &impl Serialize,
+    json: bool,
+    project: impl FnOnce(serde_json::Value) -> std::result::Result<serde_json::Value, rampage_api::ApiError>,
+) -> Result<bool> {
+    if !json {
         return Ok(false);
     }
-    let result = serde_json::to_value(result)?;
-    let value = rampage_api::project_tool_view(result, kind, view.map(Into::into).unwrap_or_default())?;
-    writeln!(out, "{value}")?;
+    writeln!(out, "{}", project(serde_json::to_value(result)?)?)?;
     Ok(true)
 }
 
