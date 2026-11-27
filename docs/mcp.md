@@ -133,7 +133,12 @@ A default session lists 48 tools: the 47 in `core` plus `enable_tools`. Enabling
   `propose_heuristic`, `evaluate_candidate`, `promote_candidate`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
-`{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
+`{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Names agents guess
+that are not groups enable the groups holding the tools they mean: `firmware` (also `embedded`, `mcu`, `raw`)
+enables `types`, `formats` and `carve`; `svd` and `peripherals` enable `types`; `signatures`, `yara` and `crypto`
+enable `detection`; `apk` and `dex` enable `android`; `filesystem` enables `carve`; `classes` and `rtti` name
+`core`, which is always served. The result's `resolved` lists each such name with the `groups` it enabled and a
+`reason`. Any other unknown name fails with the list of groups and enables nothing. Enabling sends
 `notifications/tools/list_changed`. A call to a disabled group's tool fails with the group to enable and runs
 nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a comma-separated list such as
 `detection,types` also selects startup groups. `core` is always served. The `debug` group exists only on a server

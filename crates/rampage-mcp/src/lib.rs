@@ -450,7 +450,7 @@ pub fn initial_groups_with(
         if name == "all" {
             groups.extend(available.iter().copied());
         } else {
-            groups.insert(parse_group(name, debug, improve)?);
+            groups.extend(parse_group(name, debug, improve)?.groups);
         }
     }
     Ok(groups)
@@ -465,44 +465,66 @@ fn available_groups(debug: bool, improve: bool) -> Vec<Group> {
     Group::ALL.into_iter().chain(debug.then_some(Group::Debug)).collect()
 }
 
-fn parse_group(name: &str, debug: bool, improve: bool) -> Result<Group, String> {
+fn parse_group(name: &str, debug: bool, improve: bool) -> Result<Resolved, String> {
     if improve {
         return if name == Group::Improve.name() {
-            Ok(Group::Improve)
+            Ok(Resolved::group(Group::Improve))
         } else {
             Err(format!("this server was started with --corpus and has only the improve group, not `{name}`"))
         };
     }
     if debug && name == Group::Debug.name() {
-        return Ok(Group::Debug);
+        return Ok(Resolved::group(Group::Debug));
     }
     let guess = name.to_ascii_lowercase();
-    if let Some(&(_, group)) = GROUP_ALIASES.iter().find(|(alias, _)| *alias == guess) {
-        return Ok(group);
+    if let Some(&(_, groups, reason)) = GROUP_ALIASES.iter().find(|(alias, _, _)| *alias == guess) {
+        return Ok(Resolved { groups: groups.to_vec(), reason: Some(reason) });
     }
-    name.parse().map_err(|error| match guess.as_str() {
-        "firmware" | "embedded" | "raw" | "mcu" => format!("{error}. {FIRMWARE_GROUPS}"),
-        _ => error,
-    })
+    name.parse().map(Resolved::group)
 }
 
-/// Group names agents guess that can only mean one group.
-const GROUP_ALIASES: [(&str, Group); 8] = [
-    ("svd", Group::Types),
-    ("peripherals", Group::Types),
-    ("signatures", Group::Detection),
-    ("yara", Group::Detection),
-    ("crypto", Group::Detection),
-    ("apk", Group::Android),
-    ("dex", Group::Android),
-    ("filesystem", Group::Carve),
+/// The groups a requested name enables, and for a name that is not a group's own, why those.
+struct Resolved {
+    groups: Vec<Group>,
+    reason: Option<&'static str>,
+}
+
+impl Resolved {
+    fn group(group: Group) -> Self {
+        Self { groups: vec![group], reason: None }
+    }
+}
+
+/// Group names agents guess, with the groups that hold the tools they mean and why. `core` is always served.
+const GROUP_ALIASES: [(&str, &[Group], &str); 14] = [
+    ("firmware", FIRMWARE, FIRMWARE_GROUPS),
+    ("embedded", FIRMWARE, FIRMWARE_GROUPS),
+    ("mcu", FIRMWARE, FIRMWARE_GROUPS),
+    ("raw", FIRMWARE, FIRMWARE_GROUPS),
+    ("svd", &[Group::Types], "CMSIS-SVD peripheral maps (import_svd, peripheral_access, peripheral_map) are in types"),
+    ("peripherals", &[Group::Types], "peripheral maps (import_svd, peripheral_access, peripheral_map) are in types"),
+    ("signatures", &[Group::Detection], "library signatures (identify_functions, build_signatures) are in detection"),
+    ("yara", &[Group::Detection], "yara_scan is in detection"),
+    ("crypto", &[Group::Detection], "find_crypto is in detection"),
+    ("apk", &[Group::Android], "APK and DEX tools are in android"),
+    ("dex", &[Group::Android], "APK and DEX tools are in android"),
+    ("filesystem", &[Group::Carve], "filesystem images (fs_list, fs_extract) are in carve"),
+    ("classes", &[Group::Core], CLASS_GROUP),
+    ("rtti", &[Group::Core], CLASS_GROUP),
 ];
 
-/// Where the firmware tools are, for a guessed `firmware` group: no one group holds them.
-const FIRMWARE_GROUPS: &str = "No single group holds the firmware tools: headerless images, Intel HEX and \
-    S-records open in core (`raw` on any raw-capable tool), CMSIS-SVD peripheral maps (import_svd, \
-    peripheral_access, peripheral_map) are in types, integrity_checks and export_image in formats, and carve, fs_list and \
-    diff_firmware in carve";
+/// The groups holding the firmware tools.
+const FIRMWARE: &[Group] = &[Group::Types, Group::Formats, Group::Carve];
+
+/// Why a guessed `firmware` group enables [`FIRMWARE`]: no one group holds the firmware tools.
+const FIRMWARE_GROUPS: &str = "no group is named firmware, so the three that hold its tools: CMSIS-SVD peripheral maps \
+    (import_svd, peripheral_access, peripheral_map) in types, integrity_checks and export_image in formats, and \
+    carve, fs_list and diff_firmware in carve; headerless images, Intel HEX and S-records open in core (`raw` on any \
+    raw-capable tool)";
+
+/// Why a guessed `classes` group enables only core.
+const CLASS_GROUP: &str = "class metadata (class_evidence: C++ vtables/RTTI; language_metadata: demangled names, \
+    Objective-C classes) is in core, which is always served";
 
 /// Parses the operator's debug endpoints: each `--debug-endpoint` value, then the comma-separated `env` list.
 /// `None` when there are none, so the server has no `debug` group.
@@ -1012,6 +1034,7 @@ impl RampageServer {
     /// Enables the groups `arguments` names, returning the groups with their tools and the ones newly enabled.
     fn enable(&self, arguments: &Map<String, Value>) -> Result<(Value, bool), String> {
         let mut requested = BTreeSet::new();
+        let mut resolved = Vec::new();
         match arguments.get("groups") {
             None | Some(Value::Null) => {}
             Some(Value::Array(names)) => {
@@ -1019,7 +1042,12 @@ impl RampageServer {
                     match name.as_str() {
                         Some("all") => requested.extend(self.groups()),
                         Some(name) => {
-                            requested.insert(parse_group(name, self.debug.is_some(), self.improve.is_some())?);
+                            let found = parse_group(name, self.debug.is_some(), self.improve.is_some())?;
+                            requested.extend(found.groups.iter().copied());
+                            if let Some(reason) = found.reason {
+                                let groups: Vec<&str> = found.groups.iter().map(|group| group.name()).collect();
+                                resolved.push(json!({ "name": name, "groups": groups, "reason": reason }));
+                            }
                         }
                         None => return Err("`groups` must be a list of group names".to_owned()),
                     }
@@ -1048,7 +1076,12 @@ impl RampageServer {
             })
             .collect();
         let newly_enabled: Vec<&str> = newly.iter().map(|group| group.name()).collect();
-        Ok((json!({ "newly_enabled": newly_enabled, "groups": groups }), !newly.is_empty()))
+        let mut listing = json!({ "newly_enabled": newly_enabled, "groups": groups });
+        if !resolved.is_empty() {
+            // Names that are not a group's own: the groups each enabled, and why.
+            listing["resolved"] = Value::Array(resolved);
+        }
+        Ok((listing, !newly.is_empty()))
     }
 
     /// The input schema `list_tools` gives `name`, when this server serves it.
@@ -1897,6 +1930,10 @@ mod tests {
             Ok(BTreeSet::from([Group::Core, Group::Detection, Group::Types]))
         );
         assert!(initial_groups(false, Some("core,bogus")).unwrap_err().contains("unknown tool group `bogus`"));
+        assert_eq!(
+            initial_groups(false, Some("firmware")),
+            Ok(BTreeSet::from([Group::Core, Group::Types, Group::Carve, Group::Formats]))
+        );
     }
 
     /// A corpus of two fixture binaries, enough to construct the improve group (nothing is analysed).

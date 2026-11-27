@@ -230,16 +230,36 @@ async fn short_buffers_and_oversized_reads_are_clamped_instead_of_refused() {
     client.cancel().await.unwrap();
 }
 
-/// Haiku v4: `enable_tools` with `firmware` failed with only the group list, and import_svd given the .svd file as
-/// `path` with nothing open failed on the missing `svd`.
+/// Haiku v4: `enable_tools` with `firmware` failed (at 1.11.0 with the groups that hold the tools, which agents
+/// still read as a failure), and import_svd given the .svd file as `path` with nothing open failed on the missing
+/// `svd`. A guessed name enables the groups that hold its tools and says which and why; an unknown one still fails.
 #[tokio::test]
 async fn guessed_groups_and_an_svd_path_get_a_way_forward() {
     let client = connect().await;
-    let (text, failed) = call(&client, "enable_tools", json!({ "groups": ["firmware"] })).await;
-    assert!(failed && text.contains("groups: core") && text.contains("import_svd"), "{text}");
-    assert!(text.contains("formats") && text.contains("diff_firmware"), "{text}");
+    let listing = ok(&client, "enable_tools", json!({ "groups": ["firmware", "types"] })).await;
+    assert_eq!(listing["newly_enabled"], json!(["types", "carve", "formats"]), "{listing}");
+    let resolved = &listing["resolved"];
+    assert_eq!(resolved.as_array().unwrap().len(), 1, "{listing}");
+    assert_eq!(resolved[0]["name"], "firmware");
+    assert_eq!(resolved[0]["groups"], json!(["types", "formats", "carve"]));
+    let reason = resolved[0]["reason"].as_str().unwrap();
+    assert!(reason.contains("import_svd") && reason.contains("diff_firmware"), "{reason}");
+    let tools = client.list_all_tools().await.unwrap();
+    for name in ["import_svd", "integrity_checks", "diff_firmware"] {
+        assert!(tools.iter().any(|tool| tool.name == name), "{name}");
+    }
     let listing = ok(&client, "enable_tools", json!({ "groups": ["svd"] })).await;
-    assert_eq!(listing["newly_enabled"], json!(["types"]), "{listing}");
+    assert_eq!(listing["newly_enabled"], json!([]), "{listing}");
+    assert_eq!(listing["resolved"][0]["groups"], json!(["types"]), "{listing}");
+    // A name for core tools enables nothing new and says they are already served.
+    let listing = ok(&client, "enable_tools", json!({ "groups": ["Classes"] })).await;
+    assert_eq!(listing["newly_enabled"], json!([]), "{listing}");
+    assert!(listing["resolved"][0]["reason"].as_str().unwrap().contains("always served"), "{listing}");
+    let (text, failed) = call(&client, "enable_tools", json!({ "groups": ["gadgets"] })).await;
+    assert!(failed && text.contains("unknown tool group `gadgets`") && text.contains("groups: core"), "{text}");
+    // A group the call names is listed without `resolved`.
+    let listing = ok(&client, "enable_tools", json!({ "groups": ["detection"] })).await;
+    assert!(listing.get("resolved").is_none(), "{listing}");
 
     let svd = fixtures().join("svd/ARM_Example.svd");
     let (text, failed) = call(&client, "import_svd", json!({ "path": svd })).await;
