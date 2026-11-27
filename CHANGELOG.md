@@ -24,9 +24,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - `enable_tools` with a guessed group name succeeds instead of failing: `firmware` (also `embedded`, `mcu`, `raw`)
   enables `types`, `formats` and `carve`, the groups that hold the firmware tools, and `classes`/`rtti` name `core`,
   which is always served; the earlier single-group names (`svd`, `signatures`, `apk`, …) work as before. The result
-  gains `resolved`: each such name with the `groups` it enabled and a `reason`. `RAMPAGE_MCP_TOOLS` takes the same
-  names. A truly unknown name still fails with the list of groups. Agents in the Haiku v4 passes for 1.10.0, 1.11.0
-  and 1.20.0 asked for `firmware` and read the error as a failure.
+  gains `resolved`: each such name with the `groups` it enabled and a `reason`, and the `groups` schema enum lists
+  the names. `RAMPAGE_MCP_TOOLS` takes the same names. A truly unknown name still fails with the list of groups.
+  Agents in the Haiku v4 passes for 1.10.0, 1.11.0 and 1.20.0 asked for `firmware` and read the error as a failure.
 - The demangler no longer reads a bare name that spells an Itanium type code as that type: a function named `f`,
   `i` or `v` keeps its name instead of showing as `float`, `int` or `void` (in `language_metadata`, function
   display names and everywhere else demangled names appear). Only names with a mangling prefix are demangled:

@@ -138,7 +138,7 @@ that are not groups enable the groups holding the tools they mean: `firmware` (a
 enables `types`, `formats` and `carve`; `svd` and `peripherals` enable `types`; `signatures`, `yara` and `crypto`
 enable `detection`; `apk` and `dex` enable `android`; `filesystem` enables `carve`; `classes` and `rtti` name
 `core`, which is always served. The result's `resolved` lists each such name with the `groups` it enabled and a
-`reason`. Any other unknown name fails with the list of groups and enables nothing. Enabling sends
+`reason`; the `groups` schema lists these names beside the groups. Any other unknown name fails with the list of groups and enables nothing. Enabling sends
 `notifications/tools/list_changed`. A call to a disabled group's tool fails with the group to enable and runs
 nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a comma-separated list such as
 `detection,types` also selects startup groups. `core` is always served. The `debug` group exists only on a server

@@ -840,7 +840,11 @@ fn raw_refusal(name: &str) -> String {
 }
 
 fn enable_tools_schema(debug: bool, improve: bool) -> Map<String, Value> {
-    let names: Vec<&str> = available_groups(debug, improve).iter().map(|group| group.name()).chain(["all"]).collect();
+    // The guessed names are accepted too, so a client that checks the enum does not refuse them; a corpus server
+    // takes none of them.
+    let aliases = GROUP_ALIASES.iter().filter(|_| !improve).map(|(alias, _, _)| *alias);
+    let names: Vec<&str> =
+        available_groups(debug, improve).iter().map(|group| group.name()).chain(["all"]).chain(aliases).collect();
     let schema = json!({
         "type": "object",
         "properties": {
@@ -1916,6 +1920,30 @@ mod tests {
             names.sort();
         }
         assert_eq!(documented, served);
+    }
+
+    /// No guessed name shadows a group, and docs/mcp.md names every one with the groups it enables.
+    #[test]
+    fn group_aliases_are_not_group_names_and_are_documented() {
+        let docs = include_str!("../../../docs/mcp.md");
+        let start = docs.find("Names agents guess").expect("the alias paragraph");
+        let paragraph = &docs[start..start + docs[start..].find("\n\n").unwrap()];
+        for (alias, groups, reason) in GROUP_ALIASES {
+            assert!(Group::ALL.iter().chain([&Group::Debug, &Group::Improve]).all(|group| group.name() != alias));
+            assert_ne!(alias, "all");
+            assert!(paragraph.contains(&format!("`{alias}`")), "{alias} is not in the docs' alias paragraph");
+            for group in groups {
+                assert!(paragraph.contains(&format!("`{}`", group.name())), "{alias}: {group:?}");
+                if *group != Group::Core {
+                    assert!(reason.contains(group.name()), "{alias}: the reason names {group:?}");
+                }
+            }
+        }
+        let schema = Value::Object(enable_tools_schema(false, false));
+        let names = schema["properties"]["groups"]["items"]["enum"].as_array().unwrap();
+        assert!(names.contains(&json!("firmware")) && names.contains(&json!("core")), "{schema}");
+        let corpus = Value::Object(enable_tools_schema(false, true));
+        assert_eq!(corpus["properties"]["groups"]["items"]["enum"], json!(["improve", "all"]));
     }
 
     #[test]
