@@ -39,9 +39,10 @@ pub fn demangle(name: &str) -> Option<String> {
 }
 
 /// Whether `name` (with a Mach-O `__Z` already shortened to `_Z`) carries an Itanium or Rust mangling prefix:
-/// `_Z` (Itanium, and Rust's legacy `_ZN...E`), `___Z` (a Mach-O block invoke) or `_R`/`__R` (Rust v0).
+/// `_Z` (Itanium, and Rust's legacy `_ZN...E`), `___Z` and `____Z` (block invokes, ELF and Mach-O), `_GLOBAL_`
+/// (`_GLOBAL__I_`/`_GLOBAL__D_` global constructors and destructors) or `_R`/`__R` (Rust v0).
 fn is_mangled(name: &str) -> bool {
-    ["_Z", "___Z", "_R", "__R"].iter().any(|prefix| name.starts_with(prefix))
+    ["_Z", "___Z", "____Z", "_GLOBAL_", "_R", "__R"].iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// Demangles a Microsoft Visual C++ name. Return types, calling conventions, access specifiers and MS keywords
@@ -262,6 +263,11 @@ mod tests {
         assert_eq!(demangle("_Z1fi").as_deref(), Some("f(int)"));
         assert_eq!(demangle("__Z1ff").as_deref(), Some("f(float)"));
         assert_eq!(demangle("_RNvC3foo3bar").as_deref(), Some("foo::bar"));
+        let block = Some("invocation function for block in foo()");
+        assert_eq!(demangle("___Z3foov_block_invoke").as_deref(), block);
+        assert_eq!(demangle("____Z3foov_block_invoke").as_deref(), block);
+        assert_eq!(demangle("_GLOBAL__I__Z3foov").as_deref(), Some("global constructors keyed to foo()"));
+        assert_eq!(demangle("_GLOBAL__D__Z3foov").as_deref(), Some("global destructors keyed to foo()"));
     }
 
     #[test]

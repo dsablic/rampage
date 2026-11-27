@@ -29,7 +29,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - The demangler no longer reads a bare name that spells an Itanium type code as that type: a function named `f`,
   `i` or `v` keeps its name instead of showing as `float`, `int` or `void` (in `language_metadata`, function
   display names and everywhere else demangled names appear). Only names with a mangling prefix are demangled:
-  Itanium `_Z` (`__Z` on Mach-O, `___Z` block invokes), MSVC `?`, and Rust `_R` and legacy `_ZN…E`.
+  Itanium `_Z` (`__Z` on Mach-O), block invokes (`___Z`, and `____Z` on Mach-O), global constructors and
+  destructors (`_GLOBAL__I_`, `_GLOBAL__D_`), MSVC `?`, and Rust `_R` and legacy `_ZN…E`. Bare `ZN…E` and `RN…`
+  names without the leading underscore are no longer read as Rust.
 
 ## 1.20.0 (2026-11-27)
 
