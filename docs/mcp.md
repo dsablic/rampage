@@ -489,6 +489,16 @@ not automatically program virtual addresses. C production and `no_reported_issue
 recovery. See the [decompiler reference](../crates/rampage-decompiler/README.md) for token/output bounds,
 diagnostics and worker requirements; `function_summary` remains a structural alternative, not decompiled C.
 
+`decompile` `view=summary` (no C) and `view=code` (C without tokens or structure rows) fit large functions
+instead of refusing. When the evidence does not fit the 60,000-byte budget, `variables`,
+`structure_metadata.variables` and `diagnostics.warnings` keep the same number of leading rows, and each shortened
+list gets a `variables_omitted` (or `warnings_omitted`) count beside it and a receipt in
+`view_projection.omissions` with the rows kept and dropped. In `view=code`, C longer than one page (about 40,000
+JSON bytes) refuses with the page count and the `page` values to pass. `page` (0-based, `view=code` only) returns
+whole lines of the C with `code_page`: `page`, `pages`, `next_page` (null on the last page), `first_line`,
+`lines` and `total_lines`. Nothing is truncated inside a string. `view=full` still refuses when oversized. CLI:
+`function decompile --view code --page N`.
+
 `evaluate_function` (core, experimental) runs one function of the image on given arguments and returns its
 result, so a question like "what does this return for (0x00F0A500, 3)?" is answered by running the code rather
 than simulating it from pseudocode. A p-code interpreter over the bundled Sleigh specifications executes it

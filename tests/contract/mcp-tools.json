@@ -1405,6 +1405,10 @@
           "type": "integer|null|string",
           "required": false
         },
+        "page": {
+          "type": "integer|null",
+          "required": false
+        },
         "path": {
           "type": "string",
           "required": false

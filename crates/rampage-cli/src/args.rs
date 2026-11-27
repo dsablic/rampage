@@ -982,6 +982,9 @@ pub(crate) struct DecompileArgs {
     /// Structured JSON: full (default), code with native evidence, or summary with explicit omissions
     #[arg(long, value_enum)]
     pub(crate) view: Option<OutputView>,
+    /// With --view code, the page (0-based) of C too long for one result
+    #[arg(long)]
+    pub(crate) page: Option<usize>,
 }
 
 #[derive(Args)]

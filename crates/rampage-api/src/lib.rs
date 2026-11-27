@@ -311,7 +311,8 @@ pub use signatures::{
 };
 pub use summary::FunctionSummary;
 pub use tool_views::{
-    SummaryPages, ToolView, ToolViewKind, project_function_graph, project_function_summary, project_tool_view,
+    DECOMPILE_CODE_PAGE_BYTES, SummaryPages, ToolView, ToolViewKind, project_decompilation, project_function_graph,
+    project_function_summary, project_tool_view,
 };
 pub use transfer::{
     DEFAULT_MIN_CONFIDENCE, MatchSummary, TransferApplied, TransferCounts, TransferList, TransferReport,

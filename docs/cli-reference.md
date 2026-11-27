@@ -100,6 +100,8 @@ command is a benchmark action, not an interactive query; see [benchmarks](benchm
 `decompile --compiler ID` overrides the format-selected Ghidra compiler ID (`golang` for go1.18+ binaries). Sessions select a sibling worker
 when present; `--isolated` requires supervision explicitly. See the
 [decompiler reference](../crates/rampage-decompiler/README.md) for engine limits and recovery status.
+`decompile --view summary|code` fits a large function by keeping fewer evidence rows, and `--view code --page N`
+pages C too long for one result, as the [MCP tool](mcp.md#inputs-paging-and-decompiler-tokens) does.
 `identify --no-bundled` requires a user database or a matching pack database. `build-signatures` defaults to
 stdout; identification defaults to the bundled starter database. See
 [library identification](features.md#library-identification).

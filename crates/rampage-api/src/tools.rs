@@ -1522,6 +1522,8 @@ struct DecompileToolArgs {
     /// full (default), code (C and diagnostics) or summary (no C text).
     #[serde(default)]
     view: DecompileView,
+    /// With view=code, the page (0-based) of a function whose C is too long for one result.
+    page: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -2156,7 +2158,7 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
             region.explain()
         ));
     }
-    let mut value = decompilation_view(value, args.view)?;
+    let mut value = crate::tool_views::project_decompilation(value, args.view, args.page)?;
     if let Some(next) = value.get("code").and_then(Value::as_str).and_then(|code| evaluate_hint(code, address)) {
         value["next"] = Value::String(next);
     }
@@ -3261,8 +3263,9 @@ pub fn tools() -> Vec<Tool> {
             "Decompile the function containing `at` to C with the embedded Ghidra decompiler, with its recovery \
              diagnostics. exact_entry=true decompiles from exactly `at` with local context only (little-endian \
              x86/x64/AArch64). view: full (default), code (C and diagnostics without token/structure payloads) or \
-             summary (no C text). An oversized view refuses rather than truncating. `decompiler` says whether it ran \
-             in the supervised worker or in-process.",
+             summary (no C text). An oversized summary or code view keeps fewer evidence rows (counted); C too long \
+             for one result is paged with `page` (view=code), and the refusal says how many pages. Nothing is \
+             truncated. `decompiler` says whether it ran in the supervised worker or in-process.",
             decompile_tool,
         ),
         tool(

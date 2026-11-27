@@ -991,7 +991,7 @@ pub fn decompile(out: &mut impl Write, args: &crate::args::DecompileArgs, option
             address,
             validation: rampage_api::EntryValidation::AnalystAsserted,
         })?;
-        if write_tool_view(out, &result, rampage_api::ToolViewKind::Decompile, args.view, options)? {
+        if write_decompilation_view(out, &result, args, options)? {
             return Ok(());
         }
         writeln!(out, "/* Exact-entry analysis: bounded host context, full mapped image; not boundary proof. */")?;
@@ -1010,7 +1010,7 @@ pub fn decompile(out: &mut impl Write, args: &crate::args::DecompileArgs, option
     } else {
         project.decompile(address)?
     };
-    if write_tool_view(out, &decompilation, rampage_api::ToolViewKind::Decompile, args.view, options)? {
+    if write_decompilation_view(out, &decompilation, args, options)? {
         return Ok(());
     }
     write!(out, "{}", decompilation.code)?;
@@ -1250,6 +1250,22 @@ pub(crate) fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result
     json.push(b'\n');
     out.write_all(&json)?;
     Ok(())
+}
+
+/// [`write_tool_view`] for a decompilation: oversized summary and code views are fitted, and `--page` pages long C.
+fn write_decompilation_view(
+    out: &mut impl Write,
+    result: &impl Serialize,
+    args: &crate::args::DecompileArgs,
+    options: &Options,
+) -> Result<bool> {
+    if !options.json && args.view.is_none() && args.page.is_none() {
+        return Ok(false);
+    }
+    let result = serde_json::to_value(result)?;
+    let view = args.view.map(Into::into).unwrap_or_default();
+    writeln!(out, "{}", rampage_api::project_decompilation(result, view, args.page)?)?;
+    Ok(true)
 }
 
 fn write_tool_view(

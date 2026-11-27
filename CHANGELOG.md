@@ -8,6 +8,14 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changes and fixes
 
+- `decompile` on a large function: `view=summary` and `view=code` no longer refuse when the evidence is over the
+  60,000-byte budget. They keep the same number of leading rows in `variables`, `structure_metadata.variables` and
+  `diagnostics.warnings`, with a `variables_omitted` (`warnings_omitted`) count beside each shortened list and a
+  receipt in `view_projection.omissions`. C longer than one page (about 40,000 JSON bytes) in `view=code` refuses
+  with the page count and the values to pass to the new `page` argument (0-based, `view=code` only), which returns
+  whole lines with `code_page` (`page`, `pages`, `next_page`, `first_line`, `lines`, `total_lines`). CLI:
+  `function decompile --view code --page N`. The Haiku v4 pass for 1.11.0 had six such refusals on Cortex-M0
+  library functions. `view=full` still refuses when oversized.
 - The demangler no longer reads a bare name that spells an Itanium type code as that type: a function named `f`,
   `i` or `v` keeps its name instead of showing as `float`, `int` or `void` (in `language_metadata`, function
   display names and everywhere else demangled names appear). Only names with a mangling prefix are demangled:

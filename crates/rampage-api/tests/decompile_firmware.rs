@@ -465,3 +465,62 @@ fn decompiled_callees_use_the_default_names_other_tools_resolve() {
     }
     assert!(named > 0 && undiscovered > 0, "{named} named calls, {undiscovered} to undiscovered code");
 }
+
+/// Haiku v4 1.11.0: decompile refused six large Cortex-M0 functions of the held-out library build over the byte
+/// budget, one in view=summary. A summary or code view that does not fit keeps fewer variable rows, counted; C too
+/// long for one result refuses naming `page` and the page count, and the pages cover every line once.
+#[test]
+fn large_decompilations_trim_evidence_and_page_long_c() {
+    use rampage_api::tools;
+    use serde_json::{Value, json};
+
+    const M0: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/embedded-libs-m0.elf");
+    let project = Project::new(Binary::open(M0).unwrap());
+    let registry = tools::tools();
+    let call = |arguments: Value| {
+        let (text, failed) = tools::call(&registry, &project, "decompile", arguments);
+        assert!(text.len() <= 60_000, "{} bytes", text.len());
+        (serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text)), failed)
+    };
+    // The largest: about 60 KB of C and 128 variables, 825 KB in full.
+    let large = "0x800a0b0";
+    let full = project.decompile(0x800a0b0).unwrap();
+    let (summary, failed) = call(json!({ "at": large, "view": "summary" }));
+    assert!(!failed, "{summary}");
+    let kept = summary["variables"].as_array().unwrap().len();
+    assert_eq!(kept + summary["variables_omitted"].as_u64().unwrap() as usize, full.variables.len(), "{summary}");
+    assert!(kept > 0 && kept < full.variables.len());
+    let omissions = summary["view_projection"]["omissions"].as_array().unwrap();
+    assert!(omissions.iter().any(|receipt| receipt["path"] == "/variables" && receipt["kept"] == kept), "{summary}");
+    assert!(summary.get("code").is_none());
+
+    let (refusal, failed) = call(json!({ "at": large, "view": "code" }));
+    let refusal = refusal.as_str().unwrap().to_owned();
+    assert!(
+        failed && refusal.contains("page 0 through 1 (the `page` argument") && refusal.contains("in 2 pages"),
+        "{refusal}"
+    );
+    let mut code = String::new();
+    let mut page = Some(0);
+    while let Some(index) = page {
+        let (value, failed) = call(json!({ "at": large, "view": "code", "page": index }));
+        assert!(!failed, "{value}");
+        assert_eq!(value["code_page"]["page"], index);
+        assert_eq!(value["code_page"]["pages"], 2);
+        assert_eq!(value["code_page"]["total_lines"], full.code.lines().count());
+        assert_eq!(value["code_page"]["first_line"], code.lines().count() + 1);
+        code.push_str(value["code"].as_str().unwrap());
+        page = value["code_page"]["next_page"].as_u64();
+    }
+    assert_eq!(code, full.code);
+    let (past, failed) = call(json!({ "at": large, "view": "code", "page": 2 }));
+    assert!(failed && past.as_str().unwrap().contains("2 pages, 0 through 1"), "{past}");
+    let (wrong, failed) = call(json!({ "at": large, "view": "summary", "page": 0 }));
+    assert!(failed && wrong.as_str().unwrap().contains("view=\"code\""), "{wrong}");
+
+    // About 26 KB of C: one page, so the code view keeps all of it and trims the variable rows instead.
+    let (value, failed) = call(json!({ "at": "0x800e412", "view": "code" }));
+    assert!(!failed, "{value}");
+    assert_eq!(value["code"], project.decompile(0x800e412).unwrap().code);
+    assert!(value.get("code_page").is_none() && value["variables_omitted"].as_u64() > Some(0), "{value}");
+}

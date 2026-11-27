@@ -3547,6 +3547,11 @@
           "repeated": true,
           "required": false
         },
+        "--page": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
         "--raw-json": {
           "type": "value",
           "repeated": false,
@@ -4220,6 +4225,11 @@
         "--pack": {
           "type": "value",
           "repeated": true,
+          "required": false
+        },
+        "--page": {
+          "type": "value",
+          "repeated": false,
           "required": false
         },
         "--raw-json": {
