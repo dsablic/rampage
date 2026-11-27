@@ -202,7 +202,9 @@ impl NeutralSuite {
             "Analyze the binary at {path}.{also} Use only the tools of the connected MCP server; there is no \
              other way to read {read}.\n\n{}\n\n\
              Finish with only one JSON object, without prose or code fences, holding exactly the requested \
-             fields. If the evidence is insufficient, finish with {{\"status\":\"unknown\",\"reason\":\"...\"}}; \
+             fields and no others: an answer has no \"status\" field (asked for a \"result\", finish with \
+             {{\"result\":42}}, not {{\"status\":\"ok\",\"result\":42}}). If the evidence is insufficient, finish \
+             with {{\"status\":\"unknown\",\"reason\":\"...\"}}; \
              if the server cannot do what the question needs, finish with \
              {{\"status\":\"unsupported\",\"reason\":\"...\"}}.",
             question

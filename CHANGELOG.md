@@ -6,8 +6,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+
 ### Changes and fixes
 
+- Agent benchmark: the closing instruction says an answer has no `"status"` field and shows `{"result":42}`, since
+  agents copied the `{"status":"unknown",…}` fallback shape around right values. Strict scores before and after are
+  not directly comparable.
 - `evaluate_function` puts `result` first in its report when the function returned (field order only, CLI text
   output too), and the tool description names `result` as the value. Successful reports have never carried a
   `status` field: the `{"status":"ok","result":…}` answers in the Haiku v4 passes copy the

@@ -175,6 +175,11 @@ checker defined before any run, no task that only rampage's documentation makes 
 - **Prompts.** No prompt names a tool, a server or a route; a test rejects rampage's and REA's tool names and
   concepts, plus "emulat", "signature" and "decompile". Every question states what an analyst would know anyway
   (architecture, load address, calling convention, argument widths). The system prompt is v1's.
+- **Answer-shape line (from 2026-11-27).** The closing instruction now says an answer has no `"status"` field, with
+  `{"result":42}` against `{"status":"ok","result":42}` as the example: agents had copied the shape of the
+  `{"status":"unknown",…}` fallback around right values on four releases. It applies to every suite and server.
+  Passes before 1.20.0's follow-ups ran without it; compare strict scores across that line with care (lenient
+  scoring already accepted the wrapped value).
 - **REA's route exists for every task.** REA was run with Rizin 0.9.1 installed in v3, and v4 keeps that setup.
   Spot checks without a model: Rizin disassembles the raw Thumb images (`e asm.bits=16`), reads the S-record and
   SVD files, and its shell escape (`!python3 …`, `!cat …`) works through `execute_rizin_command`. Per category:
