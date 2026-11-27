@@ -8,7 +8,7 @@
 //! decompiled in the stripped binary, as the `types` eval family does on the same `--path` (default `api`, the MCP
 //! decompile tool's project; `raw` is the bare project of the numbers before 2026-11-27), and each declared
 //! parameter position is scored by class. `positions` in OUT.json lists every scored position, for diffing two
-//! runs. Each wrong or missed position is classified:
+//! runs. Neither path reads or writes the persistent analysis store. Each wrong or missed position is classified:
 //!
 //! - `not_decompiled`: no signature at all (not a type problem);
 //! - `dead`: DWARF gives the parameter no location, so the callee never reads it and holds no evidence of its

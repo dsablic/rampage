@@ -431,14 +431,20 @@ fn run_types_scores_each_parameter_and_counts_disagreement_classes() {
 /// update it with the plan.
 #[test]
 fn types_classes_count_on_both_signature_paths() {
-    let scratch = std::env::temp_dir().join(format!("rampage-eval-types-paths-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch).unwrap();
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let scratch = Scratch(std::env::temp_dir().join(format!("rampage-eval-types-paths-{}", std::process::id())));
+    std::fs::create_dir_all(&scratch.0).unwrap();
     let slice = |arch: &str| {
         serde_json::json!({"family": "types", "metric": "classes",
             "target": fixture(&format!("eval-types-{arch}.elf")),
             "truth": data(&format!("eval-truth-types-{arch}.json"))})
     };
-    let manifest = scratch.join("manifest.json");
+    let manifest = scratch.0.join("manifest.json");
     let slices = serde_json::json!({"slices": {"x86_64": slice("x86_64"), "aarch64": slice("aarch64")}});
     std::fs::write(&manifest, slices.to_string()).unwrap();
     for (path, expected) in [("raw", 85), ("api", 85)] {
@@ -450,8 +456,9 @@ fn types_classes_count_on_both_signature_paths() {
         let declared: usize =
             evaluation.slices.values().map(|report| report.correct + report.wrong + report.missed).sum();
         assert_eq!((correct, declared), (expected, 138), "{path}: {stderr}");
+        let recorded = evaluation.signature_path.map(|recorded| recorded.tag());
+        assert_eq!(recorded, Some(path));
     }
-    std::fs::remove_dir_all(&scratch).unwrap();
 }
 
 /// The committed type truths are what `rampage-eval type-truth` reads from the committed `-g` builds, twin checks

@@ -82,7 +82,8 @@ Raw spellings: the recovered type is Ghidra's `int8` (an 8-byte integer) or `xun
   (`crates/rampage-eval/src/types.rs`). This plan first said the eval bypassed the API path; it does not (see "Slice 0
   result"): it calls `rampage_api::Project::decompile`, the MCP tool's own call, on a bare project.
 - Library prototypes: `import_prototype` (`crates/rampage-api/src/import_types.rs`), applied as
-  `WorkerOperation::RuntimePrototype` while setting up the decompile (`crates/rampage-api/src/decompile/symbols.rs`, the
+  `WorkerOperation::RuntimePrototype` (for functions named by a symbol, export, stub or thunk, a relocatable object's
+  function externs, or an import slot) while setting up the decompile (`crates/rampage-api/src/decompile/symbols.rs`, the
   operations built around lines 33 to 135).
 - Hints: `TypeHint::Parameter` (`crates/rampage-decompiler/src/type_hints.rs`, `Decompiler::set_type_hints`), produced by
   explicit-source propagation in `crates/rampage-api/src/propagation.rs` (`seed_function`, `hint_operations`,
@@ -119,8 +120,9 @@ position count, and no regression of the dev correct figure.
 ## Slice 0 result (2026-11-27)
 
 What was built. `rampage-eval run` (types family) and `types_headroom` take `--path api|raw`. `api` (now the default)
-opens the target as the MCP server does (`Session::open`: the annotation sidecar, packs, analysis store) and makes the
-`decompile` tool's call, `Project::decompile`, in process. `raw` is a bare `Project::new` with the same call: the path of
+opens the target as the MCP server does (`Session::open`: the annotation sidecar, packs) and makes the `decompile`
+tool's call, `Project::decompile`, in process. Neither path reads or writes the persistent analysis store, so a score
+is never of stored decompilations; `rampage-eval run` records the path as `signature_path` in its output. `raw` is a bare `Project::new` with the same call: the path of
 every earlier number. `types_headroom` also writes every scored position (`positions`) so two runs can be diffed.
 `tools/types-dev/build.sh SOURCES OUT EVAL acceptance` builds the acceptance input; its truth is committed beside the dev
 truth (`tests/fixtures/types-dev/{zstd,inih,tinyexpr}-*-O2.truth.json`). The dev truth rebuilt byte-identical.
@@ -141,8 +143,8 @@ tinyexpr x86-64 32 / 56, tinyexpr AArch64 34 / 56. Its misses have the dev shape
 160, dead 70.
 
 Differences between the paths: none. Every one of the 2,915 dev and 3,474 acceptance positions has the same class and
-the same raw spelling on both (diffed with `RAMPAGE_ANALYSIS_CACHE=off`, so neither run read the other's stored
-decompilations). The reason is structural, not a coincidence of these binaries:
+the same raw spelling on both (measured with `RAMPAGE_ANALYSIS_CACHE=off`, so neither run read the other's stored
+decompilations; the eval now never uses the store). The reason is structural, not a coincidence of these binaries:
 
 - The plan's premise was wrong. `decompiled_signature_batch` already called `rampage_api::Project::decompile`, which builds
   the symbol plan (`RuntimePrototype` operations, specialised by `import_prototype`) and runs `propagation::lazy_context`.
@@ -150,7 +152,8 @@ decompilations). The reason is structural, not a coincidence of these binaries:
   sidecar that construction changes nothing the decompiler reads (packs feed identification, YARA and capa, not the
   decompile).
 - Library prototypes fire 0 times. `symbols::plan` gives a function a `RuntimePrototype` only from a symbol, an export,
-  a stub or thunk, or an import slot. A stripped static musl binary has none of them, so `strlen`, `memcpy`, `free` and
+  a stub or thunk, a relocatable object's function extern, or an import slot. A stripped static musl executable has
+  none of them, so `strlen`, `memcpy`, `free` and
   the rest are decompiled as `FUN_...` with recovered signatures.
 - Propagation fires 0 times. `lazy_context` returns at once when the annotations hold no signatures, local types,
   globals, data types or type hints, which is the state of every eval target.
@@ -201,5 +204,5 @@ target/release/examples/types_headroom [--path raw|api] out.json dev:OUT_DIR/lz4
 ```
 
 `--path` defaults to `api`. The decompile of the eight dev binaries takes about an hour, almost all of it the two LZ4 O0
-builds; the six acceptance binaries take under a minute. Set `RAMPAGE_ANALYSIS_CACHE=off` when comparing two runs of the
-same build, or the second reads the first's stored decompilations.
+builds; the six acceptance binaries take under a minute. The eval never reads or writes the persistent analysis
+store, so two runs of the same build each decompile afresh.

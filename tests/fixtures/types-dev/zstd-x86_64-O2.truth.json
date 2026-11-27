@@ -734,7 +734,925 @@
 ],
 "return": "int64"
 },
-"0x1027d00": {
+"0x1027cd0": {
+"name": "ZSTD_createCCtx",
+"params": [],
+"return": "struct_pointer"
+},
+"0x1027ef0": {
+"name": "ZSTD_initStaticCCtx",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x10281f0": {
+"name": "ZSTD_sizeof_CStream",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x1028270": {
+"name": "ZSTD_getSeqStore",
+"params": [
+"struct_pointer"
+],
+"return": "struct_pointer"
+},
+"0x1028280": {
+"name": "ZSTD_createCCtxParams",
+"params": [],
+"return": "struct_pointer"
+},
+"0x10282b0": {
+"name": "ZSTD_freeCCtxParams",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x10283c0": {
+"name": "ZSTD_CCtxParams_init_advanced",
+"params": [
+"struct_pointer",
+"struct"
+],
+"return": "int64"
+},
+"0x1028570": {
+"name": "ZSTD_cParam_getBounds",
+"params": [
+"int32"
+],
+"return": "struct"
+},
+"0x10286b0": {
+"name": "ZSTD_minCLevel",
+"params": [],
+"return": "int32"
+},
+"0x10286c0": {
+"name": "ZSTD_maxCLevel",
+"params": [],
+"return": "int32"
+},
+"0x1028ba0": {
+"name": "ZSTD_CCtx_getParameter",
+"params": [
+"struct_pointer",
+"int32",
+"pointer"
+],
+"return": "int64"
+},
+"0x1028bb0": {
+"name": "ZSTD_CCtxParams_getParameter",
+"params": [
+"struct_pointer",
+"int32",
+"pointer"
+],
+"return": "int64"
+},
+"0x1028d00": {
+"name": "ZSTD_CCtx_setParametersUsingCCtxParams",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x1028e30": {
+"name": "ZSTD_CCtx_setParams",
+"params": [
+"struct_pointer",
+"struct"
+],
+"return": "int64"
+},
+"0x1029020": {
+"name": "ZSTD_clearAllDicts",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1029120": {
+"name": "ZSTD_CCtx_loadDictionary_byReference",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x1029280": {
+"name": "ZSTD_CCtx_refThreadPool",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x10292b0": {
+"name": "ZSTD_CCtx_refPrefix",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x1029440": {
+"name": "ZSTD_adjustCParams",
+"params": [
+"struct",
+"int64",
+"int64"
+],
+"return": "struct"
+},
+"0x1029610": {
+"name": "ZSTD_getCParamsFromCCtxParams",
+"params": [
+"struct_pointer",
+"int64",
+"int64",
+"int32"
+],
+"return": "struct"
+},
+"0x1029b20": {
+"name": "ZSTD_estimateCCtxSize_usingCCtxParams_internal",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"int32",
+"int32",
+"int64",
+"int64",
+"int64",
+"int32",
+"int64"
+],
+"return": "int64"
+},
+"0x1029d70": {
+"name": "ZSTD_estimateCCtxSize_usingCParams",
+"params": [
+"struct"
+],
+"return": "int64"
+},
+"0x102a020": {
+"name": "ZSTD_estimateCCtxSize",
+"params": [
+"int32"
+],
+"return": "int64"
+},
+"0x102a3f0": {
+"name": "ZSTD_estimateCStreamSize_usingCCtxParams",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102a4f0": {
+"name": "ZSTD_estimateCStreamSize_usingCParams",
+"params": [
+"struct"
+],
+"return": "int64"
+},
+"0x102a690": {
+"name": "ZSTD_estimateCStreamSize",
+"params": [
+"int32"
+],
+"return": "int64"
+},
+"0x102a7e0": {
+"name": "ZSTD_getFrameProgression",
+"params": [
+"struct_pointer"
+],
+"return": "struct"
+},
+"0x102a830": {
+"name": "ZSTD_toFlushNow",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102a880": {
+"name": "ZSTD_invalidateRepCodes",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x102a8b0": {
+"name": "ZSTD_copyCCtx",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102ac60": {
+"name": "ZSTD_generateSequences",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102ae30": {
+"name": "ZSTD_mergeBlockDelimiters",
+"params": [
+"struct_pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102aed0": {
+"name": "ZSTD_buildBlockEntropyStats",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102b2f0": {
+"name": "ZSTD_writeSkippableFrame",
+"params": [
+"pointer",
+"int64",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x102b350": {
+"name": "ZSTD_writeLastEmptyBlock",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102b3f0": {
+"name": "ZSTD_compressContinue_internal",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"int32",
+"int32"
+],
+"return": "int64"
+},
+"0x102c110": {
+"name": "ZSTD_compressContinue",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102c130": {
+"name": "ZSTD_getBlockSize",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102c1b0": {
+"name": "ZSTD_compressBlock",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102c200": {
+"name": "ZSTD_loadCEntropy",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102cfb0": {
+"name": "ZSTD_compressBegin_advanced",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct",
+"int64"
+],
+"return": "int64"
+},
+"0x102d270": {
+"name": "ZSTD_compressBegin_usingDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x102d280": {
+"name": "ZSTD_compressBegin_usingDict_deprecated",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x102d5e0": {
+"name": "ZSTD_compressBegin",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x102d6c0": {
+"name": "ZSTD_compressEnd_public",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102d930": {
+"name": "ZSTD_compressEnd",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102d940": {
+"name": "ZSTD_compress_advanced",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct"
+],
+"return": "int64"
+},
+"0x102de30": {
+"name": "ZSTD_compressCCtx",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x102e030": {
+"name": "ZSTD_compress",
+"params": [
+"pointer",
+"int64",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x102e230": {
+"name": "ZSTD_estimateCDictSize",
+"params": [
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x102e3a0": {
+"name": "ZSTD_createCDict_advanced2",
+"params": [
+"pointer",
+"int64",
+"int32",
+"int32",
+"struct_pointer",
+"struct"
+],
+"return": "struct_pointer"
+},
+"0x102e7b0": {
+"name": "ZSTD_initCDict_internal",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"int32",
+"int32",
+"struct"
+],
+"return": "int64"
+},
+"0x102ea00": {
+"name": "ZSTD_createCDict",
+"params": [
+"pointer",
+"int64",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x102eb00": {
+"name": "ZSTD_createCDict_byReference",
+"params": [
+"pointer",
+"int64",
+"int32"
+],
+"return": "struct_pointer"
+},
+"0x102ec00": {
+"name": "ZSTD_initStaticCDict",
+"params": [
+"pointer",
+"int64",
+"pointer",
+"int64",
+"int32",
+"int32",
+"struct"
+],
+"return": "struct_pointer"
+},
+"0x102edf0": {
+"name": "ZSTD_getDictID_fromCDict",
+"params": [
+"struct_pointer"
+],
+"return": "int32"
+},
+"0x102ee10": {
+"name": "ZSTD_compressBegin_usingCDict_advanced",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct",
+"int64"
+],
+"return": "int64"
+},
+"0x102f1b0": {
+"name": "ZSTD_compressBegin_usingCDict",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102f2e0": {
+"name": "ZSTD_compress_usingCDict_advanced",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer",
+"struct"
+],
+"return": "int64"
+},
+"0x102f350": {
+"name": "ZSTD_compress_usingCDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102f3c0": {
+"name": "ZSTD_createCStream",
+"params": [],
+"return": "struct_pointer"
+},
+"0x102f5e0": {
+"name": "ZSTD_initStaticCStream",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x102f5f0": {
+"name": "ZSTD_freeCStream",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102f6d0": {
+"name": "ZSTD_CStreamInSize",
+"params": [],
+"return": "int64"
+},
+"0x102f6e0": {
+"name": "ZSTD_CStreamOutSize",
+"params": [],
+"return": "int64"
+},
+"0x102f6f0": {
+"name": "ZSTD_resetCStream",
+"params": [
+"struct_pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102f720": {
+"name": "ZSTD_initCStream_internal",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct_pointer",
+"struct_pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x102f800": {
+"name": "ZSTD_initCStream_usingCDict_advanced",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct",
+"int64"
+],
+"return": "int64"
+},
+"0x102f840": {
+"name": "ZSTD_initCStream_usingCDict",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102f880": {
+"name": "ZSTD_initCStream_advanced",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct",
+"int64"
+],
+"return": "int64"
+},
+"0x102f9f0": {
+"name": "ZSTD_initCStream_usingDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x102fad0": {
+"name": "ZSTD_initCStream_srcSize",
+"params": [
+"struct_pointer",
+"int32",
+"int64"
+],
+"return": "int64"
+},
+"0x102fb70": {
+"name": "ZSTD_initCStream",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x102fbf0": {
+"name": "ZSTD_compressStream",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x102fc40": {
+"name": "ZSTD_compressStream2",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x10303d0": {
+"name": "ZSTD_CCtx_init_compressStream2",
+"params": [
+"struct_pointer",
+"int32",
+"int64"
+],
+"return": "int64"
+},
+"0x1030730": {
+"name": "ZSTD_copySequencesToSeqStoreExplicitBlockDelim",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"int64",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x1030dc0": {
+"name": "ZSTD_copySequencesToSeqStoreNoBlockDelim",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"int64",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x10314d0": {
+"name": "ZSTD_compressSequences",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"struct_pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x1031b70": {
+"name": "ZSTD_flushStream",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x1031bd0": {
+"name": "ZSTD_endStream",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x1031c60": {
+"name": "ZSTD_defaultCLevel",
+"params": [],
+"return": "int32"
+},
+"0x1031c90": {
+"name": "ZSTD_getParams",
+"params": [
+"int32",
+"int64",
+"int64"
+],
+"return": "struct"
+},
+"0x1031cd0": {
+"name": "ZSTD_registerSequenceProducer",
+"params": [
+"struct_pointer",
+"pointer",
+"pointer"
+],
+"return": "void"
+},
+"0x1031d20": {
+"name": "ZSTD_resetCCtx_internal",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"int64",
+"int64",
+"int32",
+"int32"
+],
+"return": "int64"
+},
+"0x1032bf0": {
+"name": "ZSTD_reset_matchState",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"int32",
+"int32",
+"int32",
+"int32"
+],
+"return": "int64"
+},
+"0x1033460": {
+"name": "ZSTD_buildSequencesStatistics",
+"params": [
+"struct_pointer",
+"int64",
+"struct_pointer",
+"struct_pointer",
+"pointer",
+"pointer",
+"int32",
+"pointer",
+"pointer",
+"int64"
+],
+"return": "struct"
+},
+"0x1033850": {
+"name": "ZSTD_overflowCorrectIfNeeded",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"pointer",
+"pointer"
+],
+"return": "void"
+},
+"0x1033b30": {
+"name": "ZSTD_compressBlock_internal",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x1033c80": {
+"name": "ZSTD_reduceTable",
+"params": [
+"pointer",
+"int32",
+"int32"
+],
+"return": "void"
+},
+"0x1033d60": {
+"name": "ZSTD_buildSeqStore",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x1034260": {
+"name": "ZSTD_isRLE",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x10343b0": {
+"name": "ZSTD_compressSeqStore_singleBlock",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"int32",
+"int32"
+],
+"return": "int64"
+},
+"0x1034960": {
+"name": "ZSTD_deriveBlockSplitsHelper",
+"params": [
+"struct_pointer",
+"int64",
+"int64",
+"struct_pointer",
+"struct_pointer"
+],
+"return": "void"
+},
+"0x1034ab0": {
+"name": "ZSTD_buildEntropyStatisticsAndEstimateSubBlockSize",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x1034eb0": {
+"name": "ZSTD_entropyCompressSeqStore",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"pointer",
+"int64",
+"int64",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x1035200": {
+"name": "ZSTD_copyBlockSequences",
+"params": [
+"struct_pointer"
+],
+"return": "void"
+},
+"0x10355a0": {
+"name": "ZSTD_loadDictionaryContent",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"struct_pointer",
+"pointer",
+"int64",
+"int32",
+"int32"
+],
+"return": "int64"
+},
+"0x1035900": {
 "name": "ZSTD_compressRleLiteralsBlock",
 "params": [
 "pointer",
@@ -744,7 +1662,7 @@
 ],
 "return": "int64"
 },
-"0x1027d50": {
+"0x1035950": {
 "name": "ZSTD_compressLiterals",
 "params": [
 "pointer",
@@ -762,7 +1680,7 @@
 ],
 "return": "int64"
 },
-"0x1028320": {
+"0x1035f20": {
 "name": "ZSTD_selectEncodingType",
 "params": [
 "pointer",
@@ -779,7 +1697,7 @@
 ],
 "return": "int32"
 },
-"0x1028660": {
+"0x1036260": {
 "name": "ZSTD_buildCTable",
 "params": [
 "pointer",
@@ -801,7 +1719,7 @@
 ],
 "return": "int64"
 },
-"0x10287d0": {
+"0x10363d0": {
 "name": "ZSTD_encodeSequences",
 "params": [
 "pointer",
@@ -819,7 +1737,7 @@
 ],
 "return": "int64"
 },
-"0x1028e90": {
+"0x1036a90": {
 "name": "ZSTD_encodeSequences_bmi2",
 "params": [
 "pointer",
@@ -836,7 +1754,7 @@
 ],
 "return": "int64"
 },
-"0x10294d0": {
+"0x10370d0": {
 "name": "ZSTD_compressSuperBlock",
 "params": [
 "struct_pointer",
@@ -844,924 +1762,6 @@
 "int64",
 "pointer",
 "int64",
-"int32"
-],
-"return": "int64"
-},
-"0x102a300": {
-"name": "ZSTD_createCCtx",
-"params": [],
-"return": "struct_pointer"
-},
-"0x102a520": {
-"name": "ZSTD_initStaticCCtx",
-"params": [
-"pointer",
-"int64"
-],
-"return": "struct_pointer"
-},
-"0x102a820": {
-"name": "ZSTD_sizeof_CStream",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x102a8a0": {
-"name": "ZSTD_getSeqStore",
-"params": [
-"struct_pointer"
-],
-"return": "struct_pointer"
-},
-"0x102a8b0": {
-"name": "ZSTD_createCCtxParams",
-"params": [],
-"return": "struct_pointer"
-},
-"0x102a8e0": {
-"name": "ZSTD_freeCCtxParams",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x102a9f0": {
-"name": "ZSTD_CCtxParams_init_advanced",
-"params": [
-"struct_pointer",
-"struct"
-],
-"return": "int64"
-},
-"0x102aba0": {
-"name": "ZSTD_cParam_getBounds",
-"params": [
-"int32"
-],
-"return": "struct"
-},
-"0x102ace0": {
-"name": "ZSTD_minCLevel",
-"params": [],
-"return": "int32"
-},
-"0x102acf0": {
-"name": "ZSTD_maxCLevel",
-"params": [],
-"return": "int32"
-},
-"0x102b1d0": {
-"name": "ZSTD_CCtx_getParameter",
-"params": [
-"struct_pointer",
-"int32",
-"pointer"
-],
-"return": "int64"
-},
-"0x102b1e0": {
-"name": "ZSTD_CCtxParams_getParameter",
-"params": [
-"struct_pointer",
-"int32",
-"pointer"
-],
-"return": "int64"
-},
-"0x102b330": {
-"name": "ZSTD_CCtx_setParametersUsingCCtxParams",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x102b460": {
-"name": "ZSTD_CCtx_setParams",
-"params": [
-"struct_pointer",
-"struct"
-],
-"return": "int64"
-},
-"0x102b650": {
-"name": "ZSTD_clearAllDicts",
-"params": [
-"struct_pointer"
-],
-"return": "void"
-},
-"0x102b750": {
-"name": "ZSTD_CCtx_loadDictionary_byReference",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102b8b0": {
-"name": "ZSTD_CCtx_refThreadPool",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x102b8e0": {
-"name": "ZSTD_CCtx_refPrefix",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102ba70": {
-"name": "ZSTD_adjustCParams",
-"params": [
-"struct",
-"int64",
-"int64"
-],
-"return": "struct"
-},
-"0x102bc40": {
-"name": "ZSTD_getCParamsFromCCtxParams",
-"params": [
-"struct_pointer",
-"int64",
-"int64",
-"int32"
-],
-"return": "struct"
-},
-"0x102c150": {
-"name": "ZSTD_estimateCCtxSize_usingCCtxParams_internal",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"int32",
-"int32",
-"int64",
-"int64",
-"int64",
-"int32",
-"int64"
-],
-"return": "int64"
-},
-"0x102c3a0": {
-"name": "ZSTD_estimateCCtxSize_usingCParams",
-"params": [
-"struct"
-],
-"return": "int64"
-},
-"0x102c650": {
-"name": "ZSTD_estimateCCtxSize",
-"params": [
-"int32"
-],
-"return": "int64"
-},
-"0x102ca20": {
-"name": "ZSTD_estimateCStreamSize_usingCCtxParams",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x102cb20": {
-"name": "ZSTD_estimateCStreamSize_usingCParams",
-"params": [
-"struct"
-],
-"return": "int64"
-},
-"0x102ccc0": {
-"name": "ZSTD_estimateCStreamSize",
-"params": [
-"int32"
-],
-"return": "int64"
-},
-"0x102ce10": {
-"name": "ZSTD_getFrameProgression",
-"params": [
-"struct_pointer"
-],
-"return": "struct"
-},
-"0x102ce60": {
-"name": "ZSTD_toFlushNow",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x102ceb0": {
-"name": "ZSTD_invalidateRepCodes",
-"params": [
-"struct_pointer"
-],
-"return": "void"
-},
-"0x102cee0": {
-"name": "ZSTD_copyCCtx",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102d290": {
-"name": "ZSTD_generateSequences",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102d460": {
-"name": "ZSTD_mergeBlockDelimiters",
-"params": [
-"struct_pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102d500": {
-"name": "ZSTD_buildBlockEntropyStats",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102d920": {
-"name": "ZSTD_writeSkippableFrame",
-"params": [
-"pointer",
-"int64",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x102d980": {
-"name": "ZSTD_writeLastEmptyBlock",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102da20": {
-"name": "ZSTD_compressContinue_internal",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"int32",
-"int32"
-],
-"return": "int64"
-},
-"0x102e740": {
-"name": "ZSTD_compressContinue",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102e760": {
-"name": "ZSTD_getBlockSize",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x102e7e0": {
-"name": "ZSTD_compressBlock",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102e830": {
-"name": "ZSTD_loadCEntropy",
-"params": [
-"struct_pointer",
-"pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102f5e0": {
-"name": "ZSTD_compressBegin_advanced",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"struct",
-"int64"
-],
-"return": "int64"
-},
-"0x102f8a0": {
-"name": "ZSTD_compressBegin_usingDict",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x102f8b0": {
-"name": "ZSTD_compressBegin_usingDict_deprecated",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x102fc10": {
-"name": "ZSTD_compressBegin",
-"params": [
-"struct_pointer",
-"int32"
-],
-"return": "int64"
-},
-"0x102fcf0": {
-"name": "ZSTD_compressEnd_public",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102ff60": {
-"name": "ZSTD_compressEnd",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x102ff70": {
-"name": "ZSTD_compress_advanced",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"struct"
-],
-"return": "int64"
-},
-"0x1030460": {
-"name": "ZSTD_compressCCtx",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x1030660": {
-"name": "ZSTD_compress",
-"params": [
-"pointer",
-"int64",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x1030860": {
-"name": "ZSTD_estimateCDictSize",
-"params": [
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x10309d0": {
-"name": "ZSTD_createCDict_advanced2",
-"params": [
-"pointer",
-"int64",
-"int32",
-"int32",
-"struct_pointer",
-"struct"
-],
-"return": "struct_pointer"
-},
-"0x1030de0": {
-"name": "ZSTD_initCDict_internal",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"int32",
-"int32",
-"struct"
-],
-"return": "int64"
-},
-"0x1031030": {
-"name": "ZSTD_createCDict",
-"params": [
-"pointer",
-"int64",
-"int32"
-],
-"return": "struct_pointer"
-},
-"0x1031130": {
-"name": "ZSTD_createCDict_byReference",
-"params": [
-"pointer",
-"int64",
-"int32"
-],
-"return": "struct_pointer"
-},
-"0x1031230": {
-"name": "ZSTD_initStaticCDict",
-"params": [
-"pointer",
-"int64",
-"pointer",
-"int64",
-"int32",
-"int32",
-"struct"
-],
-"return": "struct_pointer"
-},
-"0x1031420": {
-"name": "ZSTD_getDictID_fromCDict",
-"params": [
-"struct_pointer"
-],
-"return": "int32"
-},
-"0x1031440": {
-"name": "ZSTD_compressBegin_usingCDict_advanced",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct",
-"int64"
-],
-"return": "int64"
-},
-"0x10317e0": {
-"name": "ZSTD_compressBegin_usingCDict",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x1031910": {
-"name": "ZSTD_compress_usingCDict_advanced",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"struct_pointer",
-"struct"
-],
-"return": "int64"
-},
-"0x1031980": {
-"name": "ZSTD_compress_usingCDict",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x10319f0": {
-"name": "ZSTD_createCStream",
-"params": [],
-"return": "struct_pointer"
-},
-"0x1031c10": {
-"name": "ZSTD_initStaticCStream",
-"params": [
-"pointer",
-"int64"
-],
-"return": "struct_pointer"
-},
-"0x1031c20": {
-"name": "ZSTD_freeCStream",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x1031d00": {
-"name": "ZSTD_CStreamInSize",
-"params": [],
-"return": "int64"
-},
-"0x1031d10": {
-"name": "ZSTD_CStreamOutSize",
-"params": [],
-"return": "int64"
-},
-"0x1031d20": {
-"name": "ZSTD_resetCStream",
-"params": [
-"struct_pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x1031d50": {
-"name": "ZSTD_initCStream_internal",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"struct_pointer",
-"struct_pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x1031e30": {
-"name": "ZSTD_initCStream_usingCDict_advanced",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct",
-"int64"
-],
-"return": "int64"
-},
-"0x1031e70": {
-"name": "ZSTD_initCStream_usingCDict",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x1031eb0": {
-"name": "ZSTD_initCStream_advanced",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"struct",
-"int64"
-],
-"return": "int64"
-},
-"0x1032020": {
-"name": "ZSTD_initCStream_usingDict",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x1032100": {
-"name": "ZSTD_initCStream_srcSize",
-"params": [
-"struct_pointer",
-"int32",
-"int64"
-],
-"return": "int64"
-},
-"0x10321a0": {
-"name": "ZSTD_initCStream",
-"params": [
-"struct_pointer",
-"int32"
-],
-"return": "int64"
-},
-"0x1032220": {
-"name": "ZSTD_compressStream",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x1032270": {
-"name": "ZSTD_compressStream2",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"int32"
-],
-"return": "int64"
-},
-"0x1032a00": {
-"name": "ZSTD_CCtx_init_compressStream2",
-"params": [
-"struct_pointer",
-"int32",
-"int64"
-],
-"return": "int64"
-},
-"0x1032d60": {
-"name": "ZSTD_copySequencesToSeqStoreExplicitBlockDelim",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"int64",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x10333f0": {
-"name": "ZSTD_copySequencesToSeqStoreNoBlockDelim",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"int64",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x1033b00": {
-"name": "ZSTD_compressSequences",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"struct_pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x10341a0": {
-"name": "ZSTD_flushStream",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x1034200": {
-"name": "ZSTD_endStream",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x1034290": {
-"name": "ZSTD_defaultCLevel",
-"params": [],
-"return": "int32"
-},
-"0x10342c0": {
-"name": "ZSTD_getParams",
-"params": [
-"int32",
-"int64",
-"int64"
-],
-"return": "struct"
-},
-"0x1034300": {
-"name": "ZSTD_registerSequenceProducer",
-"params": [
-"struct_pointer",
-"pointer",
-"pointer"
-],
-"return": "void"
-},
-"0x1034350": {
-"name": "ZSTD_resetCCtx_internal",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"int64",
-"int64",
-"int32",
-"int32"
-],
-"return": "int64"
-},
-"0x1035220": {
-"name": "ZSTD_reset_matchState",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"int32",
-"int32",
-"int32",
-"int32"
-],
-"return": "int64"
-},
-"0x1035a90": {
-"name": "ZSTD_buildSequencesStatistics",
-"params": [
-"struct_pointer",
-"int64",
-"struct_pointer",
-"struct_pointer",
-"pointer",
-"pointer",
-"int32",
-"pointer",
-"pointer",
-"int64"
-],
-"return": "struct"
-},
-"0x1035e80": {
-"name": "ZSTD_overflowCorrectIfNeeded",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"pointer",
-"pointer"
-],
-"return": "void"
-},
-"0x1036160": {
-"name": "ZSTD_compressBlock_internal",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x10362b0": {
-"name": "ZSTD_reduceTable",
-"params": [
-"pointer",
-"int32",
-"int32"
-],
-"return": "void"
-},
-"0x1036390": {
-"name": "ZSTD_buildSeqStore",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x1036890": {
-"name": "ZSTD_isRLE",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int32"
-},
-"0x10369e0": {
-"name": "ZSTD_compressSeqStore_singleBlock",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"int32",
-"int32"
-],
-"return": "int64"
-},
-"0x1036f90": {
-"name": "ZSTD_deriveBlockSplitsHelper",
-"params": [
-"struct_pointer",
-"int64",
-"int64",
-"struct_pointer",
-"struct_pointer"
-],
-"return": "void"
-},
-"0x10370e0": {
-"name": "ZSTD_buildEntropyStatisticsAndEstimateSubBlockSize",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x10374e0": {
-"name": "ZSTD_entropyCompressSeqStore",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"pointer",
-"int64",
-"int64",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x1037830": {
-"name": "ZSTD_copyBlockSequences",
-"params": [
-"struct_pointer"
-],
-"return": "void"
-},
-"0x1037bd0": {
-"name": "ZSTD_loadDictionaryContent",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"struct_pointer",
-"pointer",
-"int64",
-"int32",
 "int32"
 ],
 "return": "int64"
@@ -3605,7 +3605,379 @@
 ],
 "return": "int32"
 },
-"0x108c800": {
+"0x108c810": {
+"name": "ZSTD_estimateDCtxSize",
+"params": [],
+"return": "int64"
+},
+"0x108c910": {
+"name": "ZSTD_createDCtx_advanced",
+"params": [
+"struct"
+],
+"return": "struct_pointer"
+},
+"0x108ca40": {
+"name": "ZSTD_createDCtx",
+"params": [],
+"return": "struct_pointer"
+},
+"0x108cb30": {
+"name": "ZSTD_freeDCtx",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108cc30": {
+"name": "ZSTD_copyDCtx",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "void"
+},
+"0x108cc40": {
+"name": "ZSTD_isFrame",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x108cc90": {
+"name": "ZSTD_frameHeaderSize",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108cce0": {
+"name": "ZSTD_getFrameHeader_advanced",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"int32"
+],
+"return": "int64"
+},
+"0x108cfc0": {
+"name": "ZSTD_readSkippableFrame",
+"params": [
+"pointer",
+"int64",
+"pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108d070": {
+"name": "ZSTD_findDecompressedSize",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108d1b0": {
+"name": "ZSTD_getDecompressedSize",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108d200": {
+"name": "ZSTD_findFrameSizeInfo",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct"
+},
+"0x108d350": {
+"name": "ZSTD_decompressBound",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108d3c0": {
+"name": "ZSTD_decompressionMargin",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108d490": {
+"name": "ZSTD_insertBlock",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108d4c0": {
+"name": "ZSTD_decompress_usingDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108d4e0": {
+"name": "ZSTD_decompressMultiFrame",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"pointer",
+"int64",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108db80": {
+"name": "ZSTD_decompress",
+"params": [
+"pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108dd20": {
+"name": "ZSTD_decompressContinue",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108e310": {
+"name": "ZSTD_decodeFrameHeader",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108e540": {
+"name": "ZSTD_loadDEntropy",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108e8a0": {
+"name": "ZSTD_decompressBegin_usingDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108ea30": {
+"name": "ZSTD_decompressBegin_usingDDict",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108eb50": {
+"name": "ZSTD_getDictID_fromDict",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x108eb70": {
+"name": "ZSTD_getDictID_fromFrame",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int32"
+},
+"0x108ebb0": {
+"name": "ZSTD_createDStream",
+"params": [],
+"return": "struct_pointer"
+},
+"0x108eca0": {
+"name": "ZSTD_initStaticDStream",
+"params": [
+"pointer",
+"int64"
+],
+"return": "struct_pointer"
+},
+"0x108ed90": {
+"name": "ZSTD_createDStream_advanced",
+"params": [
+"struct"
+],
+"return": "struct_pointer"
+},
+"0x108eec0": {
+"name": "ZSTD_freeDStream",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108eed0": {
+"name": "ZSTD_DStreamInSize",
+"params": [],
+"return": "int64"
+},
+"0x108eee0": {
+"name": "ZSTD_DStreamOutSize",
+"params": [],
+"return": "int64"
+},
+"0x108efb0": {
+"name": "ZSTD_DCtx_loadDictionary_byReference",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108f1e0": {
+"name": "ZSTD_DCtx_refPrefix",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108f2a0": {
+"name": "ZSTD_initDStream_usingDict",
+"params": [
+"struct_pointer",
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108f410": {
+"name": "ZSTD_initDStream",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108f820": {
+"name": "ZSTD_initDStream_usingDDict",
+"params": [
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108f870": {
+"name": "ZSTD_resetDStream",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108f8a0": {
+"name": "ZSTD_DCtx_setMaxWindowSize",
+"params": [
+"struct_pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108f8e0": {
+"name": "ZSTD_dParam_getBounds",
+"params": [
+"int32"
+],
+"return": "struct"
+},
+"0x108f920": {
+"name": "ZSTD_DCtx_setFormat",
+"params": [
+"struct_pointer",
+"int32"
+],
+"return": "int64"
+},
+"0x108fa40": {
+"name": "ZSTD_DCtx_getParameter",
+"params": [
+"struct_pointer",
+"int32",
+"pointer"
+],
+"return": "int64"
+},
+"0x108faa0": {
+"name": "ZSTD_sizeof_DStream",
+"params": [
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x108fb40": {
+"name": "ZSTD_estimateDStreamSize_fromFrame",
+"params": [
+"pointer",
+"int64"
+],
+"return": "int64"
+},
+"0x108fbb0": {
+"name": "ZSTD_decompressStream",
+"params": [
+"struct_pointer",
+"struct_pointer",
+"struct_pointer"
+],
+"return": "int64"
+},
+"0x1090780": {
+"name": "ZSTD_decompressStream_simpleArgs",
+"params": [
+"struct_pointer",
+"pointer",
+"int64",
+"pointer",
+"pointer",
+"int64",
+"pointer"
+],
+"return": "int64"
+},
+"0x1090800": {
 "name": "ZSTD_getcBlockSize",
 "params": [
 "pointer",
@@ -3614,7 +3986,7 @@
 ],
 "return": "int64"
 },
-"0x108c850": {
+"0x1090850": {
 "name": "ZSTD_decodeLiteralsBlock",
 "params": [
 "struct_pointer",
@@ -3626,7 +3998,7 @@
 ],
 "return": "int64"
 },
-"0x108cf60": {
+"0x1090f60": {
 "name": "ZSTD_buildFSETable",
 "params": [
 "struct_pointer",
@@ -3641,7 +4013,7 @@
 ],
 "return": "void"
 },
-"0x108d2f0": {
+"0x10912f0": {
 "name": "ZSTD_buildFSETable_body_bmi2",
 "params": [
 "struct_pointer",
@@ -3655,7 +4027,7 @@
 ],
 "return": "void"
 },
-"0x108d680": {
+"0x1091680": {
 "name": "ZSTD_decodeSeqHeaders",
 "params": [
 "struct_pointer",
@@ -3665,7 +4037,7 @@
 ],
 "return": "int64"
 },
-"0x108d8d0": {
+"0x10918d0": {
 "name": "ZSTD_buildSeqTable",
 "params": [
 "struct_pointer",
@@ -3687,7 +4059,7 @@
 ],
 "return": "int64"
 },
-"0x108da90": {
+"0x1091a90": {
 "name": "ZSTD_decompressBlock_internal",
 "params": [
 "struct_pointer",
@@ -3700,7 +4072,7 @@
 ],
 "return": "int64"
 },
-"0x108dc70": {
+"0x1091c70": {
 "name": "ZSTD_decompressSequencesLong",
 "params": [
 "struct_pointer",
@@ -3714,7 +4086,7 @@
 ],
 "return": "int64"
 },
-"0x1090970": {
+"0x1094970": {
 "name": "ZSTD_decompressSequencesSplitLitBuffer",
 "params": [
 "struct_pointer",
@@ -3728,7 +4100,7 @@
 ],
 "return": "int64"
 },
-"0x1092930": {
+"0x1096930": {
 "name": "ZSTD_decompressSequences",
 "params": [
 "struct_pointer",
@@ -3742,7 +4114,7 @@
 ],
 "return": "int64"
 },
-"0x10937a0": {
+"0x10977a0": {
 "name": "ZSTD_decompressBlock",
 "params": [
 "struct_pointer",
@@ -3753,7 +4125,7 @@
 ],
 "return": "int64"
 },
-"0x1093820": {
+"0x1097820": {
 "name": "ZSTD_decompressSequencesLong_bmi2",
 "params": [
 "struct_pointer",
@@ -3767,7 +4139,7 @@
 ],
 "return": "int64"
 },
-"0x1096420": {
+"0x109a420": {
 "name": "ZSTD_execSequenceEnd",
 "params": [
 "pointer",
@@ -3781,7 +4153,7 @@
 ],
 "return": "int64"
 },
-"0x1096c20": {
+"0x109ac20": {
 "name": "ZSTD_execSequenceEndSplitLitBuffer",
 "params": [
 "pointer",
@@ -3796,7 +4168,7 @@
 ],
 "return": "int64"
 },
-"0x1096f90": {
+"0x109af90": {
 "name": "ZSTD_decompressSequencesSplitLitBuffer_bmi2",
 "params": [
 "struct_pointer",
@@ -3810,7 +4182,7 @@
 ],
 "return": "int64"
 },
-"0x1098f70": {
+"0x109cf70": {
 "name": "ZSTD_decompressSequences_bmi2",
 "params": [
 "struct_pointer",
@@ -3821,378 +4193,6 @@
 "int32",
 "int32",
 "int32"
-],
-"return": "int64"
-},
-"0x1099cc0": {
-"name": "ZSTD_estimateDCtxSize",
-"params": [],
-"return": "int64"
-},
-"0x1099dc0": {
-"name": "ZSTD_createDCtx_advanced",
-"params": [
-"struct"
-],
-"return": "struct_pointer"
-},
-"0x1099ef0": {
-"name": "ZSTD_createDCtx",
-"params": [],
-"return": "struct_pointer"
-},
-"0x1099fe0": {
-"name": "ZSTD_freeDCtx",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109a0e0": {
-"name": "ZSTD_copyDCtx",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "void"
-},
-"0x109a0f0": {
-"name": "ZSTD_isFrame",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int32"
-},
-"0x109a140": {
-"name": "ZSTD_frameHeaderSize",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a190": {
-"name": "ZSTD_getFrameHeader_advanced",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"int32"
-],
-"return": "int64"
-},
-"0x109a470": {
-"name": "ZSTD_readSkippableFrame",
-"params": [
-"pointer",
-"int64",
-"pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a520": {
-"name": "ZSTD_findDecompressedSize",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a660": {
-"name": "ZSTD_getDecompressedSize",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a6b0": {
-"name": "ZSTD_findFrameSizeInfo",
-"params": [
-"pointer",
-"int64"
-],
-"return": "struct"
-},
-"0x109a800": {
-"name": "ZSTD_decompressBound",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a870": {
-"name": "ZSTD_decompressionMargin",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a940": {
-"name": "ZSTD_insertBlock",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a970": {
-"name": "ZSTD_decompress_usingDict",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109a990": {
-"name": "ZSTD_decompressMultiFrame",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"pointer",
-"int64",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109b030": {
-"name": "ZSTD_decompress",
-"params": [
-"pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109b1d0": {
-"name": "ZSTD_decompressContinue",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109b7c0": {
-"name": "ZSTD_decodeFrameHeader",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109b9f0": {
-"name": "ZSTD_loadDEntropy",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109bd50": {
-"name": "ZSTD_decompressBegin_usingDict",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109bee0": {
-"name": "ZSTD_decompressBegin_usingDDict",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109c000": {
-"name": "ZSTD_getDictID_fromDict",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int32"
-},
-"0x109c020": {
-"name": "ZSTD_getDictID_fromFrame",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int32"
-},
-"0x109c060": {
-"name": "ZSTD_createDStream",
-"params": [],
-"return": "struct_pointer"
-},
-"0x109c150": {
-"name": "ZSTD_initStaticDStream",
-"params": [
-"pointer",
-"int64"
-],
-"return": "struct_pointer"
-},
-"0x109c240": {
-"name": "ZSTD_createDStream_advanced",
-"params": [
-"struct"
-],
-"return": "struct_pointer"
-},
-"0x109c370": {
-"name": "ZSTD_freeDStream",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109c380": {
-"name": "ZSTD_DStreamInSize",
-"params": [],
-"return": "int64"
-},
-"0x109c390": {
-"name": "ZSTD_DStreamOutSize",
-"params": [],
-"return": "int64"
-},
-"0x109c460": {
-"name": "ZSTD_DCtx_loadDictionary_byReference",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109c690": {
-"name": "ZSTD_DCtx_refPrefix",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109c750": {
-"name": "ZSTD_initDStream_usingDict",
-"params": [
-"struct_pointer",
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109c8c0": {
-"name": "ZSTD_initDStream",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109ccd0": {
-"name": "ZSTD_initDStream_usingDDict",
-"params": [
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109cd20": {
-"name": "ZSTD_resetDStream",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109cd50": {
-"name": "ZSTD_DCtx_setMaxWindowSize",
-"params": [
-"struct_pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109cd90": {
-"name": "ZSTD_dParam_getBounds",
-"params": [
-"int32"
-],
-"return": "struct"
-},
-"0x109cdd0": {
-"name": "ZSTD_DCtx_setFormat",
-"params": [
-"struct_pointer",
-"int32"
-],
-"return": "int64"
-},
-"0x109cef0": {
-"name": "ZSTD_DCtx_getParameter",
-"params": [
-"struct_pointer",
-"int32",
-"pointer"
-],
-"return": "int64"
-},
-"0x109cf50": {
-"name": "ZSTD_sizeof_DStream",
-"params": [
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109cff0": {
-"name": "ZSTD_estimateDStreamSize_fromFrame",
-"params": [
-"pointer",
-"int64"
-],
-"return": "int64"
-},
-"0x109d060": {
-"name": "ZSTD_decompressStream",
-"params": [
-"struct_pointer",
-"struct_pointer",
-"struct_pointer"
-],
-"return": "int64"
-},
-"0x109dc30": {
-"name": "ZSTD_decompressStream_simpleArgs",
-"params": [
-"struct_pointer",
-"pointer",
-"int64",
-"pointer",
-"pointer",
-"int64",
-"pointer"
 ],
 "return": "int64"
 }

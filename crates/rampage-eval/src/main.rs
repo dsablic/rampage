@@ -776,6 +776,9 @@ fn evaluate_slices(
                 addresses.pop_last();
             }
         }
+        if matches!(slice.family, Family::Types) {
+            evaluation.signature_path = Some(signature_path);
+        }
         let (mut report, default_name) = slice.evaluate(&mut decompiled, signature_path)?;
         let name = name.unwrap_or(default_name);
         eprintln!("{name}: {}", report.summary());

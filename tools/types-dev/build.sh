@@ -11,6 +11,7 @@
 #   lz4-1.10.0-lz4-1.10.0.tar.gz, cjson-1.7.18-v1.7.18.tar.gz (dev); zstd-1.5.5-zstd-1.5.5.tar.gz,
 #   inih-r58-r58.tar.gz, tinyexpr-1.1.1-v1.1.1.tar.gz (acceptance). Needs zig 0.17.x, nm, python3.
 set -euo pipefail
+export LC_ALL=C # globs and sort order, so the zstd source list is the same everywhere
 sources=$(cd "$1" && pwd)
 out=$2
 eval_bin=${3:-target/release/rampage-eval}
@@ -60,8 +61,11 @@ acceptance)
     tar -xzf "$sources/zstd-1.5.5-zstd-1.5.5.tar.gz" -C "$work"
     tar -xzf "$sources/inih-r58-r58.tar.gz" -C "$work"
     tar -xzf "$sources/tinyexpr-1.1.1-v1.1.1.tar.gz" -C "$work"
-    build zstd zstd-1.5.5 O2 "-Ilib -DZSTD_DISABLE_ASM" \
-        $(cd "$work/zstd-1.5.5" && ls lib/common/*.c lib/compress/*.c lib/decompress/*.c)
+    zstd_sources=()
+    for src in "$work"/zstd-1.5.5/lib/{common,compress,decompress}/*.c; do
+        zstd_sources+=("${src#"$work/zstd-1.5.5/"}")
+    done
+    build zstd zstd-1.5.5 O2 "-Ilib -DZSTD_DISABLE_ASM" "${zstd_sources[@]}"
     build inih inih-r58 O2 "-I." ini.c
     build tinyexpr tinyexpr-1.1.1 O2 "-I." tinyexpr.c
     ;;

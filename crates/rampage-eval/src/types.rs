@@ -424,10 +424,13 @@ pub enum SignaturePath {
     /// A bare in-memory [`rampage_api::Project`] over the stripped binary, decompiled function by function: the
     /// path every types number up to 2026-11-27 was measured on.
     Raw,
-    /// The project the MCP server opens ([`rampage_api::Session::open`]: the binary's annotation sidecar, the
-    /// session's packs and analysis store) and the call its `decompile` tool makes, so library prototypes, type
-    /// hints and propagation reach the score as they reach an agent. Decompiles in process: the supervised worker
-    /// runs the same operation plan in a child process, one process per function.
+    /// The project the MCP server opens ([`rampage_api::Session::open`]: the binary's annotation sidecar and the
+    /// session's packs) and the call its `decompile` tool makes, so library prototypes, type hints and propagation
+    /// reach the score as they reach an agent. Decompiles in process: the supervised worker runs the same operation
+    /// plan in a child process, one process per function.
+    ///
+    /// Neither path reads or writes the persistent analysis store: a score is always of decompilations this run
+    /// made, never of stored ones.
     #[default]
     Api,
 }
@@ -446,7 +449,7 @@ pub fn api_signature_batch(
     path: &std::path::Path,
     addresses: impl IntoIterator<Item = u64>,
 ) -> Result<SignatureRecoveryBatch, String> {
-    let session = rampage_api::Session::default();
+    let session = rampage_api::Session::default().with_analysis_store(None);
     let project = session.open(path, None).map_err(|error| format!("{}: {error}", path.display()))?;
     project.set_decompiler_worker(None);
     Ok(signature_batch(
@@ -476,6 +479,7 @@ pub fn signature_batch_on(
 /// [`SignaturePath::Raw`]: decompiles in a bare in-memory project over `target`.
 pub fn decompiled_signature_batch(target: Binary, addresses: impl IntoIterator<Item = u64>) -> SignatureRecoveryBatch {
     let project = rampage_api::Project::new(target);
+    project.set_analysis_store(None);
     signature_batch(
         &project,
         addresses,

@@ -224,6 +224,9 @@ pub struct Evaluation {
     /// Each slice's gate; a slice without one is held to [`Gate::default`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub gates: BTreeMap<String, Gate>,
+    /// Where the types slices read recovered signatures; absent when the run scored no types slice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_path: Option<SignaturePath>,
 }
 
 impl Evaluation {
