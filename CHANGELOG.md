@@ -4,6 +4,15 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+### Changes and fixes
+
+- The demangler no longer reads a bare name that spells an Itanium type code as that type: a function named `f`,
+  `i` or `v` keeps its name instead of showing as `float`, `int` or `void` (in `language_metadata`, function
+  display names and everywhere else demangled names appear). Only names with a mangling prefix are demangled:
+  Itanium `_Z` (`__Z` on Mach-O, `___Z` block invokes), MSVC `?`, and Rust `_R` and legacy `_ZN…E`.
+
 ## 1.20.0 (2026-11-27)
 
 ### Firmware

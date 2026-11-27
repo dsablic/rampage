@@ -24,6 +24,11 @@ pub fn demangle(name: &str) -> Option<String> {
     }
     let normalized = name.strip_prefix("__Z").map(|tail| format!("_Z{tail}"));
     let name = normalized.as_deref().unwrap_or(name);
+    // The Itanium demangler also parses bare type encodings, so a C function named `f`, `i` or `v` would read as
+    // `float`, `int` or `void`: only names with a mangling prefix are demangled.
+    if !is_mangled(name) {
+        return None;
+    }
     let mut output = BoundedName(String::new());
     if let Ok(symbol) = rustc_demangle::try_demangle(name) {
         write!(output, "{symbol:#}").ok()?;
@@ -31,6 +36,12 @@ pub fn demangle(name: &str) -> Option<String> {
         cpp_demangle::Symbol::new(name).ok()?.structured_demangle(&mut output, &Default::default()).ok()?;
     }
     Some(output.0)
+}
+
+/// Whether `name` (with a Mach-O `__Z` already shortened to `_Z`) carries an Itanium or Rust mangling prefix:
+/// `_Z` (Itanium, and Rust's legacy `_ZN...E`), `___Z` (a Mach-O block invoke) or `_R`/`__R` (Rust v0).
+fn is_mangled(name: &str) -> bool {
+    ["_Z", "___Z", "_R", "__R"].iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// Demangles a Microsoft Visual C++ name. Return types, calling conventions, access specifiers and MS keywords
@@ -239,6 +250,18 @@ mod tests {
         assert_eq!(msvc_type_name(".H").as_deref(), Some("int"));
         assert_eq!(msvc_type_name(".PEAD").as_deref(), Some("char *"));
         assert_eq!(msvc_type_name("?AUError@@"), None);
+    }
+
+    #[test]
+    fn bare_names_that_spell_builtin_types_are_not_demangled() {
+        // cpp_demangle reads `f`, `i` and `v` as the types float, int and void.
+        for name in ["f", "i", "v", "c", "Pc", "St", "N3FooE", "RCC_IRQHandler", "Reset_Handler", "ZN3fooE"] {
+            assert_eq!(demangle(name), None, "{name}");
+        }
+        assert_eq!(demangle("_Z1fv").as_deref(), Some("f()"));
+        assert_eq!(demangle("_Z1fi").as_deref(), Some("f(int)"));
+        assert_eq!(demangle("__Z1ff").as_deref(), Some("f(float)"));
+        assert_eq!(demangle("_RNvC3foo3bar").as_deref(), Some("foo::bar"));
     }
 
     #[test]
