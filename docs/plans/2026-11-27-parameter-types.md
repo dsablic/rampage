@@ -1,6 +1,7 @@
 # Parameter types: measured headroom and slice plan (queue item 6)
 
-Status: measured on `main` at 5a28782 (1.20.0 changes included), 2026-11-27. No analysis code has changed.
+Status: measured on `main` at 5a28782 (1.20.0 changes included), 2026-11-27. Slice 0 done 2026-11-27 (see "Slice 0
+result"); no analysis code has changed.
 
 ## Confirmed numbers
 
@@ -78,8 +79,8 @@ Raw spellings: the recovered type is Ghidra's `int8` (an 8-byte integer) or `xun
 
 - Recovered natively: the Ghidra decompiler's own prototype; the eval reads it through
   `decompiled_signature_batch` / `decompiled_signatures` and scores it with `score_types`
-  (`crates/rampage-eval/src/types.rs`). **The eval calls the decompiler directly, not the API path**, so annotations,
-  library prototypes and propagation are invisible to it.
+  (`crates/rampage-eval/src/types.rs`). This plan first said the eval bypassed the API path; it does not (see "Slice 0
+  result"): it calls `rampage_api::Project::decompile`, the MCP tool's own call, on a bare project.
 - Library prototypes: `import_prototype` (`crates/rampage-api/src/import_types.rs`), applied as
   `WorkerOperation::RuntimePrototype` while setting up the decompile (`crates/rampage-api/src/decompile/symbols.rs`, the
   operations built around lines 33 to 135).
@@ -115,6 +116,72 @@ verified on the same set. Skip if the gain is under 20 positions.
 Rule for done: a slice counts as done only after a run on the acceptance input below, with the same targets scaled by its
 position count, and no regression of the dev correct figure.
 
+## Slice 0 result (2026-11-27)
+
+What was built. `rampage-eval run` (types family) and `types_headroom` take `--path api|raw`. `api` (now the default)
+opens the target as the MCP server does (`Session::open`: the annotation sidecar, packs, analysis store) and makes the
+`decompile` tool's call, `Project::decompile`, in process. `raw` is a bare `Project::new` with the same call: the path of
+every earlier number. `types_headroom` also writes every scored position (`positions`) so two runs can be diffed.
+`tools/types-dev/build.sh SOURCES OUT EVAL acceptance` builds the acceptance input; its truth is committed beside the dev
+truth (`tests/fixtures/types-dev/{zstd,inih,tinyexpr}-*-O2.truth.json`). The dev truth rebuilt byte-identical.
+`types_classes_count_on_both_signature_paths` (crates/rampage-eval/tests/cli.rs) pins the probe fixtures at 85 of 138
+on both paths (about 7 s).
+
+| | raw | api |
+| --- | ---: | ---: |
+| Dev: correct / positions | 1,360 / 2,915 (46.7%) | 1,360 / 2,915 |
+| Dev: ambiguous, register_class, dead, spurious | 1,412, 116, 27, 1 | same |
+| Acceptance: correct / positions | 1,968 / 3,474 (56.6%) | 1,968 / 3,474 |
+| Acceptance: ambiguous, register_class, dead, spurious | 1,273, 163, 70, 80 | same |
+| Probe fixtures | 85 / 138 | 85 / 138 |
+
+Acceptance by binary (correct / positions): zstd x86-64 959 / 1,708, zstd AArch64 933 / 1,628, inih 5 / 13 on each,
+tinyexpr x86-64 32 / 56, tinyexpr AArch64 34 / 56. Its misses have the dev shape: pointers as 8-byte integers 929
+(`pointer` 357 + 22 dead, `struct_pointer` 546 + 4 dead), `struct_pointer` -> `pointer` 273 (+7 dead), missing positions
+160, dead 70.
+
+Differences between the paths: none. Every one of the 2,915 dev and 3,474 acceptance positions has the same class and
+the same raw spelling on both (diffed with `RAMPAGE_ANALYSIS_CACHE=off`, so neither run read the other's stored
+decompilations). The reason is structural, not a coincidence of these binaries:
+
+- The plan's premise was wrong. `decompiled_signature_batch` already called `rampage_api::Project::decompile`, which builds
+  the symbol plan (`RuntimePrototype` operations, specialised by `import_prototype`) and runs `propagation::lazy_context`.
+  The MCP tool makes the same call; the only difference was the project's construction, and on a fresh binary with no
+  sidecar that construction changes nothing the decompiler reads (packs feed identification, YARA and capa, not the
+  decompile).
+- Library prototypes fire 0 times. `symbols::plan` gives a function a `RuntimePrototype` only from a symbol, an export,
+  a stub or thunk, or an import slot. A stripped static musl binary has none of them, so `strlen`, `memcpy`, `free` and
+  the rest are decompiled as `FUN_...` with recovered signatures.
+- Propagation fires 0 times. `lazy_context` returns at once when the annotations hold no signatures, local types,
+  globals, data types or type hints, which is the state of every eval target.
+
+So no position is fixed or broken by prototypes or propagation today, on either set.
+
+What changes for slices 1 and 2:
+
+- The raw path stops being a frozen baseline once slice 1 lands: both paths run `Project::decompile`, so a derived
+  hint added there changes `raw` too. Slice 1 must put derived parameter hints behind a project switch that the raw path
+  turns off (or record that `raw` numbers are reproducible only at a revision). The API path is what slices 1 and 2
+  are measured on.
+- "Passed to a known pointer parameter of an imported or library-identified callee" (slice 1) has no evidence source in
+  the dev or acceptance set as things stand: no callee has a prototype. The bundled signatures do identify the libc
+  callees (in cJSON x86-64 O2, 149 libc and runtime functions including `malloc`, `free`, `realloc`, `memcpy`, `memset`,
+  `strlen`, `strcmp`, `strncmp`, `memchr`), but identification only names them (`apply_signatures` writes names) and
+  `symbols::plan` never turns an identified name into a prototype. Either slice 1 adds that (identified library callee
+  -> `import_prototype`, then a pointer argument types the caller's parameter), which needs identification to run at
+  decompile time, or that evidence is dropped and the slice relies on dereferences alone. The 600-of-1,170 target stays;
+  how much of it the callee route can carry is unmeasured.
+- The bundled signatures also identify the dev libraries' own functions (60 cJSON and 91 LZ4 functions in their x86-64 O2
+  builds; the flywheel corpus holds these libraries), and the flywheel sources hold zstd 1.5.2 and 1.5.4. Any slice that
+  uses identification must report results with and without it, or the score measures the corpus rather than the analysis.
+- Acceptance targets, the dev targets scaled by position count (3,474 / 2,915 = 1.19) or by the same rates. Slice 1:
+  recover at least 477 of the 929 pointer-as-integer positions (the dev rate, 600 of 1,170), correct 1,968 -> 2,445 or
+  more (70%), fewer than 60 correct positions broken. Slice 2: of the 160 missing and 70 dead positions recover at least
+  107 (dev: 60 of 129), spurious stays at 80, `struct_pointer` -> `pointer` 273 -> 182 or fewer.
+- Time. The dev set took 68 minutes per path here (two paths in parallel on a loaded machine): LZ4 O0 31 minutes on
+  x86-64 and 37 on AArch64, everything else under 10 seconds per binary. The O0 AArch64 build is as slow as x86-64, not
+  the "mostly x86-64" the reproduce note said. The acceptance set takes 35 seconds per path.
+
 ## Acceptance input (not built from)
 
 Nothing in this plan was derived from zstd, inih or tinyexpr. Use **zstd 1.5.5** (`lib/common`, `lib/compress`,
@@ -127,9 +194,12 @@ built with `-g` works the same way through `type-truth`.
 ## Reproduce
 
 ```sh
+cargo build --release -p rampage-eval --bin rampage-eval --example types_headroom
 tools/types-dev/build.sh target/flywheel/sources OUT_DIR      # about 15 s; truth equals tests/fixtures/types-dev/*.truth.json
-cargo build --release -p rampage-eval --example types_headroom
-target/release/examples/types_headroom out.json dev:OUT_DIR/lz4-x86_64-O2.debug.elf:OUT_DIR/lz4-x86_64-O2.elf:OUT_DIR/lz4-x86_64-O2.truth.json ...
+tools/types-dev/build.sh target/flywheel/sources ACC_DIR target/release/rampage-eval acceptance   # about 30 s
+target/release/examples/types_headroom [--path raw|api] out.json dev:OUT_DIR/lz4-x86_64-O2.debug.elf:OUT_DIR/lz4-x86_64-O2.elf:OUT_DIR/lz4-x86_64-O2.truth.json ...
 ```
 
-The decompile of the eight binaries takes about 25 minutes, mostly the x86-64 O0 builds.
+`--path` defaults to `api`. The decompile of the eight dev binaries takes about an hour, almost all of it the two LZ4 O0
+builds; the six acceptance binaries take under a minute. Set `RAMPAGE_ANALYSIS_CACHE=off` when comparing two runs of the
+same build, or the second reads the first's stored decompilations.
