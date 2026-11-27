@@ -569,9 +569,10 @@ fixture for each item. Start with 0.1 and 0.2.
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
    layout, `__CxxFrameHandler4`, Swift metadata.
    Measured 2026-11-27 ([plan](docs/plans/2026-11-27-parameter-types.md), dev set rebuilt by `tools/types-dev/build.sh`,
-   truth committed): 1,360/2,915 positions correct, 1,170 of 1,555 misses are pointers as 8-byte integers. Slices 0
-   (eval through the API path), 1 (pointer types from callee use), 2 (caller and callee evidence); acceptance zstd,
-   inih and tinyexpr at O2.
+   truth committed): 1,360/2,915 positions correct, 1,170 of 1,555 misses are pointers as 8-byte integers. Slice 0
+   done 2026-11-27 (`--path api|raw`; both identical: prototypes and propagation never fire on stripped static
+   binaries; acceptance zstd/inih/tinyexpr O2 1,968/3,474). Next: slice 1 (pointer types from callee use; recognised
+   library names need prototypes), slice 2 (caller and callee evidence).
 7. **Windows:** the flywheel's Windows corpus, then a Windows host build.
 
 Between tracks: the UI assessment tab, `mine-transcripts`, demoting rarely used core tools.
